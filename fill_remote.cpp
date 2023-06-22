@@ -50,7 +50,7 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
   memset(recv_buf, 0, sizeof(recv_buf));
   // Overkill if we don't really needs all peer's handles
   MPI_Allgather(
-      &send_buf, sizeof(send_buf), MPI_BYTE, recv_buf, sizeof(recv_buf), MPI_BYTE, MPI_COMM_WORLD);
+      &send_buf, sizeof(send_buf), MPI_BYTE, recv_buf, sizeof(send_buf), MPI_BYTE, MPI_COMM_WORLD);
 
   // Step 4: Prepare pid file descriptor of next process
   int next_peer = rank + 1;
@@ -64,7 +64,7 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
   // Step 5: Duplicate GEM object handle to local process
   // and overwrite original file descriptor number
   //
-  peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd);
+  peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd, 0);
   sysCheck(peer->fd);
 
   // Step 6: Open IPC handle of remote peer
@@ -77,35 +77,6 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
 
   return std::make_tuple(
       (char*)peer_base + peer->offset, peer->offset, send_buf.ipc_handle);
-}
-
-template <typename T>
-sycl::event fill_remote(T* ptr, T c, size_t nelems, int rank, int world) {
-  // presume size is rounded to 32-bit
-  auto queue = currentQueue(rank/2, rank &1);
-
-  static constexpr size_t v_len = sizeof(int) / sizeof(T);
-  // kernel functor
-  struct fill_kernel {
-    using data_type = sycl::vec<T, v_len>;
-    void operator ()(sycl::id<1> lane) const {
-      data_type fill(content);
-      auto* fill_ptr = reinterpret_cast<data_type *>(dst);
-      fill_ptr[lane] = fill;
-    }
-
-    fill_kernel(void *dst, T c) : dst(dst), content(c) {}
-  private:
-    void* dst;
-    T content;
-  };
-
-  // submit kernel
-  auto event = queue.submit([&](sycl::handler& h_cmd) {
-    h_cmd.parallel_for(sycl::range(nelems / v_len), fill_kernel(ptr, c));
-  });
-
-  return event;
 }
 
 int main(int argc, char* argv[]) {
@@ -133,7 +104,7 @@ int main(int argc, char* argv[]) {
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
-  if (ret != MPI_ERR_OTHER) {
+  if (ret == MPI_ERR_OTHER) {
     std::cout<<"MPI init error"<<std::endl;
     return -1;
   }
@@ -157,9 +128,9 @@ int main(int argc, char* argv[]) {
 
   // run fill kernel to fill remote GPU memory
   if (dtype == "fp16")
-    fill_remote<sycl::half>((sycl::half *)peer_ptr, (sycl::half)rank, count, rank, world);
+    queue.fill<sycl::half>((sycl::half *)peer_ptr, (sycl::half)rank, count);
   else if (dtype == "float")
-    fill_remote<float>((float *)peer_ptr, (float)rank, count, rank, world);
+    queue.fill<float>((float *)peer_ptr, (float)rank, count);
 
   // Check buffer contents
   queue.memcpy(host_buf, buffer, alloc_size);
