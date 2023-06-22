@@ -79,6 +79,14 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
       (char*)peer_base + peer->offset, peer->offset, send_buf.ipc_handle);
 }
 
+template <typename T>
+bool checkResults(T *ptr, T c, size_t count) {
+  for (int i = 0; i < count; ++ i) {
+    if (*ptr != c) return false;
+  }
+  return true;
+}
+
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -135,6 +143,21 @@ int main(int argc, char* argv[]) {
   // Check buffer contents
   queue.memcpy(host_buf, buffer, alloc_size);
   queue.wait();
+
+  bool check = false;
+
+  int next_rank = rank + 1;
+  if (next_rank >= world) next_rank -= world;
+
+  if (dtype == "fp16")
+    check = checkResults((sycl::half *)host_buf, (sycl::half)next_rank, count);
+  else
+    check = checkResults((float*)host_buf, (float)next_rank, count);
+
+  if (check)
+    std::cout<<"Successfully fill remote buffer"<<std::endl;
+  else
+    std::cout<<"Error occured when fill remote buffer"<<std::endl;
 
   // Clean up, close/put ipc handles, free memory, etc.
   auto l0_ctx = sycl::get_native<
