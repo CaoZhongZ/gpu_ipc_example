@@ -140,6 +140,10 @@ int main(int argc, char* argv[]) {
   else if (dtype == "float")
     queue.fill<float>((float *)peer_ptr, (float)rank, count);
 
+  // avoid race condition
+  queue.wait();
+  MPI_Barrier(MPI_COMM_WORLD);
+
   // Check buffer contents
   queue.memcpy(host_buf, buffer, alloc_size);
   queue.wait();
