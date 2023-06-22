@@ -7,7 +7,7 @@
 
 // Mapping from status to human readable string
 class zeException : std::exception {
-  const char * zeResultToString(ze_result_t status) {
+  const char * zeResultToString(ze_result_t status) const {
     static const std::unordered_map<ze_result_t, const char *> zeResultToStringMap{
       {ZE_RESULT_SUCCESS, "[Core] success"},
       {ZE_RESULT_NOT_READY, "[Core] synchronization primitive not signaled"},

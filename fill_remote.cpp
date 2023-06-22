@@ -1,10 +1,12 @@
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <system_error>
+
 #include <mpi.h>
 #include <sycl/sycl.hpp>
 #include <level_zero/ze_api.h>
 
-#include <sys/syscall.h>
-#include <unistd.h>
-
+#include "cxxopts.hpp"
 #include "ze_exception.hpp"
 #include "sycl_misc.hpp"
 
@@ -20,13 +22,14 @@ struct exchange_contents {
 
 #define sysCheck(x) \
   if (x == -1) {  \
-    throw std::system_error(errno)  \
+    throw std::system_error(  \
+        std::make_error_code(std::errc(errno)));  \
   }
 
 std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
     void* ptr, int rank, int world) {
   // Step 1: Get base address of the pointer
-  sycl::queue q = currentQueue(rank / 2, rank & 1);
+  sycl::queue queue = currentQueue(rank / 2, rank & 1);
   sycl::context ctx = queue.get_context();
   auto l0_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
 
@@ -35,28 +38,25 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
   zeCheck(zeMemGetAddressRange(l0_ctx, ptr, &base_addr, &base_size));
 
   // Step 2: Get IPC mem handle from base address
-  exchange_contents alignas(64) send;
-  exchange_contents alignas(64) recv[world];
+  alignas(64) exchange_contents send_buf;
+  alignas(64) exchange_contents recv_buf[world];
 
-  zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &send.ipc_handle));
-
-  // vital information used later
-  send.offset = (char*)ptr - (char*)base_addr;
-  send.pid = getpid();
+  // fill in the exchange info
+  zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &send_buf.ipc_handle));
+  send_buf.offset = (char*)ptr - (char*)base_addr;
+  send_buf.pid = getpid();
 
   // Step 3: Exchange the handles and offsets
-  memset(recv, 0, sizeof(recv));
-
+  memset(recv_buf, 0, sizeof(recv_buf));
   // Overkill if we don't really needs all peer's handles
   MPI_Allgather(
-      &send, sizeof(send), MPI_BYTE, recv, sizeof(recv), MPI_BYTE, MPI_COMM_WORLD);
+      &send_buf, sizeof(send_buf), MPI_BYTE, recv_buf, sizeof(recv_buf), MPI_BYTE, MPI_COMM_WORLD);
 
-  // Step 4: Prepare pid-fd of next process
+  // Step 4: Prepare pid file descriptor of next process
   int next_peer = rank + 1;
   if (next_peer >= world) next_peer = next_peer - world;
 
-  auto* peer = recv + next_peer;
-
+  auto* peer = recv_buf + next_peer;
   auto pid_fd = syscall(__NR_pidfd_open, peer->pid, 0);
   sysCheck(pid_fd);
 
@@ -64,7 +64,7 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
   // Step 5: Duplicate GEM object handle to local process
   // and overwrite original file descriptor number
   //
-  auto peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd);
+  peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd);
   sysCheck(peer->fd);
 
   // Step 6: Open IPC handle of remote peer
@@ -76,50 +76,36 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
         l0_ctx, l0_device, peer->ipc_handle, ZE_IPC_MEMORY_FLAG_BIAS_CACHED, &peer_base));
 
   return std::make_tuple(
-      (char*)peer_base + peer->offset, peer->offset, send.ipc_handle);
+      (char*)peer_base + peer->offset, peer->offset, send_buf.ipc_handle);
 }
 
 template <typename T>
-void fill_remote(T* ptr, T c, size_t size, int rank, int world) {
-  auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem(ptr, rank, world);
-
+sycl::event fill_remote(T* ptr, T c, size_t nelems, int rank, int world) {
   // presume size is rounded to 32-bit
   auto queue = currentQueue(rank/2, rank &1);
 
+  static constexpr size_t v_len = sizeof(int) / sizeof(T);
+  // kernel functor
   struct fill_kernel {
-    static constexpr size_t v_len = sizeof(int) / sizeof(T);
     using data_type = sycl::vec<T, v_len>;
-
-    void operator ()(sycl::id id) const {
+    void operator ()(sycl::id<1> lane) const {
       data_type fill(content);
-
-      auto *fill_ptr = reinterpret_cast<data_type *>(dst);
-      fill_ptr[id] = fill;
+      auto* fill_ptr = reinterpret_cast<data_type *>(dst);
+      fill_ptr[lane] = fill;
     }
 
-    fill_kernel(void *dst, T c) :
-      dst(dst), content(c) {}
-
+    fill_kernel(void *dst, T c) : dst(dst), content(c) {}
+  private:
     void* dst;
     T content;
-  }
+  };
 
   // submit kernel
   auto event = queue.submit([&](sycl::handler& h_cmd) {
-    h_cmd.parallel_for(sycl::range(size / 2), fill_kernel(peer_ptr, c));
+    h_cmd.parallel_for(sycl::range(nelems / v_len), fill_kernel(ptr, c));
   });
 
-  sycl::queue q = currentQueue(rank / 2, rank & 1);
-  sycl::context ctx = queue.get_context();
-  auto l0_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-
-  event.wait();
-
-  // Clean up
-  // Close remote ipc handle by pointer
-  zeCheck(zeMemCloseIpcHandle(l0_ctx, (char*)peer_ptr - offset));
-  // Put local ipc handle
-  zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle));
+  return event;
 }
 
 int main(int argc, char* argv[]) {
@@ -130,7 +116,7 @@ int main(int argc, char* argv[]) {
 
   opts.allow_unrecognised_options();
   opts.add_options()
-    ("c,count", "Data content count", cxxopts::value<size_t>()->default_value("8192")),
+    ("c,count", "Data content count", cxxopts::value<size_t>()->default_value("8192"))
     ("t,type", "Data content type", cxxopts::value<std::string>()->default_value("fp16"))
     ;
 
@@ -146,7 +132,7 @@ int main(int argc, char* argv[]) {
     alloc_size = count * sizeof(float);
 
   // init section
-  ret = MPI_Init(&argc, &argv);
+  auto ret = MPI_Init(&argc, &argv);
   if (ret != MPI_ERR_OTHER) {
     std::cout<<"MPI init error"<<std::endl;
     return -1;
@@ -164,14 +150,27 @@ int main(int argc, char* argv[]) {
   // ...
   auto queue = currentQueue(rank / 2, rank & 1);
   void* buffer = sycl::malloc_device(alloc_size, queue);
+  void* host_buf = sycl::malloc_host(alloc_size, queue);
 
-  sycl::event event;
+  // XXX: gain access to remote pointers
+  auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem(buffer, rank, world);
+
+  // run fill kernel to fill remote GPU memory
   if (dtype == "fp16")
-    event = fill_remote<sycl::half>(buffer, (sycl::half)rank, alloc_size, rank, world);
+    fill_remote<sycl::half>((sycl::half *)peer_ptr, (sycl::half)rank, count, rank, world);
   else if (dtype == "float")
-    event = fill_remote<float>(buffer, (float)rank, alloc_size, rank, world);
+    fill_remote<float>((float *)peer_ptr, (float)rank, count, rank, world);
 
   // Check buffer contents
+  queue.memcpy(host_buf, buffer, alloc_size);
+  queue.wait();
 
+  // Clean up, close/put ipc handles, free memory, etc.
+  auto l0_ctx = sycl::get_native<
+    sycl::backend::ext_oneapi_level_zero>(queue.get_context());
+
+  zeCheck(zeMemCloseIpcHandle(l0_ctx, (char*)peer_ptr - offset));
+  // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
+  sycl::free(host_buf, queue);
 }
