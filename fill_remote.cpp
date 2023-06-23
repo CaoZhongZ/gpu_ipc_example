@@ -1,3 +1,4 @@
+#include <sys/mman.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <system_error>
@@ -79,6 +80,16 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
       (char*)peer_base + peer->offset, peer->offset, send_buf.ipc_handle);
 }
 
+static size_t align_up(size_t size, size_t align_sz) {
+    return ((size + align_sz -1) / align_sz) * align_sz;
+}
+
+void *mmap_host(size_t map_size, int dma_buf_fd) {
+  auto page_size = getpagesize();
+  map_size = align_up(map_size, page_size);
+  return mmap(nullptr, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, dma_buf_fd, 0);
+}
+
 template <typename T>
 bool checkResults(T *ptr, T c, size_t count) {
   for (int i = 0; i < count; ++ i) {
@@ -129,7 +140,6 @@ int main(int argc, char* argv[]) {
   // ...
   auto queue = currentQueue(rank / 2, rank & 1);
   void* buffer = sycl::malloc_device(alloc_size, queue);
-  void* host_buf = sycl::malloc_host(alloc_size, queue);
 
   // XXX: gain access to remote pointers
   auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem(buffer, rank, world);
@@ -145,8 +155,14 @@ int main(int argc, char* argv[]) {
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Check buffer contents
-  queue.memcpy(host_buf, buffer, alloc_size);
-  queue.wait();
+  // void* host_buf = sycl::malloc_host(alloc_size, queue);
+  // queue.memcpy(host_buf, buffer, alloc_size);
+  // queue.wait();
+
+  // Or we map the device to host
+  int dma_buf = 0;
+  memcpy(&dma_buf, &ipc_handle, sizeof(int));
+  void *host_buf = mmap_host(alloc_size, dma_buf);
 
   bool check = false;
 
@@ -170,5 +186,6 @@ int main(int argc, char* argv[]) {
   zeCheck(zeMemCloseIpcHandle(l0_ctx, (char*)peer_ptr - offset));
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
-  sycl::free(host_buf, queue);
+  // sycl::free(host_buf, queue);
+  munmap(host_buf, alloc_size);
 }
