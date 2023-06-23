@@ -1,4 +1,5 @@
 #include <sys/syscall.h>
+#include <fcntl.h>
 #include <unistd.h>
 #include <system_error>
 
@@ -29,28 +30,29 @@ struct exchange_contents {
   }
 
 int open_drmfd(int rank) {
-  sycl::device dev = currentDevice(rank / 2, rank & 1);
+  sycl::device dev = currentSubDevice(rank / 2, rank & 1);
   auto l0_device = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(dev);
 
   // Get BFD information
-  ze_device_properties_t device_prop {.type = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES};
+  ze_device_properties_t device_prop {.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES};
   zeCheck(zeDeviceGetProperties(l0_device, &device_prop));
 
-  ze_pci_ext_properties_t pcie_prop {.type = ZE_STRUCTURE_TYPE_PCI_EXT_PROPERTIES};
+  ze_pci_ext_properties_t pcie_prop {.stype = ZE_STRUCTURE_TYPE_PCI_EXT_PROPERTIES};
   zeCheck(zeDevicePciGetPropertiesExt(l0_device, &pcie_prop));
-
-  auto bfd = pcie_prop.address;
-
-  auto domain = std::to_string(pci_prop.address.domain);
-  auto bus = std::to_string(pci_prop.address.bus);
-  auto device = std::to_string(pci_prop.address.device);
-  auto function = std::to_string(pci_prop.address.function);
 
   std::string device_path ("/dev/dri/by-path/");
   std::string device_suffix ("-render");
 
-  auto device_file = device_path + bus + ":" + device + ":" + function + device_suffix;
-  std::cout<<device_file;
+  char device_bfd[32];
+  std::snprintf(device_bfd, 32, "pci-0000:%02x:%02x.%x", pcie_prop.address.bus, pcie_prop.address.device, pcie_prop.address.function);
+
+  auto device_file = device_path + std::string(device_bfd) + device_suffix;
+  std::cout<<device_file<<std::endl;
+
+  int devfd = open(device_file.c_str(), O_RDWR);
+  sysCheck(devfd);
+
+  return devfd;
 }
 
 std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem_drm(
@@ -202,6 +204,8 @@ int main(int argc, char* argv[]) {
 
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+  open_drmfd(rank);
 
   // rank 0, device 0, subdevice 0
   // rank 1, device 0, subdevice 1
