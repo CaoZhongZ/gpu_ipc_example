@@ -93,7 +93,10 @@ void *mmap_host(size_t map_size, int dma_buf_fd) {
 template <typename T>
 bool checkResults(T *ptr, T c, size_t count) {
   for (int i = 0; i < count; ++ i) {
-    if (*ptr != c) return false;
+    if (ptr[i] != c) {
+      std::cout<<"Expect: "<<c<<" but get: "<<ptr[i]<<std::endl;
+      return false;
+    }
   }
   return true;
 }
@@ -166,13 +169,14 @@ int main(int argc, char* argv[]) {
 
   bool check = false;
 
-  int next_rank = rank + 1;
-  if (next_rank >= world) next_rank -= world;
+  std::cout<< "Start Checking"<<std::endl;
+  int prev_rank = rank - 1;
+  if (prev_rank < 0) prev_rank = world -1;
 
   if (dtype == "fp16")
-    check = checkResults((sycl::half *)host_buf, (sycl::half)next_rank, count);
+    check = checkResults((sycl::half *)host_buf, (sycl::half)prev_rank, count);
   else
-    check = checkResults((float*)host_buf, (float)next_rank, count);
+    check = checkResults((float*)host_buf, (float)prev_rank, count);
 
   if (check)
     std::cout<<"Successfully fill remote buffer"<<std::endl;
@@ -183,9 +187,9 @@ int main(int argc, char* argv[]) {
   auto l0_ctx = sycl::get_native<
     sycl::backend::ext_oneapi_level_zero>(queue.get_context());
 
+  munmap(host_buf, alloc_size);
   zeCheck(zeMemCloseIpcHandle(l0_ctx, (char*)peer_ptr - offset));
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
   // sycl::free(host_buf, queue);
-  munmap(host_buf, alloc_size);
 }
