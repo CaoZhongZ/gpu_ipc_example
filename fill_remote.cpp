@@ -1,4 +1,5 @@
 #include <sys/syscall.h>
+#include <sys/ioctl.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <system_error>
@@ -8,6 +9,7 @@
 #include <mpi.h>
 #include <sycl/sycl.hpp>
 #include <level_zero/ze_api.h>
+#include <libdrm/i915_drm.h>
 
 #include "cxxopts.hpp"
 #include "ze_exception.hpp"
@@ -28,14 +30,9 @@ struct exchange_contents {
     throw std::system_error(  \
         std::make_error_code(std::errc(errno)));  \
   }
-
-int open_drmfd(int rank) {
-  sycl::device dev = currentSubDevice(rank / 2, rank & 1);
+std::string get_device_path(int devNo, int subNo) {
+  sycl::device dev = currentSubDevice(devNo, subNo);
   auto l0_device = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(dev);
-
-  // Get BFD information
-  ze_device_properties_t device_prop {.stype = ZE_STRUCTURE_TYPE_DEVICE_PROPERTIES};
-  zeCheck(zeDeviceGetProperties(l0_device, &device_prop));
 
   ze_pci_ext_properties_t pcie_prop {.stype = ZE_STRUCTURE_TYPE_PCI_EXT_PROPERTIES};
   zeCheck(zeDevicePciGetPropertiesExt(l0_device, &pcie_prop));
@@ -47,12 +44,36 @@ int open_drmfd(int rank) {
   std::snprintf(device_bfd, 32, "pci-0000:%02x:%02x.%x", pcie_prop.address.bus, pcie_prop.address.device, pcie_prop.address.function);
 
   auto device_file = device_path + std::string(device_bfd) + device_suffix;
-  std::cout<<device_file<<std::endl;
+
+  return device_file;
+}
+
+int open_drmfd(int rank) {
+  auto device_file = get_device_path(rank/2, rank &1);
 
   int devfd = open(device_file.c_str(), O_RDWR);
   sysCheck(devfd);
 
   return devfd;
+}
+
+int get_gem_handle(int dmabuf_fd, int devfd) {
+  struct drm_prime_handle req = {0, 0, 0};
+  req.fd = dmabuf_fd;
+
+  int ret = ioctl(devfd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &req);
+  sysCheck(ret);
+
+  return req.handle;
+}
+
+int get_dmabuf_fd(int gem_handle, int devfd) {
+  struct drm_prime_handle req = { 0, 0, 0 };
+  req.flags = DRM_CLOEXEC | DRM_RDWR;
+  req.handle = gem_handle;
+  int ret = ioctl(devfd, DRM_IOCTL_PRIME_HANDLE_TO_FD, &req);
+  sysCheck(ret);
+  return req.fd;
 }
 
 std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem_drm(
@@ -71,9 +92,20 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem_drm(
   alignas(64) exchange_contents recv_buf[world];
 
   // fill in the exchange info
-  zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &send_buf.ipc_handle));
+  union {
+    ze_ipc_mem_handle_t ipc_handle;
+    int dmabuf_fd;
+  } uni_handle;
+
+  zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &uni_handle.ipc_handle));
+
+  auto dev_fd = open_drmfd(rank);
+  auto gem_handle = get_gem_handle(uni_handle.dmabuf_fd, dev_fd);
+
+  send_buf.ipc_handle = uni_handle.ipc_handle;
+  send_buf.fd = gem_handle;
   send_buf.offset = (char*)ptr - (char*)base_addr;
-  send_buf.pid = getpid();
+  send_buf.pid = rank; /* should be device number */
 
   // Step 3: Exchange the handles and offsets
   memset(recv_buf, 0, sizeof(recv_buf));
@@ -86,15 +118,9 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem_drm(
   if (next_peer >= world) next_peer = next_peer - world;
 
   auto* peer = recv_buf + next_peer;
-  auto pid_fd = syscall(__NR_pidfd_open, peer->pid, 0);
-  sysCheck(pid_fd);
+  auto remote_dev = (rank / 2 == peer->pid / 2) ? dev_fd : open_drmfd(peer->pid);
 
-  //
-  // Step 5: Duplicate GEM object handle to local process
-  // and overwrite original file descriptor number
-  //
-  peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd, 0);
-  sysCheck(peer->fd);
+  peer->fd = get_dmabuf_fd(peer->fd, remote_dev);
 
   // Step 6: Open IPC handle of remote peer
   auto l0_device
@@ -104,8 +130,13 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem_drm(
   zeCheck(zeMemOpenIpcHandle(
         l0_ctx, l0_device, peer->ipc_handle, ZE_IPC_MEMORY_FLAG_BIAS_CACHED, &peer_base));
 
+  if (rank / 2 != peer->pid/2)
+    sysCheck(close(remote_dev));
+
+  sysCheck(close(dev_fd));
+
   return std::make_tuple(
-      (char*)peer_base + peer->offset, peer->offset, send_buf.ipc_handle);
+      (char*)peer_base + peer->offset, peer->offset, uni_handle.ipc_handle);
 }
 
 std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
@@ -216,7 +247,7 @@ int main(int argc, char* argv[]) {
   void* host_buf = sycl::malloc_host(alloc_size, queue);
 
   // XXX: gain access to remote pointers
-  auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem(buffer, rank, world);
+  auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem_drm(buffer, rank, world);
 
   // run fill kernel to fill remote GPU memory
   if (dtype == "fp16")
