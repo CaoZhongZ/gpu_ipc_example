@@ -131,6 +131,10 @@ int main(int argc, char* argv[]) {
     return -1;
   }
 
+  struct scopeCall {
+    ~scopeCall() { MPI_Finalize(); }
+  }scopeGuard;
+
   zeCheck(zeInit(0));
   int rank, world;
 
@@ -194,6 +198,5 @@ int main(int argc, char* argv[]) {
   sycl::free(buffer, queue);
   // sycl::free(host_buf, queue);
   //
-  MPI_Finalize();
   return 0;
 }
