@@ -169,7 +169,6 @@ int main(int argc, char* argv[]) {
 
   bool check = false;
 
-  std::cout<< "Start Checking"<<std::endl;
   int prev_rank = rank - 1;
   if (prev_rank < 0) prev_rank = world -1;
 
@@ -177,6 +176,8 @@ int main(int argc, char* argv[]) {
     check = checkResults((sycl::half *)host_buf, (sycl::half)prev_rank, count);
   else
     check = checkResults((float*)host_buf, (float)prev_rank, count);
+
+  MPI_Barrier(MPI_COMM_WORLD);
 
   if (check)
     std::cout<<"Successfully fill remote buffer"<<std::endl;
@@ -192,4 +193,7 @@ int main(int argc, char* argv[]) {
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
   // sycl::free(host_buf, queue);
+  //
+  MPI_Finalize();
+  return 0;
 }
