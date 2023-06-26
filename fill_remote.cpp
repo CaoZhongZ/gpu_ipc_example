@@ -28,10 +28,10 @@ struct exchange_contents {
   }
 
 static constexpr ze_event_pool_desc_t default_pool_desc {
-  .stype = ZE_STRUCTURE_TYPE_EVENT_POOL_DESC;
-  .pNext = nullptr;
-  .flags = ZE_EVENT_POOL_FLAG_IPC;
-  .count = 32;
+  .stype = ZE_STRUCTURE_TYPE_EVENT_POOL_DESC,
+  .pNext = nullptr,
+  .flags = ZE_EVENT_POOL_FLAG_IPC,
+  .count = 32
 };
 
 ze_event_pool_handle_t create_event_pool(int rank, int world) {
@@ -50,7 +50,7 @@ ze_event_pool_handle_t create_event_pool(int rank, int world) {
   return ret;
 }
 
-std::tuple<ze_event_pool_handle_t, ze_event_pool_handle_t> open_peer_ipc_pool(
+std::tuple<ze_event_pool_handle_t, ze_ipc_event_pool_handle_t> open_peer_ipc_pool(
     ze_event_pool_handle_t handle, int rank, int world) {
   // Get IPC Pool handle out of local IPC handle
   sycl::queue queue = currentQueue(rank / 2, rank & 1);
@@ -61,7 +61,7 @@ std::tuple<ze_event_pool_handle_t, ze_event_pool_handle_t> open_peer_ipc_pool(
   alignas(64) exchange_contents recv_buf[world];
 
   // fill in the exchange info
-  zeCheck(zeEventPoolGetIpcHandle(l0_ctx, ptr, &send_buf.ipc_pool));
+  zeCheck(zeEventPoolGetIpcHandle(handle, &send_buf.ipc_pool));
   send_buf.offset = 0;
   send_buf.pid = getpid();
 
@@ -88,10 +88,9 @@ std::tuple<ze_event_pool_handle_t, ze_event_pool_handle_t> open_peer_ipc_pool(
   sysCheck(peer->fd);
 
   // Step 6: Open IPC handle of remote peer
-  auto l0_device
-    = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(queue.get_device());
   ze_event_pool_handle_t peer_handle;
 
+  std::cout<< "Here" <<std::endl;
   zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, peer->ipc_pool, &peer_handle));
   return std::make_pair(peer_handle, send_buf.ipc_pool);
 }
@@ -170,15 +169,7 @@ int main(int argc, char* argv[]) {
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
-  auto count = parsed_opts["count"].as<size_t>();
   auto dtype = parsed_opts["type"].as<std::string>();
-
-  size_t alloc_size = 0;
-
-  if (dtype == "fp16")
-    alloc_size = count * sizeof(sycl::half);
-  else if (dtype == "float")
-    alloc_size = count * sizeof(float);
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -198,16 +189,16 @@ int main(int argc, char* argv[]) {
   // rank 2, device 1, subdevice 0
   // ...
   auto h_event_pool = create_event_pool(rank, world);
-  auto [remote_ipc_pool, local_ipc_pool] = open_peer_ipc_pool(h_event, rank, world);
+  auto [remote_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
   std::cout<<"Successfully get remote handle"<<std::endl;
 
   // Clean up, close/put ipc handles, free memory, etc.
-  zeCheck(zeEventPoolCloseIpcHandle(remote_ipc_pool));
+  zeCheck(zeEventPoolCloseIpcHandle(remote_pool));
   MPI_Barrier(MPI_COMM_WORLD);
 
   // zeCheck(zeEventPoolPutIpcHandle(l0_ctx, local_ipc_pool)); /* the API is added after v1.6 */
-  zeCheck(zeEventDestroy(h_event_pool));
+  zeCheck(zeEventPoolDestroy(h_event_pool));
 }

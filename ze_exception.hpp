@@ -25,6 +25,7 @@ class zeException : std::exception {
       {ZE_RESULT_ERROR_INVALID_NULL_HANDLE, "[Validation] handle argument is not valid"},
       {ZE_RESULT_ERROR_UNSUPPORTED_FEATURE, "[Validation] generic error code for unsupported features"},
       {ZE_RESULT_ERROR_INVALID_NATIVE_BINARY, "[Validation] native binary is not supported by the device"},
+      {ZE_RESULT_ERROR_INVALID_ARGUMENT, "[Validation] generic error code for invalid arguments"},
     };
     auto it = zeResultToStringMap.find(status);
     if (it != zeResultToStringMap.end())
