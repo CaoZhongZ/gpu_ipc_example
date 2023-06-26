@@ -50,6 +50,35 @@ ze_event_pool_handle_t create_event_pool(int rank, int world) {
   return ret;
 }
 
+ze_event_pool_handle_t create_event_pool_host(int rank, int world) {
+  sycl::queue queue = currentQueue(rank /2, rank & 1);
+  sycl::context ctx = queue.get_context();
+
+  auto l0_ctx = sycl::get_native<
+    sycl::backend::ext_oneapi_level_zero>(ctx);
+
+  ze_event_pool_handle_t ret;
+  ze_event_pool_desc_t pool_desc = default_pool_desc;
+
+  zeCheck(zeEventPoolCreate(l0_ctx, &pool_desc, 0, nullptr, &ret));
+  return ret;
+}
+
+ze_event_pool_handle_t create_event_pool_host_pure(int rank, int world) {
+  sycl::queue queue = currentQueue(rank /2, rank & 1);
+  sycl::context ctx = queue.get_context();
+
+  auto l0_ctx = sycl::get_native<
+    sycl::backend::ext_oneapi_level_zero>(ctx);
+
+  ze_event_pool_handle_t ret;
+  ze_event_pool_desc_t pool_desc = default_pool_desc;
+  pool_desc.flags |= ZE_EVENT_POOL_FLAG_HOST_VISIBLE;
+
+  zeCheck(zeEventPoolCreate(l0_ctx, &pool_desc, 0, nullptr, &ret));
+  return ret;
+}
+
 std::tuple<ze_event_pool_handle_t, ze_ipc_event_pool_handle_t> open_peer_ipc_pool(
     ze_event_pool_handle_t handle, int rank, int world) {
   // Get IPC Pool handle out of local IPC handle
@@ -188,7 +217,7 @@ int main(int argc, char* argv[]) {
   // rank 1, device 0, subdevice 1
   // rank 2, device 1, subdevice 0
   // ...
-  auto h_event_pool = create_event_pool(rank, world);
+  auto h_event_pool = create_event_pool_host_pure(rank, world);
   auto [remote_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
