@@ -217,7 +217,7 @@ int main(int argc, char* argv[]) {
   // rank 1, device 0, subdevice 1
   // rank 2, device 1, subdevice 0
   // ...
-  auto h_event_pool = create_event_pool_host_pure(rank, world);
+  auto h_event_pool = create_event_pool(rank, world);
   auto [remote_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
