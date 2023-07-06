@@ -1,10 +1,16 @@
 #include <CL/sycl.hpp>
 #include <iostream>
 
+template <int ndev>
+sycl::device getDevice() {
+  static auto devs = sycl::device::get_devices(sycl::info::device_type::gpu);
+  static auto dev = devs[ndev];
+  return dev;
+}
+
 template <int ndev, int nsub>
 sycl::device getSubDevice() {
-  static auto devs = sycl::device::get_devices(sycl::info::device_type::gpu);
-  auto dev = devs[ndev];
+  auto dev = getDevice<ndev>();
   try {
     static auto subs = dev.template create_sub_devices<
       sycl::info::partition_property::partition_by_affinity_domain>(
