@@ -119,7 +119,7 @@ std::tuple<ze_event_pool_handle_t, ze_ipc_event_pool_handle_t> open_peer_ipc_poo
   // Step 6: Open IPC handle of remote peer
   ze_event_pool_handle_t peer_handle;
 
-  std::cout<< "Here" <<std::endl;
+  std::cout<< "zeEventPoolOpenIpcHandle" <<std::endl;
   zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, peer->ipc_pool, &peer_handle));
   return std::make_pair(peer_handle, send_buf.ipc_pool);
 }
@@ -217,7 +217,9 @@ int main(int argc, char* argv[]) {
   // rank 1, device 0, subdevice 1
   // rank 2, device 1, subdevice 0
   // ...
+  std::cout<<"create_event_pool"<<std::endl;
   auto h_event_pool = create_event_pool(rank, world);
+  std::cout<<"open_peer_ipc_pool"<<std::endl;
   auto [remote_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
