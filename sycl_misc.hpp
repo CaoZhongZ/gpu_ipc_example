@@ -4,8 +4,7 @@
 template <int ndev>
 sycl::device getDevice() {
   static auto devs = sycl::device::get_devices(sycl::info::device_type::gpu);
-  static auto dev = devs[ndev];
-  return dev;
+  return devs[ndev];
 }
 
 template <int ndev, int nsub>

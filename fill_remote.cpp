@@ -123,6 +123,7 @@ std::tuple<ze_event_pool_handle_t, ze_ipc_event_pool_handle_t> open_peer_ipc_poo
 
   std::cout<< "zeEventPoolOpenIpcHandle" <<std::endl;
   zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, peer->ipc_pool, &peer_handle));
+  std::cout<< "zeEventPoolOpenIpcHandle done" <<std::endl;
   return std::make_pair(peer_handle, send_buf.ipc_pool);
 }
 
