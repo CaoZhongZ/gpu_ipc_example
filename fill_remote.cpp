@@ -43,7 +43,7 @@ ze_event_pool_handle_t create_event_pool(int rank, int world) {
   /* auto l0_dev = sycl::get_native<
     sycl::backend::ext_oneapi_level_zero>(queue.get_device());*/
   auto l0_root_dev = sycl::get_native<
-    sycl::backend::ext_oneapi_level_zero>(getDevice(rank/2));
+    sycl::backend::ext_oneapi_level_zero>(currentDevice(rank/2));
 
   ze_event_pool_handle_t ret;
   ze_event_pool_desc_t pool_desc = default_pool_desc;
