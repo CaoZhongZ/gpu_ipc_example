@@ -219,7 +219,7 @@ static constexpr ze_fence_desc_t init_fence_desc = {
 
 void ring_depends(int rank,
     ze_event_pool_handle_t self_pool, ze_event_pool_handle_t next_pool) {
-  ze_event_handle_t h_self = nullptr, h_next = nullptr, h_start = nullptr, h_final = nullptr;
+  ze_event_handle_t h_self = nullptr, h_next = nullptr, h_start = nullptr;
 
   auto desc = ipc_default_event_desc;
   zeCheck(zeEventCreate(self_pool, &desc, &h_self));
@@ -228,8 +228,6 @@ void ring_depends(int rank,
   if (rank == 0) {
     desc.index = 1;
     zeCheck(zeEventCreate(self_pool, &desc, &h_start));
-    desc.index = 2;
-    zeCheck(zeEventCreate(self_pool, &desc, &h_final));
   }
 
   ze_command_list_handle_t cmdlist;
@@ -246,7 +244,6 @@ void ring_depends(int rank,
   zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
   if (rank == 0) {
     zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_start));
-    zeCheck(zeCommandListAppendBarrier(cmdlist, h_final, 1, &h_self));
   } else {
     zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_self));
   }
@@ -257,15 +254,16 @@ void ring_depends(int rank,
   ze_fence_handle_t fence = nullptr;
 
   zeCheck(zeFenceCreate(command_queue, &init_fence_desc, &fence));
+  zeCheck(zeCommandListClose(cmdlist));
   zeCheck(zeCommandQueueExecuteCommandLists(command_queue, 1, &cmdlist, fence));
 
   std::cout<<"Execute command queue"<<std::endl;
 
   if (rank == 0) {
-    std::cout<<"trigger event"<<std::endl;
+    std::cout<<"Trigger event"<<std::endl;
     zeEventHostSignal(h_start);
-    zeEventHostSynchronize(h_final, std::numeric_limits<uint64_t>::max());
-    std::cout<<"Finished"<<std::endl;
+    zeEventHostSynchronize(h_self, std::numeric_limits<uint64_t>::max());
+    std::cout<<"Final Event triggered"<<std::endl;
   }
 
   // queue.wait();
