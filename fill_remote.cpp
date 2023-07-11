@@ -123,8 +123,8 @@ open_peer_ipc_pool(ze_event_pool_handle_t handle, int rank, int world) {
   sysCheck(prev->fd);
 
   // Step 6: Open IPC handle of remote peer
-  ze_event_pool_handle_t prev_handle;
-  ze_event_pool_handle_t next_handle;
+  ze_event_pool_handle_t prev_handle = nullptr;
+  ze_event_pool_handle_t next_handle = nullptr;
   zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, prev->ipc_pool, &prev_handle));
 
   if (prev != next) {
@@ -216,6 +216,8 @@ void ring_depends(int rank,
   ze_event_handle_t h_prev = nullptr, h_next = nullptr;
   auto desc = ipc_default_event_desc;
   zeCheck(zeEventCreate(prev_pool, &desc, &h_prev));
+
+  desc.index = 1;
   zeCheck(zeEventCreate(next_pool, &desc, &h_next));
 
   ze_command_list_handle_t cmdlist;
@@ -231,6 +233,7 @@ void ring_depends(int rank,
 
   zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
   zeCheck(zeCommandListAppendBarrier(cmdlist, nullptr, 1, &h_prev));
+  std::cout<<"Success finished append"<<std::endl;
 }
 
 template <typename T>
