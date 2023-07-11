@@ -218,13 +218,19 @@ static constexpr ze_fence_desc_t init_fence_desc = {
 };
 
 void ring_depends(int rank,
-    ze_event_pool_handle_t prev_pool, ze_event_pool_handle_t next_pool) {
-  ze_event_handle_t h_prev = nullptr, h_next = nullptr;
-  auto desc = ipc_default_event_desc;
-  zeCheck(zeEventCreate(prev_pool, &desc, &h_prev));
+    ze_event_pool_handle_t self_pool, ze_event_pool_handle_t next_pool) {
+  ze_event_handle_t h_self = nullptr, h_next = nullptr, h_start = nullptr, h_final = nullptr;
 
-  desc.index = 1;
+  auto desc = ipc_default_event_desc;
+  zeCheck(zeEventCreate(self_pool, &desc, &h_self));
   zeCheck(zeEventCreate(next_pool, &desc, &h_next));
+
+  if (rank == 0) {
+    desc.index = 1;
+    zeCheck(zeEventCreate(self_pool, &desc, &h_start));
+    desc.index = 2;
+    zeCheck(zeEventCreate(self_pool, &desc, &h_final));
+  }
 
   ze_command_list_handle_t cmdlist;
   auto queue = currentQueue(rank/2, rank&1);
@@ -238,18 +244,17 @@ void ring_depends(int rank,
   auto cmdlist_desc = init_cmd_list_desc;
 
   zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
-
-  if (rank != 0) {
-    zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_prev));
+  if (rank == 0) {
+    zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_start));
+    zeCheck(zeCommandListAppendBarrier(cmdlist, h_final, 1, &h_self));
   } else {
-    zeCheck(zeCommandListAppendSignalEvent(cmdlist, h_next));
-    zeCheck(zeCommandListAppendWaitOnEvents(cmdlist, 1, &h_prev));
+    zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_self));
   }
 
   std::cout<<"Success finished append"<<std::endl;
 
   auto command_queue = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(queue);
-  ze_fence_handle_t fence;
+  ze_fence_handle_t fence = nullptr;
 
   zeCheck(zeFenceCreate(command_queue, &init_fence_desc, &fence));
   zeCheck(zeCommandQueueExecuteCommandLists(command_queue, 1, &cmdlist, fence));
@@ -257,10 +262,17 @@ void ring_depends(int rank,
   std::cout<<"Execute command queue"<<std::endl;
 
   if (rank == 0) {
-    std::cout<<"Wait signal"<<std::endl;
-    zeFenceHostSynchronize(fence, std::numeric_limits<uint64_t>::max());
-    std::cout<<"Received signal"<<std::endl;
+    std::cout<<"trigger event"<<std::endl;
+    zeEventHostSignal(h_start);
+    zeEventHostSynchronize(h_final, std::numeric_limits<uint64_t>::max());
+    std::cout<<"Finished"<<std::endl;
   }
+
+  // queue.wait();
+
+  zeFenceHostSynchronize(fence, std::numeric_limits<uint64_t>::max());
+  std::cout<<"["<<rank<<"] Release fence"<<std::endl;
+  zeFenceDestroy(fence);
 }
 
 template <typename T>
@@ -304,14 +316,14 @@ int main(int argc, char* argv[]) {
   // rank 2, device 1, subdevice 0
   // ...
   std::cout<<"create_event_pool"<<std::endl;
-  auto h_event_pool = create_event_pool(rank, world);
+  auto h_event_pool = create_event_pool_host(rank, world);
   std::cout<<"open_peer_ipc_pool"<<std::endl;
   auto [prev_pool, next_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
-  ring_depends(rank, prev_pool, next_pool);
+  ring_depends(rank, h_event_pool, next_pool);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  std::cout<<"Successfully get remote handle"<<std::endl;
+  std::cout<<"Finish all"<<std::endl;
 
   // Clean up, close/put ipc handles, free memory, etc.
   zeCheck(zeEventPoolCloseIpcHandle(prev_pool));
