@@ -119,25 +119,27 @@ open_peer_ipc_pool(ze_event_pool_handle_t handle, int rank, int world) {
   //
   auto pid_prev = syscall(__NR_pidfd_open, prev->pid, 0);
   sysCheck(pid_prev);
-  auto pid_next = syscall(__NR_pidfd_open, next->pid, 0);
-  sysCheck(pid_next);
-
   prev->fd = syscall(__NR_pidfd_getfd, pid_prev, prev->fd, 0);
   sysCheck(prev->fd);
 
-  next->fd = syscall(__NR_pidfd_getfd, pid_next, next->fd, 0);
-  sysCheck(next->fd);
-
-  // Step 6: Open IPC handle of remote peer
-  ze_event_pool_handle_t next_handle;
-  zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, next->ipc_pool, &next_handle));
-
   // Step 6: Open IPC handle of remote peer
   ze_event_pool_handle_t prev_handle;
+  ze_event_pool_handle_t next_handle;
   zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, prev->ipc_pool, &prev_handle));
 
+  if (prev != next) {
+    auto pid_next = syscall(__NR_pidfd_open, next->pid, 0);
+    sysCheck(pid_next);
+    next->fd = syscall(__NR_pidfd_getfd, pid_next, next->fd, 0);
+    sysCheck(next->fd);
+
+    zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, next->ipc_pool, &next_handle));
+    close(pid_next);
+  } else {
+    next_handle = prev_handle;
+  }
+
   close(pid_prev);
-  close(pid_next);
   return std::make_tuple(prev_handle, next_handle, send_buf.ipc_pool);
 }
 
@@ -228,7 +230,7 @@ void ring_depends(int rank,
   auto cmdlist_desc = init_cmd_list_desc;
 
   zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
-  zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_prev));
+  zeCheck(zeCommandListAppendBarrier(cmdlist, nullptr, 1, &h_prev));
 }
 
 template <typename T>
@@ -283,7 +285,8 @@ int main(int argc, char* argv[]) {
 
   // Clean up, close/put ipc handles, free memory, etc.
   zeCheck(zeEventPoolCloseIpcHandle(prev_pool));
-  zeCheck(zeEventPoolCloseIpcHandle(next_pool));
+  if (prev_pool != next_pool)
+    zeCheck(zeEventPoolCloseIpcHandle(next_pool));
   MPI_Barrier(MPI_COMM_WORLD);
 
   // zeCheck(zeEventPoolPutIpcHandle(l0_ctx, local_ipc_pool)); /* the API is added after v1.6 */
