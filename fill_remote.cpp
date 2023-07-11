@@ -82,8 +82,8 @@ ze_event_pool_handle_t create_event_pool_host_pure(int rank, int world) {
   return ret;
 }
 
-std::tuple<ze_event_pool_handle_t, ze_ipc_event_pool_handle_t> open_peer_ipc_pool(
-    ze_event_pool_handle_t handle, int rank, int world) {
+std::tuple<ze_event_pool_handle_t, ze_event_pool_handle_t, ze_ipc_event_pool_handle_t>
+open_peer_ipc_pool(ze_event_pool_handle_t handle, int rank, int world) {
   // Get IPC Pool handle out of local IPC handle
   sycl::queue queue = currentQueue(rank / 2, rank & 1);
   sycl::context ctx = queue.get_context();
@@ -105,27 +105,40 @@ std::tuple<ze_event_pool_handle_t, ze_ipc_event_pool_handle_t> open_peer_ipc_poo
       recv_buf, sizeof(send_buf), MPI_BYTE, MPI_COMM_WORLD);
 
   // Step 4: Prepare pid file descriptor of next process
-  int next_peer = rank + 1;
+  int next_peer = rank +1;
   if (next_peer >= world) next_peer = next_peer - world;
 
-  auto* peer = recv_buf + next_peer;
-  auto pid_fd = syscall(__NR_pidfd_open, peer->pid, 0);
-  sysCheck(pid_fd);
+  int prev_peer = rank -1;
+  if (prev_peer < 0) prev_peer = world -1;
 
+  auto* prev = recv_buf + prev_peer;
+  auto* next = recv_buf + next_peer;
   //
   // Step 5: Duplicate GEM object handle to local process
   // and overwrite original file descriptor number
   //
-  peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd, 0);
-  sysCheck(peer->fd);
+  auto pid_prev = syscall(__NR_pidfd_open, prev->pid, 0);
+  sysCheck(pid_prev);
+  auto pid_next = syscall(__NR_pidfd_open, next->pid, 0);
+  sysCheck(pid_next);
+
+  prev->fd = syscall(__NR_pidfd_getfd, pid_prev, prev->fd, 0);
+  sysCheck(prev->fd);
+
+  next->fd = syscall(__NR_pidfd_getfd, pid_next, next->fd, 0);
+  sysCheck(next->fd);
 
   // Step 6: Open IPC handle of remote peer
-  ze_event_pool_handle_t peer_handle;
+  ze_event_pool_handle_t next_handle;
+  zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, next->ipc_pool, &next_handle));
 
-  std::cout<< "zeEventPoolOpenIpcHandle" <<std::endl;
-  zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, peer->ipc_pool, &peer_handle));
-  std::cout<< "zeEventPoolOpenIpcHandle done" <<std::endl;
-  return std::make_pair(peer_handle, send_buf.ipc_pool);
+  // Step 6: Open IPC handle of remote peer
+  ze_event_pool_handle_t prev_handle;
+  zeCheck(zeEventPoolOpenIpcHandle(l0_ctx, prev->ipc_pool, &prev_handle));
+
+  close(pid_prev);
+  close(pid_next);
+  return std::make_tuple(prev_handle, next_handle, send_buf.ipc_pool);
 }
 
 std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
@@ -224,14 +237,15 @@ int main(int argc, char* argv[]) {
   std::cout<<"create_event_pool"<<std::endl;
   auto h_event_pool = create_event_pool(rank, world);
   std::cout<<"open_peer_ipc_pool"<<std::endl;
-  auto [remote_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
+  auto [prev_pool, next_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
   std::cout<<"Successfully get remote handle"<<std::endl;
 
   // Clean up, close/put ipc handles, free memory, etc.
-  zeCheck(zeEventPoolCloseIpcHandle(remote_pool));
+  zeCheck(zeEventPoolCloseIpcHandle(prev_pool));
+  zeCheck(zeEventPoolCloseIpcHandle(next_pool));
   MPI_Barrier(MPI_COMM_WORLD);
 
   // zeCheck(zeEventPoolPutIpcHandle(l0_ctx, local_ipc_pool)); /* the API is added after v1.6 */
