@@ -194,6 +194,43 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
       (char*)peer_base + peer->offset, peer->offset, send_buf.ipc_handle);
 }
 
+constexpr ze_event_desc_t ipc_default_event_desc = {
+  .stype = ZE_STRUCTURE_TYPE_EVENT_DESC,
+  .pNext = nullptr,
+  .index = 0,
+  .signal = ZE_EVENT_SCOPE_FLAG_DEVICE,
+  .wait = ZE_EVENT_SCOPE_FLAG_DEVICE
+};
+
+static constexpr ze_command_list_desc_t init_cmd_list_desc = {
+  .stype = ZE_STRUCTURE_TYPE_COMMAND_LIST_DESC,
+  .pNext = nullptr,
+  .commandQueueGroupOrdinal = 0,
+  .flags = ZE_COMMAND_LIST_FLAG_EXPLICIT_ONLY
+};
+
+void ring_depends(int rank,
+    ze_event_pool_handle_t prev_pool, ze_event_pool_handle_t next_pool) {
+  ze_event_handle_t h_prev = nullptr, h_next = nullptr;
+  auto desc = ipc_default_event_desc;
+  zeCheck(zeEventCreate(prev_pool, &desc, &h_prev));
+  zeCheck(zeEventCreate(next_pool, &desc, &h_next));
+
+  ze_command_list_handle_t cmdlist;
+  auto queue = currentQueue(rank/2, rank&1);
+  sycl::context ctx = queue.get_context();
+
+  auto l0_ctx = sycl::get_native<
+    sycl::backend::ext_oneapi_level_zero>(ctx);
+  auto l0_dev = sycl::get_native<
+    sycl::backend::ext_oneapi_level_zero>(queue.get_device());
+
+  auto cmdlist_desc = init_cmd_list_desc;
+
+  zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
+  zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_prev));
+}
+
 template <typename T>
 bool checkResults(T *ptr, T c, size_t count) {
   for (int i = 0; i < count; ++ i) {
@@ -238,6 +275,7 @@ int main(int argc, char* argv[]) {
   auto h_event_pool = create_event_pool(rank, world);
   std::cout<<"open_peer_ipc_pool"<<std::endl;
   auto [prev_pool, next_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
+  ring_depends(rank, prev_pool, next_pool);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
