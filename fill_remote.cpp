@@ -211,6 +211,12 @@ static constexpr ze_command_list_desc_t init_cmd_list_desc = {
   .flags = ZE_COMMAND_LIST_FLAG_EXPLICIT_ONLY
 };
 
+static constexpr ze_fence_desc_t init_fence_desc = {
+  .stype = ZE_STRUCTURE_TYPE_FENCE_DESC,
+  .pNext = nullptr,
+  .flags = 0
+};
+
 void ring_depends(int rank,
     ze_event_pool_handle_t prev_pool, ze_event_pool_handle_t next_pool) {
   ze_event_handle_t h_prev = nullptr, h_next = nullptr;
@@ -232,8 +238,29 @@ void ring_depends(int rank,
   auto cmdlist_desc = init_cmd_list_desc;
 
   zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
-  zeCheck(zeCommandListAppendBarrier(cmdlist, nullptr, 1, &h_prev));
+
+  if (rank != 0) {
+    zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_prev));
+  } else {
+    zeCheck(zeCommandListAppendSignalEvent(cmdlist, h_next));
+    zeCheck(zeCommandListAppendWaitOnEvents(cmdlist, 1, &h_prev));
+  }
+
   std::cout<<"Success finished append"<<std::endl;
+
+  auto command_queue = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(queue);
+  ze_fence_handle_t fence;
+
+  zeCheck(zeFenceCreate(command_queue, &init_fence_desc, &fence));
+  zeCheck(zeCommandQueueExecuteCommandLists(command_queue, 1, &cmdlist, fence));
+
+  std::cout<<"Execute command queue"<<std::endl;
+
+  if (rank == 0) {
+    std::cout<<"Wait signal"<<std::endl;
+    zeFenceHostSynchronize(fence, std::numeric_limits<uint64_t>::max());
+    std::cout<<"Received signal"<<std::endl;
+  }
 }
 
 template <typename T>

@@ -10,4 +10,5 @@ export PATH=$NEO_BIN:$PATH
 export LD_LIBRARY_PATH=$(pwd)/_install/lib:$NEO_LIB:$LD_LIBRARY_PATH
 export OCL_ICD_VENDORS=/home/caozhong/Workspace/neo/etc/OpenCL/vendors/intel.icd
 
-mpirun -disable-auto-cleanup -np 3 ./fill_remote -c 16 -t fp16 : -np 1 gdbserver :44555 ./fill_remote -c 16 -t fp16
+mpirun -disable-auto-cleanup -np 1 gdbserver :44555 ./fill_remote -c 16 -t fp16 :\
+  -np 3 ./fill_remote -c 16 -t fp16
