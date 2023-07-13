@@ -238,10 +238,16 @@ void ring_depends(int rank,
     sycl::backend::ext_oneapi_level_zero>(ctx);
   auto l0_dev = sycl::get_native<
     sycl::backend::ext_oneapi_level_zero>(queue.get_device());
+  auto l0_queue = sycl::get_native<
+    sycl::backend::ext_oneapi_level_zero>(queue);
 
-  auto cmdlist_desc = init_cmd_list_desc;
+  if (std::holds_alternative<ze_command_list_handle_t>(l0_queue)) {
+    cmdlist = std::get<ze_command_list_handle_t>(l0_queue);
+  } else {
+    auto cmdlist_desc = init_cmd_list_desc;
+    zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
+  }
 
-  zeCheck(zeCommandListCreate(l0_ctx, l0_dev, &cmdlist_desc, &cmdlist));
   if (rank == 0) {
     zeCheck(zeCommandListAppendBarrier(cmdlist, h_next, 1, &h_start));
   } else {
@@ -250,12 +256,14 @@ void ring_depends(int rank,
 
   std::cout<<"Success finished append"<<std::endl;
 
-  auto command_queue = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(queue);
   ze_fence_handle_t fence = nullptr;
 
-  zeCheck(zeFenceCreate(command_queue, &init_fence_desc, &fence));
-  zeCheck(zeCommandListClose(cmdlist));
-  zeCheck(zeCommandQueueExecuteCommandLists(command_queue, 1, &cmdlist, fence));
+  if (std::holds_alternative<ze_command_queue_handle_t>(l0_queue)) {
+    auto command_queue = std::get<ze_command_queue_handle_t>(l0_queue);
+    zeCheck(zeFenceCreate(command_queue, &init_fence_desc, &fence));
+    zeCheck(zeCommandListClose(cmdlist));
+    zeCheck(zeCommandQueueExecuteCommandLists(command_queue, 1, &cmdlist, fence));
+  }
 
   std::cout<<"Execute command queue"<<std::endl;
 
@@ -268,9 +276,11 @@ void ring_depends(int rank,
 
   // queue.wait();
 
-  zeFenceHostSynchronize(fence, std::numeric_limits<uint64_t>::max());
-  std::cout<<"["<<rank<<"] Release fence"<<std::endl;
-  zeFenceDestroy(fence);
+  if (std::holds_alternative<ze_command_queue_handle_t>(l0_queue)) {
+    zeFenceHostSynchronize(fence, std::numeric_limits<uint64_t>::max());
+    std::cout<<"["<<rank<<"] Release fence"<<std::endl;
+    zeFenceDestroy(fence);
+  }
 }
 
 template <typename T>
@@ -331,4 +341,5 @@ int main(int argc, char* argv[]) {
 
   // zeCheck(zeEventPoolPutIpcHandle(l0_ctx, local_ipc_pool)); /* the API is added after v1.6 */
   zeCheck(zeEventPoolDestroy(h_event_pool));
+  MPI_Finalize();
 }
