@@ -45,8 +45,10 @@ public:
 };
 
 #define zeCheck(x)             \
+{ \
   if (x != ZE_RESULT_SUCCESS)  {    \
     auto e = zeException(x);  \
     std::cout<<"Throw "<<e.what()<<std::endl; \
     throw e;      \
-  }
+  } \
+}

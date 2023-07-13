@@ -236,6 +236,25 @@ void ring_depends(int rank,
   std::cout<<"Success finished append"<<std::endl;
 }
 
+constexpr static ze_device_p2p_properties_t init_query {
+  .stype = ZE_STRUCTURE_TYPE_DEVICE_P2P_PROPERTIES,
+  .pNext = nullptr,
+};
+
+bool atomic_check(int self, int remote) {
+  auto d_self = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+      currentSubDevice(self/2, self &1));
+  auto d_remote = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(
+      currentSubDevice(remote/2, remote &1));
+
+  ze_device_p2p_properties_t query = init_query;
+  zeDeviceGetP2PProperties(d_self, d_remote, &query);
+  if ((query.flags & ZE_DEVICE_P2P_PROPERTY_FLAG_ACCESS)
+      && (query.flags & ZE_DEVICE_P2P_PROPERTY_FLAG_ATOMICS))
+    return true;
+  return false;
+}
+
 template <typename T>
 bool checkResults(T *ptr, T c, size_t count) {
   for (int i = 0; i < count; ++ i) {
@@ -280,7 +299,16 @@ int main(int argc, char* argv[]) {
   auto h_event_pool = create_event_pool(rank, world);
   std::cout<<"open_peer_ipc_pool"<<std::endl;
   auto [prev_pool, next_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
-  ring_depends(rank, prev_pool, next_pool);
+  // ring_depends(rank, prev_pool, next_pool);
+
+  for (int i = 0; i < world; ++ i) {
+    if ( i != rank ) {
+      if (atomic_check(rank, i))
+        std::cout<<"Check remote atomic ability on ["<<rank<<":"<<i<<"] OK"<<std::endl;
+      else
+        std::cout<<"Check remote atomic ability on ["<<rank<<":"<<i<<"] Error"<<std::endl;
+    }
+  }
 
   MPI_Barrier(MPI_COMM_WORLD);
 
