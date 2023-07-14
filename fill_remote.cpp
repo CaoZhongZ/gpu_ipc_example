@@ -324,7 +324,7 @@ int main(int argc, char* argv[]) {
   // rank 2, device 1, subdevice 0
   // ...
   std::cout<<"create_event_pool"<<std::endl;
-  auto h_event_pool = create_event_pool_host(rank, world);
+  auto h_event_pool = create_event_pool(rank, world);
   std::cout<<"open_peer_ipc_pool"<<std::endl;
   auto [prev_pool, next_pool, local_ipc_pool] = open_peer_ipc_pool(h_event_pool, rank, world);
   ring_depends(rank, h_event_pool, next_pool);

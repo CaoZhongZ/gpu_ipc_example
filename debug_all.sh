@@ -9,8 +9,14 @@ export NEO_LIB=/home/caozhong/Workspace/neo/lib
 export PATH=$NEO_BIN:$PATH
 export LD_LIBRARY_PATH=$(pwd)/_install/lib:$NEO_LIB:$LD_LIBRARY_PATH
 export OCL_ICD_VENDORS=/home/caozhong/Workspace/neo/etc/OpenCL/vendors/intel.icd
+export SYCL_ENABLE_DEFAULT_CONTEXTS=0
 
-mpirun -disable-auto-cleanup -np 1 ./fill_remote -c 16 -t fp16 :\
-  -np 1 gdbserver :44555 ./fill_remote -c 16 -t fp16 \
-  -np 1 ./fill_remote -c 16 -t fp16 \
-  -np 1 ./fill_remote -c 16 -t fp16 \
+mpirun -disable-auto-cleanup \
+  -np 1 ./fill_remote -c 16 -t fp16 : \
+  -np 1 ./fill_remote -c 16 -t fp16 : \
+  -np 1 ./fill_remote -c 16 -t fp16 : \
+  -np 1 gdbserver :44555 ./fill_remote -c 16 -t fp16 : \
+  -np 1 ./fill_remote -c 16 -t fp16 : \
+  -np 1 ./fill_remote -c 16 -t fp16 : \
+  -np 1 ./fill_remote -c 16 -t fp16 : \
+  -np 1 ./fill_remote -c 16 -t fp16
