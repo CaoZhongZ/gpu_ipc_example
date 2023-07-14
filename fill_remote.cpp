@@ -158,6 +158,43 @@ bool checkResults(T *ptr, T c, size_t count) {
   return true;
 }
 
+struct atomic_baseline {
+  constexpr static int max_peers = 16;
+  template <typename T>
+  using atomic_ref = sycl::atomic_ref<T,
+        sycl::memory_order::relaxed,
+        sycl::memory_scope::device,
+        sycl::access::address_space::global_space>;
+public:
+  atomic_baseline(void *peer_ptrs[], int rank, int world, sycl::stream s)
+    : rank(rank), world(world), cout(s) {
+    for (int i = 0; i < world; ++ i)
+      ptrs[i] = (uint32_t *)peer_ptrs[i];
+  }
+
+  // create contension
+  void operator() (sycl::nd_item<1> pos) const {
+    auto *ptr = ptrs[rank];
+    auto local_id = pos.get_local_id();
+    atomic_ref<uint32_t> atomic_slot(ptr[local_id]);
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+    // if (local_id == 0) {
+      // cout<<"["<<pos.get_group(0)<<"] ";
+      atomic_slot++;
+    // }
+    // cout<<sycl::endl;
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+  }
+
+private:
+  uint32_t *ptrs[max_peers];
+  int rank;
+  int world;
+  sycl::stream cout;
+};
+
 struct atomic_stresser {
   constexpr static int max_peers = 16;
   template <typename T>
@@ -166,9 +203,10 @@ struct atomic_stresser {
         sycl::memory_scope::device,
         sycl::access::address_space::global_space>;
 public:
-  atomic_stresser(void *peer_ptrs[], int world) : world(world) {
+  atomic_stresser(void *peer_ptrs[], int rank, int world, sycl::stream s)
+    : rank(rank), world(world), cout(s) {
     for (int i = 0; i < world; ++ i)
-      peer_ptrs[i] = peer_ptrs[i];
+      ptrs[i] = (uint32_t *)peer_ptrs[i];
   }
 
   // create contension
@@ -176,31 +214,38 @@ public:
     auto local_id = pos.get_local_id();
 
     for (int peer = 0; peer < world; ++ peer) {
-      atomic_ref<uint32_t> atomic_slot(
-        reinterpret_cast<uint32_t *>(ptrs[peer])[local_id]
-      );
+      auto* peer_ptr = ptrs[peer];
+      atomic_ref<uint32_t> atomic_slot(peer_ptr[local_id]);
+      // sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
       atomic_slot.fetch_add(1);
+      // sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
     }
   }
 
 private:
-  void *ptrs[max_peers];
+  uint32_t *ptrs[max_peers];
+  int rank;
   int world;
+  sycl::stream cout;
 };
 
 void stress_test(
     int rank, int world,
     void *peer_bases[], size_t offsets[],
-    sycl::nd_range<1> range) {
+    size_t global_sz, size_t group_sz) {
   void* peer_ptrs[world];
 
   for (int i = 0; i < world; ++ i)
     peer_ptrs[i] = reinterpret_cast<char *>(peer_bases[i]) + offsets[i];
 
   auto queue = currentQueue(rank/2, rank & 1);
+  std::cout<<"start run with ["<<global_sz<<", "<<group_sz<<"]"<<std::endl;
 
   queue.submit([&](sycl::handler &cgh) {
-    cgh.parallel_for(range, atomic_stresser(peer_ptrs, world));
+    sycl::stream s(4096, 32, cgh);
+    cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
+      // atomic_baseline(peer_ptrs, rank, world, s));
+      atomic_stresser(peer_ptrs, rank, world, s));
   });
 }
 
@@ -251,8 +296,7 @@ int main(int argc, char* argv[]) {
   auto ipc_handle = open_peer_ipc_mems(buffer, rank, world, peer_bases, offsets);
 
   stress_test(
-      rank, world, peer_bases, offsets,
-      sycl::nd_range<1>{global_sz, group_sz});
+      rank, world, peer_bases, offsets, global_sz, group_sz);
 
   // avoid race condition
   queue.wait();
@@ -261,8 +305,8 @@ int main(int argc, char* argv[]) {
   // Or we map the device to host
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
-  void *host_buf = mmap_host(alloc_size, dma_buf);
-  (void)host_buf;
+  uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size, dma_buf);
+  std::cout<<"Peak: "<<host_buf[0]<<", "<<host_buf[1]<<", "<<host_buf[2]<<", ..."<<std::endl;
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -273,7 +317,8 @@ int main(int argc, char* argv[]) {
   munmap(host_buf, alloc_size);
 
   for (int i = 0; i < world; ++ i)
-    zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
+    if (i != rank)
+      zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
 
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);

@@ -11,7 +11,7 @@ LIBRARIES=-L$(CCL_ROOT)/lib -lmpi -lze_loader
 
 CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES)
 
-all : fill_remote
+all : fill_remote atomic_2020
 
 clean:
 	rm -f fill_remote
