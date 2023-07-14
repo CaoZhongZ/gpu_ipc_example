@@ -230,21 +230,22 @@ private:
 void stress_test(
     int rank, int world,
     void *peer_bases[], size_t offsets[],
-    size_t global_sz, size_t group_sz) {
+    size_t global_sz, size_t group_sz, uint32_t repeat = 4096) {
   void* peer_ptrs[world];
 
   for (int i = 0; i < world; ++ i)
     peer_ptrs[i] = reinterpret_cast<char *>(peer_bases[i]) + offsets[i];
 
   auto queue = currentQueue(rank/2, rank & 1);
-  std::cout<<"start run with ["<<global_sz<<", "<<group_sz<<"]"<<std::endl;
+  std::cout<<"start run with [groups="<<global_sz/group_sz<<", group_sz="<<group_sz<<"]"<<std::endl;
 
-  queue.submit([&](sycl::handler &cgh) {
-    sycl::stream s(4096, 32, cgh);
-    cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
-      // atomic_baseline(peer_ptrs, rank, world, s));
-      atomic_stresser(peer_ptrs, rank, world, s));
-  });
+  for (uint32_t i = 0; i < repeat; ++ i)
+    queue.submit([&](sycl::handler &cgh) {
+      sycl::stream s(4096, 32, cgh);
+      cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
+        // atomic_baseline(peer_ptrs, rank, world, s));
+        atomic_stresser(peer_ptrs, rank, world, s));
+    });
 }
 
 int main(int argc, char* argv[]) {
@@ -257,11 +258,13 @@ int main(int argc, char* argv[]) {
   opts.add_options()
     ("g,global_size", "Launching global size", cxxopts::value<size_t>()->default_value("8192"))
     ("l,group_size", "Launching group size", cxxopts::value<size_t>()->default_value("16"))
+    ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto global_sz = parsed_opts["global_size"].as<size_t>();
   auto group_sz = parsed_opts["group_size"].as<size_t>();
+  auto repeat = parsed_opts["repeat"].as<uint32_t>();
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -294,7 +297,7 @@ int main(int argc, char* argv[]) {
   auto ipc_handle = open_peer_ipc_mems(buffer, rank, world, peer_bases, offsets);
 
   stress_test(
-      rank, world, peer_bases, offsets, global_sz, group_sz);
+      rank, world, peer_bases, offsets, global_sz, group_sz, repeat);
 
   // avoid race condition
   queue.wait();
@@ -304,7 +307,7 @@ int main(int argc, char* argv[]) {
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size, dma_buf);
-  std::cout<<"Peak: "<<host_buf[0]<<", "<<host_buf[1]<<", "<<host_buf[2]<<", ..."<<std::endl;
+  std::cout<<"Peek: "<<host_buf[0]<<", "<<host_buf[1]<<", "<<host_buf[2]<<", ..."<<std::endl;
 
   MPI_Barrier(MPI_COMM_WORLD);
 
