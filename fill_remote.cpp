@@ -216,9 +216,7 @@ public:
     for (int peer = 0; peer < world; ++ peer) {
       auto* peer_ptr = ptrs[peer];
       atomic_ref<uint32_t> atomic_slot(peer_ptr[local_id]);
-      // sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
       atomic_slot.fetch_add(1);
-      // sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
     }
   }
 
