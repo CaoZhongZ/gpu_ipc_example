@@ -7,4 +7,4 @@ Build:
   make
 
 Run:
-  ```mpirun -np <N> fill_remote -c 1024 -t <fp16 | float>```
+  ```mpirun -np <N> fill_remote -g 4096 -l 32 -i 256```

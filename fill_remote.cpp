@@ -260,6 +260,36 @@ private:
   uint32_t repeat;
 };
 
+template <int max_peers>
+struct atomic_stresser_l3 {
+  template <typename T>
+  using atomic_ref = sycl::atomic_ref<T,
+        sycl::memory_order::relaxed,
+        sycl::memory_scope::device,
+        sycl::access::address_space::global_space>;
+public:
+  atomic_stresser_l3(void *peer_ptrs[], int world, uint32_t repeat)
+    : repeat(repeat) {
+    for (int i = 0; i < world; ++ i)
+      ptrs[i] = (uint32_t *)peer_ptrs[i];
+  }
+
+  // create contension
+  void operator() (sycl::nd_item<1> pos) const {
+    auto local_id = pos.get_local_id();
+    auto peer = pos.get_group(0) % max_peers;
+    auto* peer_ptr = ptrs[peer];
+
+    atomic_ref<uint32_t> atomic_slot(peer_ptr[local_id]);
+    for (int r = 0; r < repeat; ++ r)
+      atomic_slot.fetch_add(1);
+  }
+
+private:
+  uint32_t *ptrs[max_peers];
+  uint32_t repeat;
+};
+
 
 void stress_test(
     int rank, int world,
@@ -273,14 +303,31 @@ void stress_test(
   auto queue = currentQueue(rank/2, rank & 1);
   std::cout<<"start run with [groups="<<global_sz/group_sz<<", group_sz="<<group_sz<<"]"<<std::endl;
 
-  for (uint32_t i = 0; i < repeat; ++ i)
+  for (uint32_t i = 0; i < repeat; ++ i) {
     queue.submit([&](sycl::handler &cgh) {
-      sycl::stream s(4096, 32, cgh);
-      cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
-        // atomic_baseline(peer_ptrs, rank, world, s));
-        // atomic_stresser(peer_ptrs, rank, world, s));
-        atomic_stresser_l2(peer_ptrs, rank, world, repeat));
+      // sycl::stream s(4096, 32, cgh);
+      switch (world) {
+      case 2:
+        cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
+          // atomic_baseline(peer_ptrs, rank, world, s));
+          // atomic_stresser(peer_ptrs, rank, world, s));
+          atomic_stresser_l3<4>(peer_ptrs, world, repeat));
+        break;
+      case 4:
+        cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
+          // atomic_baseline(peer_ptrs, rank, world, s));
+          // atomic_stresser(peer_ptrs, rank, world, s));
+          atomic_stresser_l3<4>(peer_ptrs, world, repeat));
+        break;
+      case 8:
+        cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
+          // atomic_baseline(peer_ptrs, rank, world, s));
+          // atomic_stresser(peer_ptrs, rank, world, s));
+          atomic_stresser_l3<8>(peer_ptrs, world, repeat));
+        break;
+      }
     });
+  }
 }
 
 int main(int argc, char* argv[]) {
