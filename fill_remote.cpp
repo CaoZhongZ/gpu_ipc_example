@@ -227,6 +227,40 @@ private:
   sycl::stream cout;
 };
 
+struct atomic_stresser_l2 {
+  constexpr static int max_peers = 16;
+  template <typename T>
+  using atomic_ref = sycl::atomic_ref<T,
+        sycl::memory_order::relaxed,
+        sycl::memory_scope::device,
+        sycl::access::address_space::global_space>;
+public:
+  atomic_stresser_l2(void *peer_ptrs[], int rank, int world, uint32_t repeat)
+    : rank(rank), world(world), repeat(repeat) {
+    for (int i = 0; i < world; ++ i)
+      ptrs[i] = (uint32_t *)peer_ptrs[i];
+  }
+
+  // create contension
+  void operator() (sycl::nd_item<1> pos) const {
+    auto local_id = pos.get_local_id();
+
+    for (int peer = 0; peer < world; ++ peer) {
+      auto* peer_ptr = ptrs[peer];
+      atomic_ref<uint32_t> atomic_slot(peer_ptr[local_id]);
+      for (int r = 0; r < repeat; ++ r)
+        atomic_slot.fetch_add(1);
+    }
+  }
+
+private:
+  uint32_t *ptrs[max_peers];
+  int rank;
+  int world;
+  uint32_t repeat;
+};
+
+
 void stress_test(
     int rank, int world,
     void *peer_bases[], size_t offsets[],
@@ -244,7 +278,8 @@ void stress_test(
       sycl::stream s(4096, 32, cgh);
       cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
         // atomic_baseline(peer_ptrs, rank, world, s));
-        atomic_stresser(peer_ptrs, rank, world, s));
+        // atomic_stresser(peer_ptrs, rank, world, s));
+        atomic_stresser_l2(peer_ptrs, rank, world, repeat));
     });
 }
 
