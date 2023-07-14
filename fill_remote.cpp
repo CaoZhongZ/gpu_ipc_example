@@ -27,6 +27,63 @@ struct exchange_contents {
         std::make_error_code(std::errc(errno)));  \
   }
 
+ze_ipc_mem_handle_t open_peer_ipc_mems(
+    void* ptr, int rank, int world, void *peer_bases[], size_t offsets[]) {
+  // Step 1: Get base address of the pointer
+  sycl::queue queue = currentQueue(rank / 2, rank & 1);
+  sycl::context ctx = queue.get_context();
+  auto l0_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
+
+  void *base_addr;
+  size_t base_size;
+  zeCheck(zeMemGetAddressRange(l0_ctx, ptr, &base_addr, &base_size));
+
+  // Step 2: Get IPC mem handle from base address
+  alignas(64) exchange_contents send_buf;
+  alignas(64) exchange_contents recv_buf[world];
+
+  // fill in the exchange info
+  zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &send_buf.ipc_handle));
+  send_buf.offset = (char*)ptr - (char*)base_addr;
+  send_buf.pid = getpid();
+
+  // Step 3: Exchange the handles and offsets
+  memset(recv_buf, 0, sizeof(recv_buf));
+  // Overkill if we don't really needs all peer's handles
+  MPI_Allgather(
+      &send_buf, sizeof(send_buf), MPI_BYTE, recv_buf, sizeof(send_buf), MPI_BYTE, MPI_COMM_WORLD);
+
+  for (int i = 0; i < world; ++ i) {
+    if (i == rank) {
+      peer_bases[i] = ptr;
+      offsets[i] = 0;
+    } else {
+      auto* peer = recv_buf + i;
+      auto pid_fd = syscall(__NR_pidfd_open, peer->pid, 0);
+      sysCheck(pid_fd);
+
+      //
+      // Step 5: Duplicate GEM object handle to local process
+      // and overwrite original file descriptor number
+      //
+      peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd, 0);
+      sysCheck(peer->fd);
+
+      // Step 6: Open IPC handle of remote peer
+      auto l0_device
+        = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(queue.get_device());
+      void* peer_base;
+
+      zeCheck(zeMemOpenIpcHandle(
+            l0_ctx, l0_device, peer->ipc_handle, ZE_IPC_MEMORY_FLAG_BIAS_CACHED, &peer_base));
+
+        peer_bases[i] = peer_base;
+        offsets[i] = peer->offset;
+    }
+  }
+  return send_buf.ipc_handle;
+}
+
 std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
     void* ptr, int rank, int world) {
   // Step 1: Get base address of the pointer
@@ -101,6 +158,52 @@ bool checkResults(T *ptr, T c, size_t count) {
   return true;
 }
 
+struct atomic_stresser {
+  constexpr static int max_peers = 16;
+  template <typename T>
+  using atomic_ref = sycl::atomic_ref<T,
+        sycl::memory_order::relaxed,
+        sycl::memory_scope::device,
+        sycl::access::address_space::global_space>;
+public:
+  atomic_stresser(void *peer_ptrs[], int world) : world(world) {
+    for (int i = 0; i < world; ++ i)
+      peer_ptrs[i] = peer_ptrs[i];
+  }
+
+  // create contension
+  void operator() (sycl::nd_item<1> pos) const {
+    auto local_id = pos.get_local_id();
+
+    for (int peer = 0; peer < world; ++ peer) {
+      atomic_ref<uint32_t> atomic_slot(
+        reinterpret_cast<uint32_t *>(ptrs[peer])[local_id]
+      );
+      atomic_slot.fetch_add(1);
+    }
+  }
+
+private:
+  void *ptrs[max_peers];
+  int world;
+};
+
+void stress_test(
+    int rank, int world,
+    void *peer_bases[], size_t offsets[],
+    sycl::nd_range<1> range) {
+  void* peer_ptrs[world];
+
+  for (int i = 0; i < world; ++ i)
+    peer_ptrs[i] = reinterpret_cast<char *>(peer_bases[i]) + offsets[i];
+
+  auto queue = currentQueue(rank/2, rank & 1);
+
+  queue.submit([&](sycl::handler &cgh) {
+    cgh.parallel_for(range, atomic_stresser(peer_ptrs, world));
+  });
+}
+
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -109,20 +212,13 @@ int main(int argc, char* argv[]) {
 
   opts.allow_unrecognised_options();
   opts.add_options()
-    ("c,count", "Data content count", cxxopts::value<size_t>()->default_value("8192"))
-    ("t,type", "Data content type", cxxopts::value<std::string>()->default_value("fp16"))
+    ("g,global_size", "Launching global size", cxxopts::value<size_t>()->default_value("8192"))
+    ("l,group_size", "Launching group size", cxxopts::value<size_t>()->default_value("16"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
-  auto count = parsed_opts["count"].as<size_t>();
-  auto dtype = parsed_opts["type"].as<std::string>();
-
-  size_t alloc_size = 0;
-
-  if (dtype == "fp16")
-    alloc_size = count * sizeof(sycl::half);
-  else if (dtype == "float")
-    alloc_size = count * sizeof(float);
+  auto global_sz = parsed_opts["global_size"].as<size_t>();
+  auto group_sz = parsed_opts["group_size"].as<size_t>();
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -146,57 +242,40 @@ int main(int argc, char* argv[]) {
   // rank 2, device 1, subdevice 0
   // ...
   auto queue = currentQueue(rank / 2, rank & 1);
+  // a GPU page
+  size_t alloc_size = 64 * 1024;
   void* buffer = sycl::malloc_device(alloc_size, queue);
 
-  // XXX: gain access to remote pointers
-  auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem(buffer, rank, world);
+  void *peer_bases[world];
+  size_t offsets[world];
+  auto ipc_handle = open_peer_ipc_mems(buffer, rank, world, peer_bases, offsets);
 
-  // run fill kernel to fill remote GPU memory
-  if (dtype == "fp16")
-    queue.fill<sycl::half>((sycl::half *)peer_ptr, (sycl::half)rank, count);
-  else if (dtype == "float")
-    queue.fill<float>((float *)peer_ptr, (float)rank, count);
+  stress_test(
+      rank, world, peer_bases, offsets,
+      sycl::nd_range<1>{global_sz, group_sz});
 
   // avoid race condition
   queue.wait();
   MPI_Barrier(MPI_COMM_WORLD);
 
-  // Check buffer contents
-  // void* host_buf = sycl::malloc_host(alloc_size, queue);
-  // queue.memcpy(host_buf, buffer, alloc_size);
-  // queue.wait();
-
   // Or we map the device to host
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   void *host_buf = mmap_host(alloc_size, dma_buf);
-
-  bool check = false;
-
-  int prev_rank = rank - 1;
-  if (prev_rank < 0) prev_rank = world -1;
-
-  if (dtype == "fp16")
-    check = checkResults((sycl::half *)host_buf, (sycl::half)prev_rank, count);
-  else
-    check = checkResults((float*)host_buf, (float)prev_rank, count);
+  (void)host_buf;
 
   MPI_Barrier(MPI_COMM_WORLD);
-
-  if (check)
-    std::cout<<"Successfully fill remote buffer"<<std::endl;
-  else
-    std::cout<<"Error occured when fill remote buffer"<<std::endl;
 
   // Clean up, close/put ipc handles, free memory, etc.
   auto l0_ctx = sycl::get_native<
     sycl::backend::ext_oneapi_level_zero>(queue.get_context());
 
   munmap(host_buf, alloc_size);
-  zeCheck(zeMemCloseIpcHandle(l0_ctx, (char*)peer_ptr - offset));
+
+  for (int i = 0; i < world; ++ i)
+    zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
+
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
-  // sycl::free(host_buf, queue);
-  //
   return 0;
 }
