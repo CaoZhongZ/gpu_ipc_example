@@ -3,6 +3,8 @@
 #include <unistd.h>
 #include <system_error>
 
+#include <initializer_list>
+
 #include <mpi.h>
 #include <sycl/sycl.hpp>
 #include <level_zero/ze_api.h>
@@ -158,177 +160,134 @@ bool checkResults(T *ptr, T c, size_t count) {
   return true;
 }
 
-struct atomic_baseline {
+template <typename T, int lane_v>
+struct xelink_send {
   constexpr static int max_peers = 16;
   template <typename T>
-  using atomic_ref = sycl::atomic_ref<T,
-        sycl::memory_order::relaxed,
-        sycl::memory_scope::device,
-        sycl::access::address_space::global_space>;
+  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
+
 public:
-  atomic_baseline(void *peer_ptrs[], int rank, int world, sycl::stream s)
-    : rank(rank), world(world), cout(s) {
-    for (int i = 0; i < world; ++ i)
-      ptrs[i] = (uint32_t *)peer_ptrs[i];
-  }
+  xelink_send(
+      T *peers[], int remote, int rank, int world, size_t nelems/*, sycl::stream s*/)
+    : peer(peers[remote]), local(peers[rank]), nelems(nelems)/*, cout(s)*/ {}
 
-  // create contension
   void operator() (sycl::nd_item<1> pos) const {
-    auto *ptr = ptrs[rank];
-    auto local_id = pos.get_local_id();
-    atomic_ref<uint32_t> atomic_slot(ptr[local_id]);
+    for (size_t i = 0; i < nelems/v_T::size(); i += pos.get_global_range()) {
+      auto* peer_v = reinterpret_cast<v_T *>(peer);
+      auto* local_v = reinterpret_cast<v_T *>(local);
 
-    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
-    // if (local_id == 0) {
-      // cout<<"["<<pos.get_group(0)<<"] ";
-      atomic_slot++;
-    // }
-    // cout<<sycl::endl;
-
-    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
-  }
-
-private:
-  uint32_t *ptrs[max_peers];
-  int rank;
-  int world;
-  sycl::stream cout;
-};
-
-struct atomic_stresser {
-  constexpr static int max_peers = 16;
-  template <typename T>
-  using atomic_ref = sycl::atomic_ref<T,
-        sycl::memory_order::relaxed,
-        sycl::memory_scope::device,
-        sycl::access::address_space::global_space>;
-public:
-  atomic_stresser(void *peer_ptrs[], int rank, int world, sycl::stream s)
-    : rank(rank), world(world), cout(s) {
-    for (int i = 0; i < world; ++ i)
-      ptrs[i] = (uint32_t *)peer_ptrs[i];
-  }
-
-  // create contension
-  void operator() (sycl::nd_item<1> pos) const {
-    auto local_id = pos.get_local_id();
-
-    for (int peer = 0; peer < world; ++ peer) {
-      auto* peer_ptr = ptrs[peer];
-      atomic_ref<uint32_t> atomic_slot(peer_ptr[local_id]);
-      atomic_slot.fetch_add(1);
+      peer_v[i] = local_v[i];
     }
   }
 
-private:
-  uint32_t *ptrs[max_peers];
-  int rank;
-  int world;
-  sycl::stream cout;
-};
+  static launch(T* peers[], int remote, int rank, int world, size_t nelems,
+      bool profiling = false) {
+    auto local_size = 128; /* 128 lanes for local */
 
-struct atomic_stresser_l2 {
-  constexpr static int max_peers = 16;
-  template <typename T>
-  using atomic_ref = sycl::atomic_ref<T,
-        sycl::memory_order::relaxed,
-        sycl::memory_scope::device,
-        sycl::access::address_space::global_space>;
-public:
-  atomic_stresser_l2(void *peer_ptrs[], int rank, int world, uint32_t repeat)
-    : rank(rank), world(world), repeat(repeat) {
-    for (int i = 0; i < world; ++ i)
-      ptrs[i] = (uint32_t *)peer_ptrs[i];
-  }
+    // we presume nelems could divide by vec length
+    auto global_size = (nelems/v_T::size() + local_size - 1)
+                          / local_size * local_size;
 
-  // create contension
-  void operator() (sycl::nd_item<1> pos) const {
-    auto local_id = pos.get_local_id();
-
-    for (int peer = 0; peer < world; ++ peer) {
-      auto* peer_ptr = ptrs[peer];
-      atomic_ref<uint32_t> atomic_slot(peer_ptr[local_id]);
-      for (int r = 0; r < repeat; ++ r)
-        atomic_slot.fetch_add(1);
-    }
-  }
-
-private:
-  uint32_t *ptrs[max_peers];
-  int rank;
-  int world;
-  uint32_t repeat;
-};
-
-template <int max_peers>
-struct atomic_stresser_l3 {
-  template <typename T>
-  using atomic_ref = sycl::atomic_ref<T,
-        sycl::memory_order::relaxed,
-        sycl::memory_scope::device,
-        sycl::access::address_space::global_space>;
-public:
-  atomic_stresser_l3(void *peer_ptrs[], int world, uint32_t repeat)
-    : repeat(repeat) {
-    for (int i = 0; i < world; ++ i)
-      ptrs[i] = (uint32_t *)peer_ptrs[i];
-  }
-
-  // create contension
-  void operator() (sycl::nd_item<1> pos) const {
-    auto local_id = pos.get_local_id();
-    auto peer = pos.get_group(0) % max_peers;
-    auto* peer_ptr = ptrs[peer];
-
-    atomic_ref<uint32_t> atomic_slot(peer_ptr[local_id]);
-    for (int r = 0; r < repeat; ++ r)
-      atomic_slot.fetch_add(1);
-  }
-
-private:
-  uint32_t *ptrs[max_peers];
-  uint32_t repeat;
-};
-
-
-void stress_test(
-    int rank, int world,
-    void *peer_bases[], size_t offsets[],
-    size_t global_sz, size_t group_sz, uint32_t repeat = 4096) {
-  void* peer_ptrs[world];
-
-  for (int i = 0; i < world; ++ i)
-    peer_ptrs[i] = reinterpret_cast<char *>(peer_bases[i]) + offsets[i];
-
-  auto queue = currentQueue(rank/2, rank & 1);
-  std::cout<<"start run with [groups="<<global_sz/group_sz<<", group_sz="<<group_sz<<"]"<<std::endl;
-
-  for (uint32_t i = 0; i < repeat; ++ i) {
-    queue.submit([&](sycl::handler &cgh) {
-      // sycl::stream s(4096, 32, cgh);
-      switch (world) {
-      case 2:
-        cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
-          // atomic_baseline(peer_ptrs, rank, world, s));
-          // atomic_stresser(peer_ptrs, rank, world, s));
-          atomic_stresser_l3<4>(peer_ptrs, world, repeat));
-        break;
-      case 4:
-        cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
-          // atomic_baseline(peer_ptrs, rank, world, s));
-          // atomic_stresser(peer_ptrs, rank, world, s));
-          atomic_stresser_l3<4>(peer_ptrs, world, repeat));
-        break;
-      case 8:
-        cgh.parallel_for(sycl::nd_range<1>({global_sz}, {group_sz}),
-          // atomic_baseline(peer_ptrs, rank, world, s));
-          // atomic_stresser(peer_ptrs, rank, world, s));
-          atomic_stresser_l3<8>(peer_ptrs, world, repeat));
-        break;
-      }
+    auto queue = currentQueue(rank/2, rank & 1);
+    auto e = queue.submit([&](sycl::handler &cgh) {
+      cgh.parallel_for(
+          sycl::nd_range<1>({global_sz}, {local_size}),
+          single_stream(peer, local, nelems));
     });
+
+    if (profiling) {
+      e.wait();
+      auto start = e.get_profiling_info<sycl::info::event_profiling::command_start>();
+      auto end = e.get_profiling_info<sycl::info::event_profiling::command_end>();
+
+      // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
+      auto bandwidth = (double)(nelem * sizeof(T)) / (double)(end - start);
+      std::cout<<"Copy bandwidth is "<<bandwidth<<"GB/s"<<std::endl;
+    }
   }
-}
+
+private:
+  T *peer;
+  T *local;
+  size_t nelems;
+  // sycl::stream cout;
+};
+
+template <int F> struct remotes {
+  static constexpr int fanout = F;
+  std::array<int, F> peers;
+
+  remotes(const std::array<int, F> &peer_list) : peers(peer_list) {}
+};
+
+template <typename T, int fanout>
+struct fanout_in_thread {
+  static inline void run(sycl::nd_item<1> pos, T *peers[], T value, size_t off) {
+#   pragma unroll (fanout)
+    for (int f = 0; f < fanout; ++ f) {
+      peers[f][off] = value;
+    }
+  }
+};
+
+// strategy 1, fanout in thread
+template <typename T, int lane_v, typename R, template <typename, int> fanout_policy>
+struct xelink_bcast {
+  template <typename T> using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
+  static constexpr int fanout = R::fanout;
+
+public:
+  xelink_bcast(T *peer_ptrs[], R&& remote_info,
+      int root, int world, size_t nelems/*, sycl::stream s*/)
+    : local(reinterpret_cast<v_T *>(peer_ptrs[rank])), nelems(nelems)/*, cout(s)*/ {
+#   pragma unroll (fanout)
+    for (int f = 0; f < fanout; ++ f) {
+      auto remote = remote_info.peers[f]; // can't be root
+      peers[f] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
+    }
+  }
+
+  void operator() (sycl::nd_item<1> pos) const {
+    for (size_t off = pos.get_global_id();
+        off < nelems/v_T::size(); off += pos.get_global_range()) {
+      fanout_policy<v_T, fanout>::run(pos, peers, local[off], off);
+    }
+  }
+
+  static void launch(T* peers[], R&& remote_info,
+      int root, int world, size_t nelems, bool profiling = false) {
+    auto local_size = 128; /* maximum occupy all eu */
+
+    // we presume nelems could divide by vec length
+    auto global_sz1 = (nelems/v_T::size() + local_size - 1)
+                          / local_size * local_size;
+    auto global_sz2 = 64 /*ss*/ * 4 /*threads*/ * 128 /* 8 eu * 16 lane */;
+    auto global_sz = std::min(global_sz1, global_sz2);
+
+    auto queue = currentQueue(rank/2, rank & 1);
+    auto e = queue.submit([&](sycl::handler &cgh) {
+      cgh.parallel_for(
+          sycl::nd_range<1>({global_sz}, {local_size}),
+          xelink_bcast(peers, remote_info, root, world, nelems));
+    });
+
+    if (profiling) {
+      e.wait();
+      auto start = e.get_profiling_info<sycl::info::event_profiling::command_start>();
+      auto end = e.get_profiling_info<sycl::info::event_profiling::command_end>();
+
+      // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
+      auto bandwidth = (double)(nelem * sizeof(T)) / (double)(end - start);
+      std::cout<<"Copy bandwidth is "<<bandwidth<<"GB/s"<<std::endl;
+    }
+  }
+
+private:
+  v_T *peers[fanout];
+  v_T *local;
+  size_t nelems;
+  // sycl::stream cout;
+};
 
 int main(int argc, char* argv[]) {
   // parse command line options
@@ -338,14 +297,12 @@ int main(int argc, char* argv[]) {
 
   opts.allow_unrecognised_options();
   opts.add_options()
-    ("g,global_size", "Launching global size", cxxopts::value<size_t>()->default_value("8192"))
-    ("l,group_size", "Launching group size", cxxopts::value<size_t>()->default_value("16"))
+    ("n,nelems", "Number of elements", cxxopts::value<size_t>()->default_value("8192"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
-  auto global_sz = parsed_opts["global_size"].as<size_t>();
-  auto group_sz = parsed_opts["group_size"].as<size_t>();
+  auto nelems = parsed_opts["nelems"].as<size_t>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
 
   // init section
@@ -357,7 +314,7 @@ int main(int argc, char* argv[]) {
 
   struct scopeCall {
     ~scopeCall() { MPI_Finalize(); }
-  }scopeGuard;
+  } scopeGuard;
 
   zeCheck(zeInit(0));
   int rank, world;
@@ -378,8 +335,20 @@ int main(int argc, char* argv[]) {
   size_t offsets[world];
   auto ipc_handle = open_peer_ipc_mems(buffer, rank, world, peer_bases, offsets);
 
-  stress_test(
-      rank, world, peer_bases, offsets, global_sz, group_sz, repeat);
+  void *peer_ptrs[world];
+
+  for (int i = 0; i < world; ++ i) {
+    peer_ptrs[i] = peer_bases[i] + offsets[i];
+  }
+
+  if ( rank == 0 ) {
+    std::cout<<"Warmup run"<<std::endl;
+    xelink_send::launch(peer_ptrs, 1, rank, world, nelems, true);
+
+    std::cout<<"Repeat run"<<std::endl;
+    for (int i = 0; i < repeat; ++ i)
+      xelink_send::launch(peer_ptrs, 1, rank, world, nelems, true);
+  }
 
   // avoid race condition
   queue.wait();
