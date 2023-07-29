@@ -79,8 +79,8 @@ ze_ipc_mem_handle_t open_peer_ipc_mems(
       zeCheck(zeMemOpenIpcHandle(
             l0_ctx, l0_device, peer->ipc_handle, ZE_IPC_MEMORY_FLAG_BIAS_CACHED, &peer_base));
 
-        peer_bases[i] = peer_base;
-        offsets[i] = peer->offset;
+      peer_bases[i] = peer_base;
+      offsets[i] = peer->offset;
     }
   }
   return send_buf.ipc_handle;
@@ -299,11 +299,20 @@ int main(int argc, char* argv[]) {
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<size_t>()->default_value("8192"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
+    ("r,root", "Root of send", cxxopts::value<int>()->default_value("0"))
+    ("d,dst", "Destinatino of send", cxxopts::value<int>()->default_value("1"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems = parsed_opts["nelems"].as<size_t>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
+  auto dst_rank = parsed_opts["dst"].as<int>();
+  auto root = parsed_opts["root"].as<int>();
+
+  if (root == dst_rank) {
+    std::cout<<"Root and Destination can't be the same"<<std::endl;
+    return -1;
+  }
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -322,6 +331,12 @@ int main(int argc, char* argv[]) {
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+  if (root >= world || dst_rank >= world) {
+    std::cout
+      <<"Configuration error, root or destination must be inside the comm"<<std::endl;
+    return -1;
+  }
+
   // rank 0, device 0, subdevice 0
   // rank 1, device 0, subdevice 1
   // rank 2, device 1, subdevice 0
@@ -330,6 +345,7 @@ int main(int argc, char* argv[]) {
   // a GPU page
   size_t alloc_size = 64 * 1024;
   void* buffer = sycl::malloc_device(alloc_size, queue);
+  queue.memset(buffer, rank + 42, alloc_size);
 
   void *peer_bases[world];
   size_t offsets[world];
@@ -341,13 +357,13 @@ int main(int argc, char* argv[]) {
     peer_ptrs[i] = peer_bases[i] + offsets[i];
   }
 
-  if ( rank == 0 ) {
+  if ( rank == root ) {
     std::cout<<"Warmup run"<<std::endl;
-    xelink_send::launch(peer_ptrs, 1, rank, world, nelems, true);
+    xelink_send::launch(peer_ptrs, dst_rank, rank, world, nelems, true);
 
     std::cout<<"Repeat run"<<std::endl;
     for (int i = 0; i < repeat; ++ i)
-      xelink_send::launch(peer_ptrs, 1, rank, world, nelems, true);
+      xelink_send::launch(peer_ptrs, dst_rank, rank, world, nelems, true);
   }
 
   // avoid race condition
