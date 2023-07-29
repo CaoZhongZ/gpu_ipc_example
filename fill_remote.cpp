@@ -160,10 +160,9 @@ bool checkResults(T *ptr, T c, size_t count) {
   return true;
 }
 
-template <typename T, int lane_v>
+template <typename T, int lane_v, int fanout=1>
 struct xelink_send {
   constexpr static int max_peers = 16;
-  template <typename T>
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
 
 public:
@@ -172,7 +171,7 @@ public:
     : peer(peers[remote]), local(peers[rank]), nelems(nelems)/*, cout(s)*/ {}
 
   void operator() (sycl::nd_item<1> pos) const {
-    for (size_t i = 0; i < nelems/v_T::size(); i += pos.get_global_range()) {
+    for (size_t i = 0; i < nelems/v_T::size(); i += pos.get_global_range(0)) {
       auto* peer_v = reinterpret_cast<v_T *>(peer);
       auto* local_v = reinterpret_cast<v_T *>(local);
 
@@ -180,28 +179,26 @@ public:
     }
   }
 
-  static launch(T* peers[], int remote, int rank, int world, size_t nelems,
+  static void launch(T* peer_ptrs[], int remote, int root, int world, size_t nelems,
       bool profiling = false) {
-    auto local_size = 128; /* 128 lanes for local */
+    size_t local_size = 128; /* 128 lanes for local */
+    size_t group_size = (nelems/v_T::size() + local_size - 1) / local_size;
 
-    // we presume nelems could divide by vec length
-    auto global_size = (nelems/v_T::size() + local_size - 1)
-                          / local_size * local_size;
-
-    auto queue = currentQueue(rank/2, rank & 1);
+    auto global_size = group_size * local_size;
+    auto queue = currentQueue(root/2, root & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
-          sycl::nd_range<1>({global_sz}, {local_size}),
-          single_stream(peer, local, nelems));
+          sycl::nd_range<1>({global_size}, {local_size}),
+          xelink_send(peer_ptrs, remote, root, world, nelems));
     });
 
     if (profiling) {
       e.wait();
-      auto start = e.get_profiling_info<sycl::info::event_profiling::command_start>();
-      auto end = e.get_profiling_info<sycl::info::event_profiling::command_end>();
+      auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
+      auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
 
       // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
-      auto bandwidth = (double)(nelem * sizeof(T)) / (double)(end - start);
+      auto bandwidth = (double)(nelems * sizeof(T)) / (double)(end - start);
       std::cout<<"Copy bandwidth is "<<bandwidth<<"GB/s"<<std::endl;
     }
   }
@@ -231,15 +228,15 @@ struct fanout_in_thread {
 };
 
 // strategy 1, fanout in thread
-template <typename T, int lane_v, typename R, template <typename, int> fanout_policy>
+template <typename T, int lane_v, typename R, template <typename, int> class fanout_policy>
 struct xelink_bcast {
-  template <typename T> using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
+  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   static constexpr int fanout = R::fanout;
 
 public:
   xelink_bcast(T *peer_ptrs[], R&& remote_info,
       int root, int world, size_t nelems/*, sycl::stream s*/)
-    : local(reinterpret_cast<v_T *>(peer_ptrs[rank])), nelems(nelems)/*, cout(s)*/ {
+    : local(reinterpret_cast<v_T *>(peer_ptrs[root])), nelems(nelems)/*, cout(s)*/ {
 #   pragma unroll (fanout)
     for (int f = 0; f < fanout; ++ f) {
       auto remote = remote_info.peers[f]; // can't be root
@@ -249,7 +246,7 @@ public:
 
   void operator() (sycl::nd_item<1> pos) const {
     for (size_t off = pos.get_global_id();
-        off < nelems/v_T::size(); off += pos.get_global_range()) {
+        off < nelems/v_T::size(); off += pos.get_global_range(0)) {
       fanout_policy<v_T, fanout>::run(pos, peers, local[off], off);
     }
   }
@@ -264,7 +261,7 @@ public:
     auto global_sz2 = 64 /*ss*/ * 4 /*threads*/ * 128 /* 8 eu * 16 lane */;
     auto global_sz = std::min(global_sz1, global_sz2);
 
-    auto queue = currentQueue(rank/2, rank & 1);
+    auto queue = currentQueue(root/2, root & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_sz}, {local_size}),
@@ -273,11 +270,11 @@ public:
 
     if (profiling) {
       e.wait();
-      auto start = e.get_profiling_info<sycl::info::event_profiling::command_start>();
-      auto end = e.get_profiling_info<sycl::info::event_profiling::command_end>();
+      auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
+      auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
 
       // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
-      auto bandwidth = (double)(nelem * sizeof(T)) / (double)(end - start);
+      auto bandwidth = (double)(nelems * sizeof(T)) / (double)(end - start);
       std::cout<<"Copy bandwidth is "<<bandwidth<<"GB/s"<<std::endl;
     }
   }
@@ -343,7 +340,7 @@ int main(int argc, char* argv[]) {
   // ...
   auto queue = currentQueue(rank / 2, rank & 1);
   // a GPU page
-  size_t alloc_size = 64 * 1024;
+  size_t alloc_size = nelems * sizeof(sycl::half);
   void* buffer = sycl::malloc_device(alloc_size, queue);
   queue.memset(buffer, rank + 42, alloc_size);
 
@@ -354,16 +351,18 @@ int main(int argc, char* argv[]) {
   void *peer_ptrs[world];
 
   for (int i = 0; i < world; ++ i) {
-    peer_ptrs[i] = peer_bases[i] + offsets[i];
+    peer_ptrs[i] = (char *)peer_bases[i] + offsets[i];
   }
 
   if ( rank == root ) {
     std::cout<<"Warmup run"<<std::endl;
-    xelink_send::launch(peer_ptrs, dst_rank, rank, world, nelems, true);
+    xelink_send<sycl::half, 1, 1>::launch(
+        reinterpret_cast<sycl::half **>(peer_ptrs), dst_rank, rank, world, nelems, true);
 
     std::cout<<"Repeat run"<<std::endl;
     for (int i = 0; i < repeat; ++ i)
-      xelink_send::launch(peer_ptrs, dst_rank, rank, world, nelems, true);
+      xelink_send<sycl::half, 1, 1>::launch(
+          reinterpret_cast<sycl::half **>(peer_ptrs), dst_rank, rank, world, nelems, true);
   }
 
   // avoid race condition
