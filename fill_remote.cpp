@@ -165,6 +165,7 @@ struct xelink_send {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
   static constexpr size_t hw_groups = 512;
+  static constexpr size_t local_size = 128;
 
 public:
   xelink_send(
@@ -180,7 +181,6 @@ public:
 
   static void launch(void* peer_ptrs[], int remote, int root, int world, size_t nelems,
       bool profiling = false) {
-    size_t local_size = 128; /* 128 lanes for local */
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
 
@@ -234,6 +234,7 @@ struct xelink_bcast {
   static constexpr int fanout = R::fanout;
   // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
   static constexpr size_t hw_groups = 512;
+  static constexpr size_t local_size = 128;
 
 public:
   xelink_bcast(void *peer_ptrs[], R&& remote_info,
@@ -255,7 +256,6 @@ public:
 
   static void launch(void* peers[], R&& remote_info,
       int root, int world, size_t nelems, bool profiling = false) {
-    auto local_size = 128; /* maximum occupy all eu */
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
     size_t global_size = group_size * local_size;
