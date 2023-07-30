@@ -370,7 +370,7 @@ int main(int argc, char* argv[]) {
   }
 
   if ( rank == root ) {
-    std::cout<<"Warmup run"<<std::endl;
+    std::cout<<"Warmup run of elems: "<<nelems<<std::endl;
     xelink_send<sycl::half, 1, 1>::launch(
         peer_ptrs, dst_rank, rank, world, nelems, true);
 
