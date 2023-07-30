@@ -278,7 +278,7 @@ public:
 
       // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
       auto bandwidth = (double)(nelems * sizeof(T)) / (double)(end - start);
-      std::cout<<"Copy bandwidth is "<<bandwidth<<"GB/s"<<std::endl;
+      std::cout<<"Copy bandwidth is "<<bandwidth * fanout<<"GB/s"<<std::endl;
     }
   }
 
@@ -331,11 +331,9 @@ static void launch_bcast(
 
 std::vector<int> commalist_to_vector(const std::string& str) {
   std::vector<int> list;
-  auto* raw_str = str.c_str();
-  char* pos = nullptr;
-
+  char* pos = const_cast<char *>(str.c_str());
   do {
-    list.push_back(std::strtol(raw_str, &pos, 10));
+    list.push_back(std::strtol(pos, &pos, 10));
     // expect deliminator or termination
     if (*pos == ',')
       pos ++;
@@ -420,6 +418,7 @@ int main(int argc, char* argv[]) {
   nelems = stoull(nelems_string) * base;
 
   using test_type = sycl::half;
+  constexpr uint32_t v_lane = 4;
   size_t alloc_size = nelems * sizeof(test_type);
   void* buffer = sycl::malloc_device(alloc_size, queue);
   queue.memset(buffer, rank + 42, alloc_size);
@@ -437,21 +436,21 @@ int main(int argc, char* argv[]) {
   if ( rank == root ) {
     if (use_bcast) {
       std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
-      launch_bcast<test_type, 1, fanout_in_thread>(
+      launch_bcast<test_type, v_lane, fanout_in_thread>(
           peer_ptrs, dst_ranks, rank, world, nelems, true);
 
       std::cout<<"Repeat run"<<std::endl;
       for (int i = 0; i < repeat; ++ i)
-        launch_bcast<test_type, 1, fanout_in_thread>(
+        launch_bcast<test_type, v_lane, fanout_in_thread>(
             peer_ptrs, dst_ranks, rank, world, nelems, true);
     } else {
       std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
-      xelink_send<test_type, 4, 1>::launch(
+      xelink_send<test_type, v_lane, 1>::launch(
           peer_ptrs, dst_ranks[0], rank, world, nelems, true);
 
       std::cout<<"Repeat run"<<std::endl;
       for (int i = 0; i < repeat; ++ i)
-        xelink_send<test_type, 4, 1>::launch(
+        xelink_send<test_type, v_lane, 1>::launch(
             peer_ptrs, dst_ranks[0], rank, world, nelems, true);
     }
   }
