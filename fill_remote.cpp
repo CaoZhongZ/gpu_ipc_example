@@ -216,7 +216,7 @@ template <int F> struct remotes {
   static constexpr int fanout = F;
   std::array<int, F> peers;
 
-  remotes(const std::array<int, F> &peer_list) : peers(peer_list) {}
+  remotes(const std::array<int, F>& peer_list) : peers(peer_list) {}
 };
 
 template <typename T, int fanout>
@@ -287,6 +287,58 @@ private:
   // sycl::stream cout;
 };
 
+template <typename T, int lane_v, template <typename, int> class fanout_policy>
+static void launch_bcast(
+    void* peers_ptr[], const std::vector<int>& remotes,
+    int root, int world, size_t nelems, bool profiling) {
+  switch (remotes.size()) {
+  case 1:
+    {
+      remote_info<1> i_remote {remotes[0]};
+      xelink_bcast<T, lane_v, remote_info<1>, fanout_policy>::launch(
+          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+    }
+    break;
+  case 2:
+    {
+      remote_info<2> i_remote {remotes[0], remotes[1]};
+      xelink_bcast<T, lane_v, remote_info<2>, fanout_policy>::launch(
+          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+    }
+    break;
+  case 3:
+    {
+      remote_info<3> i_remote {remotes[0], remotes[1], remotes[2]};
+      xelink_bcast<T, lane_v, remote_info<3>, fanout_policy>::launch(
+          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+    }
+    break;
+  case 6:
+    {
+      remote_info<6> i_remote {
+        remotes[0], remotes[1], remotes[2], remotes[3], remotes[4], remotes[5]};
+      xelink_bcast<T, lane_v, remote_info<6>, fanout_policy>::launch(
+          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+    }
+    break;
+  default:
+    throw std::length_error("Unsupported boradcast pattern.");
+    break;
+  }
+}
+
+std::vector<int> commalist_to_vector(const std::string& str) {
+  size_t pos = 0;
+  std::vector<int> list;
+
+  do {
+    list.push_back(strtoi(str, pos));
+    pos = str.find_first_of(',', pos);
+  } while (pos ++ != str.npos);
+
+  return list;
+}
+
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -298,16 +350,19 @@ int main(int argc, char* argv[]) {
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
     ("r,root", "Root of send", cxxopts::value<int>()->default_value("0"))
-    ("d,dst", "Destinatino of send", cxxopts::value<int>()->default_value("1"))
+    ("d,dst", "Destinatino of send", cxxopts::value<std::string>()->default_value("1"))
+    ("b,broadcast", "Broadcast instead of send", cxxopts::value<bool>()->default_value("false"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
-  auto dst_rank = parsed_opts["dst"].as<int>();
+  auto dst_string = parsed_opts["dst"].as<std::string>();
   auto root = parsed_opts["root"].as<int>();
+  auto use_bcast = parsed_opts["broadcast"].as<bool>();
+  auto dst_ranks = commalist_to_vector(dst_string);
 
-  if (root == dst_rank) {
+  if (std::find(dst_ranks.begin(), dst_ranks.end(), root) != dst_ranks.end()) {
     std::cout<<"Root and Destination can't be the same"<<std::endl;
     return -1;
   }
@@ -329,9 +384,11 @@ int main(int argc, char* argv[]) {
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  if (root >= world || dst_rank >= world) {
+  if (root >= world ||
+      std::any_of(dst_ranks.begin(), dst_ranks.end(),
+        [&](int d) {return d >= world;}) {
     std::cout
-      <<"Configuration error, root or destination must be inside the comm"<<std::endl;
+      <<"Configuration error, root or destination must be inside the comm size"<<std::endl;
     return -1;
   }
 
@@ -371,14 +428,25 @@ int main(int argc, char* argv[]) {
   }
 
   if ( rank == root ) {
-    std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
-    xelink_send<test_type, 4, 1>::launch(
-        peer_ptrs, dst_rank, rank, world, nelems, true);
+    if (use_bcast) {
+      std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
+      launch_bcast<test_type, 1, fanout_in_thread>::launch(
+          peer_ptrs, dst_ranks, rank, world, nelems, true);
 
-    std::cout<<"Repeat run"<<std::endl;
-    for (int i = 0; i < repeat; ++ i)
+      std::cout<<"Repeat run"<<std::endl;
+      for (int i = 0; i < repeat; ++ i)
+        launch_bcast<test_type, 1, fanout_in_thread>::launch(
+            peer_ptrs, dst_ranks, rank, world, nelems, true);
+    } else {
+      std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
       xelink_send<test_type, 4, 1>::launch(
           peer_ptrs, dst_rank, rank, world, nelems, true);
+
+      std::cout<<"Repeat run"<<std::endl;
+      for (int i = 0; i < repeat; ++ i)
+        xelink_send<test_type, 4, 1>::launch(
+            peer_ptrs, dst_rank, rank, world, nelems, true);
+    }
   }
 
   // avoid race condition
