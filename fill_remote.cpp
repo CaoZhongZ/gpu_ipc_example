@@ -162,27 +162,27 @@ bool checkResults(T *ptr, T c, size_t count) {
 
 template <typename T, int lane_v, int fanout=1>
 struct xelink_send {
-  constexpr static int max_peers = 16;
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
+  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
+  static constexpr size_t hw_groups = 512;
 
 public:
   xelink_send(
-      T *peers[], int remote, int rank, int world, size_t nelems/*, sycl::stream s*/)
-    : peer(peers[remote]), local(peers[rank]), nelems(nelems)/*, cout(s)*/ {}
+      void *peers[], int remote, int rank, int world, size_t nelems/*, sycl::stream s*/)
+    : peer(reinterpret_cast<v_T *>(peers[remote]))
+      , local(reinterpret_cast<v_T *>(peers[rank]))
+      , nelems(nelems)/*, cout(s)*/ {}
 
   void operator() (sycl::nd_item<1> pos) const {
-    for (size_t i = 0; i < nelems/v_T::size(); i += pos.get_global_range(0)) {
-      auto* peer_v = reinterpret_cast<v_T *>(peer);
-      auto* local_v = reinterpret_cast<v_T *>(local);
-
-      peer_v[i] = local_v[i];
-    }
+    for (size_t i = 0; i < nelems/v_T::size(); i += pos.get_global_range(0))
+      peer[i] = local[i];
   }
 
-  static void launch(T* peer_ptrs[], int remote, int root, int world, size_t nelems,
+  static void launch(void* peer_ptrs[], int remote, int root, int world, size_t nelems,
       bool profiling = false) {
     size_t local_size = 128; /* 128 lanes for local */
-    size_t group_size = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t group_size = std::min(data_groups, hw_groups);
 
     auto global_size = group_size * local_size;
     auto queue = currentQueue(root/2, root & 1);
@@ -204,8 +204,8 @@ public:
   }
 
 private:
-  T *peer;
-  T *local;
+  v_T *peer;
+  v_T *local;
   size_t nelems;
   // sycl::stream cout;
 };
@@ -232,9 +232,11 @@ template <typename T, int lane_v, typename R, template <typename, int> class fan
 struct xelink_bcast {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   static constexpr int fanout = R::fanout;
+  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
+  static constexpr size_t hw_groups = 512;
 
 public:
-  xelink_bcast(T *peer_ptrs[], R&& remote_info,
+  xelink_bcast(void *peer_ptrs[], R&& remote_info,
       int root, int world, size_t nelems/*, sycl::stream s*/)
     : local(reinterpret_cast<v_T *>(peer_ptrs[root])), nelems(nelems)/*, cout(s)*/ {
 #   pragma unroll (fanout)
@@ -251,20 +253,17 @@ public:
     }
   }
 
-  static void launch(T* peers[], R&& remote_info,
+  static void launch(void* peers[], R&& remote_info,
       int root, int world, size_t nelems, bool profiling = false) {
     auto local_size = 128; /* maximum occupy all eu */
-
-    // we presume nelems could divide by vec length
-    auto global_sz1 = (nelems/v_T::size() + local_size - 1)
-                          / local_size * local_size;
-    auto global_sz2 = 64 /*ss*/ * 4 /*threads*/ * 128 /* 8 eu * 16 lane */;
-    auto global_sz = std::min(global_sz1, global_sz2);
+    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t group_size = std::min(data_groups, hw_groups);
+    size_t global_size = group_size * local_size;
 
     auto queue = currentQueue(root/2, root & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
-          sycl::nd_range<1>({global_sz}, {local_size}),
+          sycl::nd_range<1>({global_size}, {local_size}),
           xelink_bcast(peers, remote_info, root, world, nelems));
     });
 
@@ -357,12 +356,12 @@ int main(int argc, char* argv[]) {
   if ( rank == root ) {
     std::cout<<"Warmup run"<<std::endl;
     xelink_send<sycl::half, 1, 1>::launch(
-        reinterpret_cast<sycl::half **>(peer_ptrs), dst_rank, rank, world, nelems, true);
+        peer_ptrs, dst_rank, rank, world, nelems, true);
 
     std::cout<<"Repeat run"<<std::endl;
     for (int i = 0; i < repeat; ++ i)
       xelink_send<sycl::half, 1, 1>::launch(
-          reinterpret_cast<sycl::half **>(peer_ptrs), dst_rank, rank, world, nelems, true);
+          peer_ptrs, dst_rank, rank, world, nelems, true);
   }
 
   // avoid race condition
