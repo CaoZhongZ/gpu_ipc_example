@@ -4,6 +4,7 @@
 #include <system_error>
 
 #include <initializer_list>
+#include <string>
 
 #include <mpi.h>
 #include <sycl/sycl.hpp>
@@ -212,16 +213,17 @@ private:
   // sycl::stream cout;
 };
 
-template <int F> struct remotes {
+template <int F> struct remote_info {
   static constexpr int fanout = F;
   std::array<int, F> peers;
 
-  remotes(const std::array<int, F>& peer_list) : peers(peer_list) {}
+  remote_info(const std::array<int, F>& peer_list) : peers(peer_list) {}
 };
 
 template <typename T, int fanout>
 struct fanout_in_thread {
-  static inline void run(sycl::nd_item<1> pos, T *peers[], T value, size_t off) {
+  // the const is because peers are from const 'this' pointer.
+  static inline void run(sycl::nd_item<1> pos, T *const peers[fanout], T value, size_t off) {
 #   pragma unroll (fanout)
     for (int f = 0; f < fanout; ++ f) {
       peers[f][off] = value;
@@ -266,7 +268,7 @@ public:
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_bcast(peers, remote_info, root, world, nelems));
+          xelink_bcast(peers, std::move(remote_info), root, world, nelems));
     });
 
     if (profiling) {
@@ -294,29 +296,29 @@ static void launch_bcast(
   switch (remotes.size()) {
   case 1:
     {
-      remote_info<1> i_remote {remotes[0]};
+      remote_info<1> i_remote ({remotes[0]});
       xelink_bcast<T, lane_v, remote_info<1>, fanout_policy>::launch(
           peers_ptr, std::move(i_remote), root, world, nelems, profiling);
     }
     break;
   case 2:
     {
-      remote_info<2> i_remote {remotes[0], remotes[1]};
+      remote_info<2> i_remote ({remotes[0], remotes[1]});
       xelink_bcast<T, lane_v, remote_info<2>, fanout_policy>::launch(
           peers_ptr, std::move(i_remote), root, world, nelems, profiling);
     }
     break;
   case 3:
     {
-      remote_info<3> i_remote {remotes[0], remotes[1], remotes[2]};
+      remote_info<3> i_remote ({remotes[0], remotes[1], remotes[2]});
       xelink_bcast<T, lane_v, remote_info<3>, fanout_policy>::launch(
           peers_ptr, std::move(i_remote), root, world, nelems, profiling);
     }
     break;
   case 6:
     {
-      remote_info<6> i_remote {
-        remotes[0], remotes[1], remotes[2], remotes[3], remotes[4], remotes[5]};
+      remote_info<6> i_remote ({
+        remotes[0], remotes[1], remotes[2], remotes[3], remotes[4], remotes[5]});
       xelink_bcast<T, lane_v, remote_info<6>, fanout_policy>::launch(
           peers_ptr, std::move(i_remote), root, world, nelems, profiling);
     }
@@ -328,13 +330,18 @@ static void launch_bcast(
 }
 
 std::vector<int> commalist_to_vector(const std::string& str) {
-  size_t pos = 0;
   std::vector<int> list;
+  auto* raw_str = str.c_str();
+  char* pos = nullptr;
 
   do {
-    list.push_back(strtoi(str, pos));
-    pos = str.find_first_of(',', pos);
-  } while (pos ++ != str.npos);
+    list.push_back(std::strtol(raw_str, &pos, 10));
+    // expect deliminator or termination
+    if (*pos == ',')
+      pos ++;
+    else if ( *pos != 0 )
+      throw std::logic_error("Unexpected deliminator");
+  } while (*pos);
 
   return list;
 }
@@ -386,7 +393,7 @@ int main(int argc, char* argv[]) {
 
   if (root >= world ||
       std::any_of(dst_ranks.begin(), dst_ranks.end(),
-        [&](int d) {return d >= world;}) {
+        [&](int d) {return d >= world;})) {
     std::cout
       <<"Configuration error, root or destination must be inside the comm size"<<std::endl;
     return -1;
@@ -430,22 +437,22 @@ int main(int argc, char* argv[]) {
   if ( rank == root ) {
     if (use_bcast) {
       std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
-      launch_bcast<test_type, 1, fanout_in_thread>::launch(
+      launch_bcast<test_type, 1, fanout_in_thread>(
           peer_ptrs, dst_ranks, rank, world, nelems, true);
 
       std::cout<<"Repeat run"<<std::endl;
       for (int i = 0; i < repeat; ++ i)
-        launch_bcast<test_type, 1, fanout_in_thread>::launch(
+        launch_bcast<test_type, 1, fanout_in_thread>(
             peer_ptrs, dst_ranks, rank, world, nelems, true);
     } else {
       std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
       xelink_send<test_type, 4, 1>::launch(
-          peer_ptrs, dst_rank, rank, world, nelems, true);
+          peer_ptrs, dst_ranks[0], rank, world, nelems, true);
 
       std::cout<<"Repeat run"<<std::endl;
       for (int i = 0; i < repeat; ++ i)
         xelink_send<test_type, 4, 1>::launch(
-            peer_ptrs, dst_rank, rank, world, nelems, true);
+            peer_ptrs, dst_ranks[0], rank, world, nelems, true);
     }
   }
 
