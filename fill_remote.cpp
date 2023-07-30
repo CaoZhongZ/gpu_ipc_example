@@ -175,7 +175,7 @@ public:
       , nelems(nelems)/*, cout(s)*/ {}
 
   void operator() (sycl::nd_item<1> pos) const {
-    for (size_t i = 0; i < nelems/v_T::size(); i += pos.get_global_range(0))
+    for (size_t i = pos.get_global_id(0); i < nelems/v_T::size(); i += pos.get_global_range(0))
       peer[i] = local[i];
   }
 
@@ -186,6 +186,8 @@ public:
 
     auto global_size = group_size * local_size;
     auto queue = currentQueue(root/2, root & 1);
+    std::cout<<"Launching send from "<<root<<" to "<<remote
+      <<" ("<<group_size<<", "<<local_size<<")"<<std::endl;
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_size}, {local_size}),
@@ -248,7 +250,7 @@ public:
   }
 
   void operator() (sycl::nd_item<1> pos) const {
-    for (size_t off = pos.get_global_id();
+    for (size_t off = pos.get_global_id(0);
         off < nelems/v_T::size(); off += pos.get_global_range(0)) {
       fanout_policy<v_T, fanout>::run(pos, peers, local[off], off);
     }
@@ -372,7 +374,12 @@ int main(int argc, char* argv[]) {
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size, dma_buf);
-  std::cout<<"Peek: "<<host_buf[0]<<", "<<host_buf[1]<<", "<<host_buf[2]<<", ..."<<std::endl;
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  std::cout<<std::hex<<"Peek: "<<host_buf[0]<<", "<<host_buf[1]<<", "<<host_buf[2]
+    <<", ..., "<<host_buf[alloc_size / sizeof(uint32_t) -1]
+    <<", "<<host_buf[alloc_size / sizeof(uint32_t) -2]<<std::endl;
 
   MPI_Barrier(MPI_COMM_WORLD);
 
