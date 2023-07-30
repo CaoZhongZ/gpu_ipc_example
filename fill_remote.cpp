@@ -295,14 +295,14 @@ int main(int argc, char* argv[]) {
 
   opts.allow_unrecognised_options();
   opts.add_options()
-    ("n,nelems", "Number of elements", cxxopts::value<size_t>()->default_value("8192"))
+    ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
     ("r,root", "Root of send", cxxopts::value<int>()->default_value("0"))
     ("d,dst", "Destinatino of send", cxxopts::value<int>()->default_value("1"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
-  auto nelems = parsed_opts["nelems"].as<size_t>();
+  auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
   auto dst_rank = parsed_opts["dst"].as<int>();
   auto root = parsed_opts["root"].as<int>();
@@ -341,6 +341,20 @@ int main(int argc, char* argv[]) {
   // ...
   auto queue = currentQueue(rank / 2, rank & 1);
   // a GPU page
+
+  size_t base = 1;
+  size_t pos = nelems_string.rfind("M");
+  if (pos != std::string::npos) {
+    base = 1000 * 1000ull;
+  } else {
+    pos = nelems_string.rfind("G");
+    if (pos != std::string::npos)
+      base = 1000 * 1000 * 1000ull;
+  }
+
+  size_t nelems;
+  nelems = stoull(nelems_string) * base;
+
   size_t alloc_size = nelems * sizeof(sycl::half);
   void* buffer = sycl::malloc_device(alloc_size, queue);
   queue.memset(buffer, rank + 42, alloc_size);
