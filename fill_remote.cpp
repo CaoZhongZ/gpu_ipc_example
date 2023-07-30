@@ -345,17 +345,18 @@ int main(int argc, char* argv[]) {
   size_t base = 1;
   size_t pos = nelems_string.rfind("M");
   if (pos != std::string::npos) {
-    base = 1000 * 1000ull;
+    base = 1024 * 1024ull;
   } else {
     pos = nelems_string.rfind("G");
     if (pos != std::string::npos)
-      base = 1000 * 1000 * 1000ull;
+      base = 1024 * 1024 * 1024ull;
   }
 
   size_t nelems;
   nelems = stoull(nelems_string) * base;
 
-  size_t alloc_size = nelems * sizeof(sycl::half);
+  using test_type = sycl::half;
+  size_t alloc_size = nelems * sizeof(test_type);
   void* buffer = sycl::malloc_device(alloc_size, queue);
   queue.memset(buffer, rank + 42, alloc_size);
 
@@ -370,13 +371,13 @@ int main(int argc, char* argv[]) {
   }
 
   if ( rank == root ) {
-    std::cout<<"Warmup run of elems: "<<nelems<<std::endl;
-    xelink_send<sycl::half, 1, 1>::launch(
+    std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
+    xelink_send<test_type, 4, 1>::launch(
         peer_ptrs, dst_rank, rank, world, nelems, true);
 
     std::cout<<"Repeat run"<<std::endl;
     for (int i = 0; i < repeat; ++ i)
-      xelink_send<sycl::half, 1, 1>::launch(
+      xelink_send<test_type, 4, 1>::launch(
           peer_ptrs, dst_rank, rank, world, nelems, true);
   }
 
