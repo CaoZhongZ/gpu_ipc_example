@@ -374,12 +374,21 @@ int main(int argc, char* argv[]) {
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size, dma_buf);
+  char check_msg[2048];
 
-  MPI_Barrier(MPI_COMM_WORLD);
+  snprintf(check_msg, 2048, "Rank %d Peek: %#x, %#x, %#x, ..., %#x, %#x\n", rank,
+      host_buf[0], host_buf[1], host_buf[2],
+      host_buf[alloc_size / sizeof(uint32_t) -2],
+      host_buf[alloc_size / sizeof(uint32_t) -1]);
 
-  std::cout<<std::hex<<"Peek: "<<host_buf[0]<<", "<<host_buf[1]<<", "<<host_buf[2]
-    <<", ..., "<<host_buf[alloc_size / sizeof(uint32_t) -1]
-    <<", "<<host_buf[alloc_size / sizeof(uint32_t) -2]<<std::endl;
+  char check_msgs[world][2048];
+  MPI_Gather(check_msg, 2048, MPI_BYTE, check_msgs, 2048, MPI_BYTE, 0, MPI_COMM_WORLD);
+
+  if (rank == 0) {
+    for (int i = 0; i < world; ++ i) {
+      printf("%s", check_msgs[i]);
+    }
+  }
 
   MPI_Barrier(MPI_COMM_WORLD);
 
