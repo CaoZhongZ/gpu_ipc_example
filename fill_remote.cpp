@@ -14,6 +14,8 @@
 #include "ze_exception.hpp"
 #include "sycl_misc.hpp"
 
+static constexpr int msg_len = 2048;
+
 struct exchange_contents {
   // first 4-byte is file descriptor for drmbuf or gem object
   union {
@@ -180,30 +182,23 @@ public:
       peer[i] = local[i];
   }
 
-  static void launch(void* peer_ptrs[], int remote, int root, int world, size_t nelems,
-      bool profiling = false) {
+  static sycl::event launch(
+      void* peer_ptrs[], int remote, int root, int world, size_t nelems, char* msg = nullptr) {
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
 
     auto global_size = group_size * local_size;
     auto queue = currentQueue(root/2, root & 1);
-    std::cout<<"Launching send from "<<root<<" to "<<remote
-      <<" ("<<group_size<<", "<<local_size<<")"<<std::endl;
+
+    if (msg)
+      snprintf(msg, msg_len,
+          "Launch_send_from %d to %d (%ld, %ld)\n", root, remote, group_size, local_size);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_size}, {local_size}),
           xelink_send(peer_ptrs, remote, root, world, nelems));
     });
-
-    if (profiling) {
-      e.wait();
-      auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
-      auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
-
-      // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
-      auto bandwidth = (double)(nelems * sizeof(T)) / (double)(end - start);
-      std::cout<<"Copy bandwidth is "<<bandwidth<<"GB/s"<<std::endl;
-    }
+    return e;
   }
 
 private:
@@ -258,8 +253,8 @@ public:
     }
   }
 
-  static void launch(void* peers[], R&& remote_info,
-      int root, int world, size_t nelems, bool profiling = false) {
+  static sycl::event launch(void* peers[], R&& remote_info,
+      int root, int world, size_t nelems, char * msg = nullptr) {
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
     size_t global_size = group_size * local_size;
@@ -271,15 +266,7 @@ public:
           xelink_bcast(peers, std::move(remote_info), root, world, nelems));
     });
 
-    if (profiling) {
-      e.wait();
-      auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
-      auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
-
-      // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
-      auto bandwidth = (double)(nelems * sizeof(T)) / (double)(end - start);
-      std::cout<<"Copy bandwidth is "<<bandwidth * fanout<<"GB/s"<<std::endl;
-    }
+    return e;
   }
 
 private:
@@ -330,8 +317,8 @@ public:
     }
   }
 
-  static void launch(void* peers[], R&& remote_info,
-      int root, int world, size_t nelems, bool profiling = false) {
+  static sycl::event launch(void* peers[], R&& remote_info,
+      int root, int world, size_t nelems, char *msg = nullptr) {
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
     size_t global_size = group_size * local_size;
@@ -343,15 +330,8 @@ public:
           xelink_gather(peers, std::move(remote_info), root, world, nelems));
     });
 
-    if (profiling) {
-      e.wait();
-      auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
-      auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
+    return e;
 
-      // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
-      auto bandwidth = (double)(nelems * sizeof(T)) / (double)(end - start);
-      std::cout<<"Copy bandwidth is "<<bandwidth * fanout<<"GB/s"<<std::endl;
-    }
   }
 
 private:
@@ -362,16 +342,26 @@ private:
   // sycl::stream cout;
 };
 
+// Calc bandwidth from event;
+double bandwidth(sycl::event e) {
+  e.wait();
+  auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
+  auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
+
+  // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
+  return (double)(nelems * sizeof(T)) / (double)(end - start);
+}
+
 template <template <typename, int, typename, template <typename, int> class> coll,
          typename T, int lane_v, template <typename, int> class fan_policy,
          typename ... Args>
-static void launch(
+static sycl::event launch(
     void* peers_ptr[], const std::vector<int>& remotes, Args&& ... args) {
 #define CASE(n, ...)  \
   case n: \
     { \
       remote_info<n> i_remote ({__VA_ARGS__}) \
-      coll<T, lane_v, decltype(i_remote), fan_policy>::launch( \
+      return coll<T, lane_v, decltype(i_remote), fan_policy>::launch( \
           peers_ptr, std::move(i_remote), std::forward<Args>(args)...); \
     }
     break;
@@ -403,6 +393,31 @@ std::vector<int> commalist_to_vector(const std::string& str) {
   return list;
 }
 
+// collective call, don't miss ranks!
+void r_print(char *check_msg) {
+  char check_msgs[world][msg_len];
+  MPI_Gather(check_msg, msg_len, MPI_BYTE, check_msgs, msg_len, MPI_BYTE, 0, MPI_COMM_WORLD);
+
+  if (rank == 0) {
+    for (int i = 0; i < world; ++ i) {
+      if (check_msgs[0] != '\0')
+        printf("%s", check_msgs[i]);
+    }
+  }
+}
+
+// collective call, don't miss ranks!
+void r_printf(const char* fmt, ...) {
+  char check_msg[msg_len];
+
+  va_list args;
+  va_start(args, fmt);
+  snprintf(check_msg, msg_len, fmt, args);
+  va_end(args);
+
+  r_print(check_msg);
+}
+
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -413,7 +428,7 @@ int main(int argc, char* argv[]) {
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
-    ("r,root", "Root of send", cxxopts::value<int>()->default_value("0"))
+    ("r,root", "Root of send", cxxopts::value<std::string>()->default_value("0"))
     ("d,dst", "Destinatino of send", cxxopts::value<std::string>()->default_value("1"))
     ("b,broadcast", "Broadcast instead of send", cxxopts::value<bool>()->default_value("false"))
     ;
@@ -421,15 +436,20 @@ int main(int argc, char* argv[]) {
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
-  auto dst_string = parsed_opts["dst"].as<std::string>();
-  auto root = parsed_opts["root"].as<int>();
   auto use_bcast = parsed_opts["broadcast"].as<bool>();
-  auto dst_ranks = commalist_to_vector(dst_string);
+  auto roots = commalist_to_vector(parsed_opts["root"].as<int>());
+  auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
 
-  if (std::find(dst_ranks.begin(), dst_ranks.end(), root) != dst_ranks.end()) {
-    std::cout<<"Root and Destination can't be the same"<<std::endl;
-    return -1;
-  }
+  //
+  // check for duplication, currently we only support symmetric multiple roots
+  // without any intersection of both sets
+  //
+  for (auto root : roots)
+    for (auto rank : dst_ranks)
+      if (root == rank) {
+        std::cout<<"Root and Destination can't be the same"<<std::endl;
+        return -1;
+      }
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -448,7 +468,8 @@ int main(int argc, char* argv[]) {
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-  if (root >= world ||
+  if (std::any_of(roots.begin(), roots.end(),
+        [&](int r) {return r >= world;}) ||
       std::any_of(dst_ranks.begin(), dst_ranks.end(),
         [&](int d) {return d >= world;})) {
     std::cout
@@ -492,27 +513,42 @@ int main(int argc, char* argv[]) {
     peer_ptrs[i] = (char *)peer_bases[i] + offsets[i];
   }
 
-  if ( rank == root ) {
+  char check_msg[2048];
+
+  if ( auto it = std::find(roots.begin(), root.end(), root) != std::end(roots) ) {
+    // chop dst_ranks among roots
+    auto dst_sz = dst_ranks.size() / roots.size();
+    auto rank_start = (it - roots.begin()) * dst_sz;
+    auto rank_end = rank_start + dst_sz;
+
+    std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
+
     if (use_bcast) {
-      std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
       launch<xelink_bcast, test_type, v_lane, fanout_in_thread>(
-          peer_ptrs, dst_ranks, rank, world, nelems, true);
+          peer_ptrs, sub_ranks, rank, world, nelems, check_msg);
 
-      std::cout<<"Repeat run"<<std::endl;
-      for (int i = 0; i < repeat; ++ i)
-        launch<xelink_bcast, v_lane, fanout_in_thread>(
-            peer_ptrs, dst_ranks, rank, world, nelems, true);
+      for (int i = 0; i < repeat; ++ i) {
+        auto e = launch<xelink_bcast, v_lane, fanout_in_thread>(
+            peer_ptrs, sub_ranks, rank, world, nelems);
+        auto b = bandwidth_from_event(e);
+        snprintf(check_msg, msg_len, "Rank %d Broadcast bandwidth: %fGB/s\n", rank, b);
+      }
     } else {
-      std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
       xelink_send<test_type, v_lane, 1>::launch(
-          peer_ptrs, dst_ranks[0], rank, world, nelems, true);
+          peer_ptrs, sub_ranks[0], rank, world, nelems, check_msg);
 
-      std::cout<<"Repeat run"<<std::endl;
-      for (int i = 0; i < repeat; ++ i)
-        xelink_send<test_type, v_lane, 1>::launch(
-            peer_ptrs, dst_ranks[0], rank, world, nelems, true);
+      for (int i = 0; i < repeat; ++ i) {
+        auto e = xelink_send<test_type, v_lane, 1>::launch(
+            peer_ptrs, sub_ranks[0], rank, world, nelems);
+        auto b = bandwidth_from_event(e);
+        snprintf(check_msg, msg_len, "Rank %d Send bandwidth: %fGB/s\n", rank, b);
+      }
     }
+  } else {
+    check_msg[0] = '\0';
   }
+
+  r_print(check_msg);
 
   // avoid race condition
   queue.wait();
@@ -522,21 +558,13 @@ int main(int argc, char* argv[]) {
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size, dma_buf);
-  char check_msg[2048];
 
   snprintf(check_msg, 2048, "Rank %d Peek: %#x, %#x, %#x, ..., %#x, %#x\n", rank,
       host_buf[0], host_buf[1], host_buf[2],
       host_buf[alloc_size / sizeof(uint32_t) -2],
       host_buf[alloc_size / sizeof(uint32_t) -1]);
 
-  char check_msgs[world][2048];
-  MPI_Gather(check_msg, 2048, MPI_BYTE, check_msgs, 2048, MPI_BYTE, 0, MPI_COMM_WORLD);
-
-  if (rank == 0) {
-    for (int i = 0; i < world; ++ i) {
-      printf("%s", check_msgs[i]);
-    }
-  }
+  r_print(check_msg);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
