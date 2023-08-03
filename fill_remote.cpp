@@ -367,40 +367,25 @@ template <template <typename, int, typename, template <typename, int> class> col
          typename ... Args>
 static void launch(
     void* peers_ptr[], const std::vector<int>& remotes, Args&& ... args) {
+#define CASE(n, ...)  \
+  case n: \
+    { \
+      remote_info<n> i_remote ({__VA_ARGS__}) \
+      coll<T, lane_v, decltype(i_remote), fan_policy>::launch( \
+          peers_ptr, std::move(i_remote), std::forward<Args>(args)...); \
+    }
+    break;
+
   switch (remotes.size()) {
-  case 1:
-    {
-      remote_info<1> i_remote ({remotes[0]});
-      coll<T, lane_v, remote_info<1>, fan_policy>::launch(
-          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
-    }
-    break;
-  case 2:
-    {
-      remote_info<2> i_remote ({remotes[0], remotes[1]});
-      coll<T, lane_v, remote_info<2>, fan_policy>::launch(
-          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
-    }
-    break;
-  case 3:
-    {
-      remote_info<3> i_remote ({remotes[0], remotes[1], remotes[2]});
-      coll<T, lane_v, remote_info<3>, fan_policy>::launch(
-          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
-    }
-    break;
-  case 6:
-    {
-      remote_info<6> i_remote ({
-        remotes[0], remotes[1], remotes[2], remotes[3], remotes[4], remotes[5]});
-      coll<T, lane_v, remote_info<6>, fan_policy>::launch(
-          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
-    }
-    break;
+  CASE(1, remotes[0]);
+  CASE(2, remotes[0], remotes[1]);
+  CASE(3, remotes[0], remotes[1], remotes[2]);
+  CASE(6, remotes[0], remotes[1], remotes[2], remotes[3], remotes[4], remotes[5]);
   default:
     throw std::length_error("Unsupported broadcast pattern.");
     break;
   }
+#undef CASE
 }
 
 std::vector<int> commalist_to_vector(const std::string& str) {
