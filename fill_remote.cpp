@@ -289,42 +289,116 @@ private:
   // sycl::stream cout;
 };
 
-template <typename T, int lane_v, template <typename, int> class fanout_policy>
-static void launch_bcast(
-    void* peers_ptr[], const std::vector<int>& remotes,
-    int root, int world, size_t nelems, bool profiling) {
+template <typename T, int fanout>
+struct fanin_in_thread {
+  // the const is because peers are from const 'this' pointer.
+  static inline void run(sycl::nd_item<1> pos, T* local, T *const peers[fanout], size_t stride, size_t off) {
+    // alignment should be managed by user on host
+    auto stride_in_type = stride / sizeof(T);
+
+#   pragma unroll (fanout)
+    for (int f = 0; f < fanout; ++ f) {
+      (local + stride_in_type * f)[off] = peers[f][off];
+    }
+  }
+};
+
+template <typename T, int lane_v, typename R, template <typename, int> class fanin_policy>
+struct xelink_gather {
+  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
+  static constexpr int fanin = R::fanin;
+  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
+  static constexpr size_t hw_groups = 512;
+  static constexpr size_t local_size = 128;
+
+public:
+  xelink_gather(void *peer_ptrs[], R&& remote_info,
+      int root, int world, size_t buf_sz, size_t nelems/*, sycl::stream s*/)
+    : local(reinterpret_cast<v_T *>(peer_ptrs[root])),
+    buf_sz(buf_sz), nelems(nelems)/*, cout(s)*/ {
+#   pragma unroll (fanout)
+    for (int f = 0; f < fanout; ++ f) {
+      auto remote = remote_info.peers[f]; // can't be root
+      peers[f] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
+    }
+  }
+
+  void operator() (sycl::nd_item<1> pos) const {
+    for (size_t off = pos.get_global_id(0);
+        off < nelems/v_T::size(); off += pos.get_global_range(0)) {
+      fanin_policy<v_T, fanin>::run(pos, local, peers, buf_sz, off);
+    }
+  }
+
+  static void launch(void* peers[], R&& remote_info,
+      int root, int world, size_t nelems, bool profiling = false) {
+    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t group_size = std::min(data_groups, hw_groups);
+    size_t global_size = group_size * local_size;
+
+    auto queue = currentQueue(root/2, root & 1);
+    auto e = queue.submit([&](sycl::handler &cgh) {
+      cgh.parallel_for(
+          sycl::nd_range<1>({global_size}, {local_size}),
+          xelink_gather(peers, std::move(remote_info), root, world, nelems));
+    });
+
+    if (profiling) {
+      e.wait();
+      auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
+      auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
+
+      // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
+      auto bandwidth = (double)(nelems * sizeof(T)) / (double)(end - start);
+      std::cout<<"Copy bandwidth is "<<bandwidth * fanout<<"GB/s"<<std::endl;
+    }
+  }
+
+private:
+  v_T *peers[fanout];
+  v_T *local;
+  size_t buf_sz;
+  size_t nelems;
+  // sycl::stream cout;
+};
+
+template <template <typename, int, typename, template <typename, int> class> coll,
+         typename T, int lane_v, template <typename, int> class fan_policy,
+         typename ... Args>
+static void launch(
+    void* peers_ptr[], const std::vector<int>& remotes, Args&& ... args) {
   switch (remotes.size()) {
   case 1:
     {
       remote_info<1> i_remote ({remotes[0]});
-      xelink_bcast<T, lane_v, remote_info<1>, fanout_policy>::launch(
-          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+      coll<T, lane_v, remote_info<1>, fan_policy>::launch(
+          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
     }
     break;
   case 2:
     {
       remote_info<2> i_remote ({remotes[0], remotes[1]});
-      xelink_bcast<T, lane_v, remote_info<2>, fanout_policy>::launch(
-          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+      coll<T, lane_v, remote_info<2>, fan_policy>::launch(
+          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
     }
     break;
   case 3:
     {
       remote_info<3> i_remote ({remotes[0], remotes[1], remotes[2]});
-      xelink_bcast<T, lane_v, remote_info<3>, fanout_policy>::launch(
-          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+      coll<T, lane_v, remote_info<3>, fan_policy>::launch(
+          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
     }
     break;
   case 6:
     {
       remote_info<6> i_remote ({
         remotes[0], remotes[1], remotes[2], remotes[3], remotes[4], remotes[5]});
-      xelink_bcast<T, lane_v, remote_info<6>, fanout_policy>::launch(
-          peers_ptr, std::move(i_remote), root, world, nelems, profiling);
+      coll<T, lane_v, remote_info<6>, fan_policy>::launch(
+          peers_ptr, std::move(i_remote), std::forward<Args>(args)...);
     }
     break;
   default:
-    throw std::length_error("Unsupported boradcast pattern.");
+    throw std::length_error("Unsupported broadcast pattern.");
     break;
   }
 }
@@ -436,12 +510,12 @@ int main(int argc, char* argv[]) {
   if ( rank == root ) {
     if (use_bcast) {
       std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
-      launch_bcast<test_type, v_lane, fanout_in_thread>(
+      launch<xelink_bcast, test_type, v_lane, fanout_in_thread>(
           peer_ptrs, dst_ranks, rank, world, nelems, true);
 
       std::cout<<"Repeat run"<<std::endl;
       for (int i = 0; i < repeat; ++ i)
-        launch_bcast<test_type, v_lane, fanout_in_thread>(
+        launch<xelink_bcast, v_lane, fanout_in_thread>(
             peer_ptrs, dst_ranks, rank, world, nelems, true);
     } else {
       std::cout<<"Warmup run of size: "<<alloc_size<<std::endl;
