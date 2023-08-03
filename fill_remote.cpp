@@ -2,6 +2,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <system_error>
+#include <stdarg.h>
 
 #include <initializer_list>
 #include <string>
@@ -303,8 +304,8 @@ public:
       int root, int world, size_t buf_sz, size_t nelems/*, sycl::stream s*/)
     : local(reinterpret_cast<v_T *>(peer_ptrs[root])),
     buf_sz(buf_sz), nelems(nelems)/*, cout(s)*/ {
-#   pragma unroll (fanout)
-    for (int f = 0; f < fanout; ++ f) {
+#   pragma unroll (fanin)
+    for (int f = 0; f < fanin; ++ f) {
       auto remote = remote_info.peers[f]; // can't be root
       peers[f] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
     }
@@ -335,7 +336,7 @@ public:
   }
 
 private:
-  v_T *peers[fanout];
+  v_T *peers[fanin];
   v_T *local;
   size_t buf_sz;
   size_t nelems;
@@ -343,7 +344,8 @@ private:
 };
 
 // Calc bandwidth from event;
-double bandwidth(sycl::event e) {
+template <typename T>
+double bandwidth_from_event(sycl::event e, size_t nelems) {
   e.wait();
   auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
   auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
@@ -352,7 +354,7 @@ double bandwidth(sycl::event e) {
   return (double)(nelems * sizeof(T)) / (double)(end - start);
 }
 
-template <template <typename, int, typename, template <typename, int> class> coll,
+template <template <typename, int, typename, template <typename, int> class> class coll,
          typename T, int lane_v, template <typename, int> class fan_policy,
          typename ... Args>
 static sycl::event launch(
@@ -360,10 +362,10 @@ static sycl::event launch(
 #define CASE(n, ...)  \
   case n: \
     { \
-      remote_info<n> i_remote ({__VA_ARGS__}) \
+      remote_info<n> i_remote ({__VA_ARGS__}); \
       return coll<T, lane_v, decltype(i_remote), fan_policy>::launch( \
           peers_ptr, std::move(i_remote), std::forward<Args>(args)...); \
-    }
+    } \
     break;
 
   switch (remotes.size()) {
@@ -394,20 +396,20 @@ std::vector<int> commalist_to_vector(const std::string& str) {
 }
 
 // collective call, don't miss ranks!
-void r_print(char *check_msg) {
+void r_print(char *check_msg, int rank, int world) {
   char check_msgs[world][msg_len];
   MPI_Gather(check_msg, msg_len, MPI_BYTE, check_msgs, msg_len, MPI_BYTE, 0, MPI_COMM_WORLD);
 
   if (rank == 0) {
     for (int i = 0; i < world; ++ i) {
-      if (check_msgs[0] != '\0')
+      if (*check_msgs[i] != '\0')
         printf("%s", check_msgs[i]);
     }
   }
 }
 
 // collective call, don't miss ranks!
-void r_printf(const char* fmt, ...) {
+void r_printf(int rank, int world, const char* fmt, ...) {
   char check_msg[msg_len];
 
   va_list args;
@@ -415,7 +417,7 @@ void r_printf(const char* fmt, ...) {
   snprintf(check_msg, msg_len, fmt, args);
   va_end(args);
 
-  r_print(check_msg);
+  r_print(check_msg, rank, world);
 }
 
 int main(int argc, char* argv[]) {
@@ -437,7 +439,7 @@ int main(int argc, char* argv[]) {
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
   auto use_bcast = parsed_opts["broadcast"].as<bool>();
-  auto roots = commalist_to_vector(parsed_opts["root"].as<int>());
+  auto roots = commalist_to_vector(parsed_opts["root"].as<std::string>());
   auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
 
   //
@@ -515,7 +517,8 @@ int main(int argc, char* argv[]) {
 
   char check_msg[2048];
 
-  if ( auto it = std::find(roots.begin(), root.end(), root) != std::end(roots) ) {
+  auto it = std::find(roots.begin(), roots.end(), rank);
+  if ( it != std::end(roots) ) {
     // chop dst_ranks among roots
     auto dst_sz = dst_ranks.size() / roots.size();
     auto rank_start = (it - roots.begin()) * dst_sz;
@@ -528,9 +531,9 @@ int main(int argc, char* argv[]) {
           peer_ptrs, sub_ranks, rank, world, nelems, check_msg);
 
       for (int i = 0; i < repeat; ++ i) {
-        auto e = launch<xelink_bcast, v_lane, fanout_in_thread>(
+        auto e = launch<xelink_bcast, test_type, v_lane, fanout_in_thread>(
             peer_ptrs, sub_ranks, rank, world, nelems);
-        auto b = bandwidth_from_event(e);
+        auto b = bandwidth_from_event<test_type>(e, nelems);
         snprintf(check_msg, msg_len, "Rank %d Broadcast bandwidth: %fGB/s\n", rank, b);
       }
     } else {
@@ -540,7 +543,7 @@ int main(int argc, char* argv[]) {
       for (int i = 0; i < repeat; ++ i) {
         auto e = xelink_send<test_type, v_lane, 1>::launch(
             peer_ptrs, sub_ranks[0], rank, world, nelems);
-        auto b = bandwidth_from_event(e);
+        auto b = bandwidth_from_event<test_type>(e, nelems);
         snprintf(check_msg, msg_len, "Rank %d Send bandwidth: %fGB/s\n", rank, b);
       }
     }
@@ -548,7 +551,7 @@ int main(int argc, char* argv[]) {
     check_msg[0] = '\0';
   }
 
-  r_print(check_msg);
+  r_print(check_msg, rank, world);
 
   // avoid race condition
   queue.wait();
@@ -564,7 +567,7 @@ int main(int argc, char* argv[]) {
       host_buf[alloc_size / sizeof(uint32_t) -2],
       host_buf[alloc_size / sizeof(uint32_t) -1]);
 
-  r_print(check_msg);
+  r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
