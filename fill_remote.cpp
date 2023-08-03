@@ -544,7 +544,7 @@ int main(int argc, char* argv[]) {
         auto e = xelink_send<test_type, v_lane, 1>::launch(
             peer_ptrs, sub_ranks[0], rank, world, nelems);
         auto b = bandwidth_from_event<test_type>(e, nelems);
-        snprintf(check_msg, msg_len, "Rank %d Send bandwidth: %fGB/s\n", rank, b);
+        snprintf(check_msg, msg_len, "Rank %d Send to %d bandwidth: %fGB/s\n", rank, sub_ranks[0], b);
       }
     }
   } else {
