@@ -210,7 +210,7 @@ private:
 };
 
 template <int F> struct remote_info {
-  static constexpr int fanout = F;
+  static constexpr int n_peers = F;
   std::array<int, F> peers;
 
   remote_info(const std::array<int, F>& peer_list) : peers(peer_list) {}
@@ -231,7 +231,7 @@ struct fanout_in_thread {
 template <typename T, int lane_v, typename R, template <typename, int> class fanout_policy>
 struct xelink_bcast {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
-  static constexpr int fanout = R::fanout;
+  static constexpr int fanout = R::n_peers;
   // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
   static constexpr size_t hw_groups = 512;
   static constexpr size_t local_size = 128;
@@ -294,7 +294,7 @@ struct fanin_in_thread {
 template <typename T, int lane_v, typename R, template <typename, int> class fanin_policy>
 struct xelink_gather {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
-  static constexpr int fanin = R::fanin;
+  static constexpr int fanin = R::n_peers;
   // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
   static constexpr size_t hw_groups = 512;
   static constexpr size_t local_size = 128;
@@ -319,7 +319,7 @@ public:
   }
 
   static sycl::event launch(void* peers[], R&& remote_info,
-      int root, int world, size_t nelems, char *msg = nullptr) {
+      int root, int world, size_t buf_sz, size_t nelems, char *msg = nullptr) {
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
     size_t global_size = group_size * local_size;
@@ -328,7 +328,7 @@ public:
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_gather(peers, std::move(remote_info), root, world, nelems));
+          xelink_gather(peers, std::move(remote_info), root, world, buf_sz, nelems));
     });
 
     return e;
@@ -420,6 +420,21 @@ void r_printf(int rank, int world, const char* fmt, ...) {
   r_print(check_msg, rank, world);
 }
 
+void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int rank, int world) {
+  snprintf(check_msg, 2048,
+      "Rank %d Peek: %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x\n",
+      rank,
+      host_buf[0], host_buf[1],
+      host_buf[alloc_size / sizeof(uint32_t) -2],
+      host_buf[alloc_size / sizeof(uint32_t) -1],
+      host_buf[alloc_size * 2/ sizeof(uint32_t) -2],
+      host_buf[alloc_size * 2/ sizeof(uint32_t) -1],
+      host_buf[alloc_size * 3/ sizeof(uint32_t) -2],
+      host_buf[alloc_size * 3/ sizeof(uint32_t) -1],
+      host_buf[alloc_size * world / sizeof(uint32_t) -2],
+      host_buf[alloc_size * world / sizeof(uint32_t) -1]);
+}
+
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -433,12 +448,14 @@ int main(int argc, char* argv[]) {
     ("r,root", "Root of send", cxxopts::value<std::string>()->default_value("0"))
     ("d,dst", "Destinatino of send", cxxopts::value<std::string>()->default_value("1"))
     ("b,broadcast", "Broadcast instead of send", cxxopts::value<bool>()->default_value("false"))
+    ("g,gather", "Gather instead of send", cxxopts::value<bool>()->default_value("false"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
-  auto use_bcast = parsed_opts["broadcast"].as<bool>();
+  auto run_bcast = parsed_opts["broadcast"].as<bool>();
+  auto run_gather = parsed_opts["gather"].as<bool>();
   auto roots = commalist_to_vector(parsed_opts["root"].as<std::string>());
   auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
 
@@ -501,8 +518,10 @@ int main(int argc, char* argv[]) {
 
   using test_type = sycl::half;
   constexpr uint32_t v_lane = 4;
+  // allocate more for gather case
   size_t alloc_size = nelems * sizeof(test_type);
-  void* buffer = sycl::malloc_device(alloc_size, queue);
+
+  void* buffer = sycl::malloc_device(alloc_size * world, queue);
   queue.memset(buffer, rank + 42, alloc_size);
 
   void *peer_bases[world];
@@ -526,7 +545,7 @@ int main(int argc, char* argv[]) {
 
     std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
 
-    if (use_bcast) {
+    if (run_bcast) {
       launch<xelink_bcast, test_type, v_lane, fanout_in_thread>(
           peer_ptrs, sub_ranks, rank, world, nelems, check_msg);
 
@@ -535,6 +554,16 @@ int main(int argc, char* argv[]) {
             peer_ptrs, sub_ranks, rank, world, nelems);
         auto b = bandwidth_from_event<test_type>(e, nelems);
         snprintf(check_msg, msg_len, "Rank %d Broadcast bandwidth: %fGB/s\n", rank, b);
+      }
+    } else if (run_gather) {
+      launch<xelink_gather, test_type, v_lane, fanin_in_thread>(
+          peer_ptrs, sub_ranks, rank, world, nelems * sizeof(test_type), nelems, check_msg);
+
+      for (int i = 0; i < repeat; ++ i) {
+        auto e = launch<xelink_gather, test_type, v_lane, fanin_in_thread>(
+            peer_ptrs, sub_ranks, rank, world, nelems * sizeof(test_type), nelems);
+        auto b = bandwidth_from_event<test_type>(e, nelems);
+        snprintf(check_msg, msg_len, "Rank %d Gather bandwidth: %fGB/s\n", rank, b);
       }
     } else {
       xelink_send<test_type, v_lane, 1>::launch(
@@ -560,13 +589,9 @@ int main(int argc, char* argv[]) {
   // Or we map the device to host
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
-  uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size, dma_buf);
+  uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size * world, dma_buf);
 
-  snprintf(check_msg, 2048, "Rank %d Peek: %#x, %#x, %#x, ..., %#x, %#x\n", rank,
-      host_buf[0], host_buf[1], host_buf[2],
-      host_buf[alloc_size / sizeof(uint32_t) -2],
-      host_buf[alloc_size / sizeof(uint32_t) -1]);
-
+  peek_buffer(check_msg, host_buf, alloc_size, rank, world);
   r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
