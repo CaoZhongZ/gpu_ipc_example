@@ -173,9 +173,9 @@ struct xelink_send {
 
 public:
   xelink_send(
-      void *peers[], int remote, int rank, int world, size_t nelems/*, sycl::stream s*/)
-    : peer(reinterpret_cast<v_T *>(peers[remote]))
-      , local(reinterpret_cast<v_T *>(peers[rank]))
+      void *peers[], int remote, int rank, int world, size_t buf_stride, size_t nelems/*, sycl::stream s*/)
+    : peer(reinterpret_cast<v_T *>((char *)peers[remote] + buf_stride * rank))
+      , local(reinterpret_cast<v_T *>((char *)peers[rank] + buf_stride * rank))
       , nelems(nelems)/*, cout(s)*/ {}
 
   void operator() (sycl::nd_item<1> pos) const {
@@ -183,8 +183,12 @@ public:
       peer[i] = local[i];
   }
 
+  static bool valid_peers(int root, const std::vector<int>& peers) {
+    return root != peers[0];
+  }
+
   static sycl::event launch(
-      void* peer_ptrs[], int remote, int root, int world, size_t nelems, char* msg = nullptr) {
+      void* peer_ptrs[], int remote, int root, int world, size_t buf_stride, size_t nelems, char* msg = nullptr) {
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
 
@@ -254,6 +258,11 @@ public:
     }
   }
 
+  static bool valid_peers(int root, const std::array<int, fanout>& peers) {
+    auto it = std::find(peers.begin(), peers.end(), root);
+    return it == peers.end();
+  }
+
   static sycl::event launch(void* peers[], R&& remote_info,
       int root, int world, size_t nelems, char * msg = nullptr) {
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
@@ -318,8 +327,16 @@ public:
     }
   }
 
+  static bool valid_peers(int root, const R& peers) {
+    auto it = std::find(peers.begin(), peers.end(), root);
+    return it == peers.end();
+  }
+
   static sycl::event launch(void* peers[], R&& remote_info,
       int root, int world, size_t buf_sz, size_t nelems, char *msg = nullptr) {
+    if (!valid_peers(root, remote_info.peers))
+      throw std::logic_error("Invalid transmit pattern!");
+
     size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
     size_t global_size = group_size * local_size;
@@ -337,6 +354,95 @@ public:
 
 private:
   v_T *peers[fanin];
+  v_T *local;
+  size_t buf_sz;
+  size_t nelems;
+  // sycl::stream cout;
+};
+
+template <typename T, int fanout>
+struct scatter_in_thread {
+  // the const is because peers are from const 'this' pointer.
+  static inline void run(sycl::nd_item<1> pos, T* local, T *const peers[fanout], size_t stride, size_t off) {
+    // alignment should be managed by user on host
+    auto stride_in_type = stride / sizeof(T);
+
+#   pragma unroll (fanout)
+    for (int f = 0; f < fanout; ++ f) {
+      peers[f][off] = (local + stride_in_type * f)[off];
+    }
+  }
+};
+
+template <typename T, int fanout>
+struct gather_in_thread {
+  // the const is because peers are from const 'this' pointer.
+  static inline void run(sycl::nd_item<1> pos, T* local, T *const peers[fanout], size_t stride, size_t off) {
+    // alignment should be managed by user on host
+    auto stride_in_type = stride / sizeof(T);
+
+#   pragma unroll (fanout)
+    for (int f = 0; f < fanout; ++ f) {
+      (local + stride_in_type * f)[off] = peers[f][off];
+    }
+  }
+};
+
+template <typename T, int lane_v, typename R, template <typename, int> class fan_policy>
+struct xelink_transmit {
+  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
+  static constexpr int n_peers = R::n_peers;
+  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
+  static constexpr size_t hw_groups = 512;
+  static constexpr size_t local_size = 128;
+
+public:
+  xelink_transmit(void *peer_ptrs[], R&& remote_info,
+      int root, int world, size_t buf_sz, size_t nelems/*, sycl::stream s*/)
+    : local(reinterpret_cast<v_T *>(peer_ptrs[root])),
+    buf_sz(buf_sz), nelems(nelems)/*, cout(s)*/ {
+#   pragma unroll (n_peers)
+    for (int f = 0; f < n_peers; ++ f) {
+      auto remote = remote_info.peers[f]; // can't be root
+      // access different position
+      peers[f] = reinterpret_cast<v_T *>((char *)peer_ptrs[remote] + buf_sz * root);
+    }
+  }
+
+  void operator() (sycl::nd_item<1> pos) const {
+    for (size_t off = pos.get_global_id(0);
+        off < nelems/v_T::size(); off += pos.get_global_range(0)) {
+      fan_policy<v_T, n_peers>::run(pos, local, peers, buf_sz, off);
+    }
+  }
+
+  static bool valid_peers(int root, const std::array<int, R::n_peers>& peers) {
+    auto it = std::find(peers.begin(), peers.end(), root);
+    return it == peers.end();
+  }
+
+  static sycl::event launch(void* peers[], R&& remote_info,
+      int root, int world, size_t buf_sz, size_t nelems, char *msg = nullptr) {
+    if (!valid_peers(root, remote_info.peers))
+      throw std::logic_error("Invalid transmit pattern!");
+
+    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t group_size = std::min(data_groups, hw_groups);
+    size_t global_size = group_size * local_size;
+
+    auto queue = currentQueue(root/2, root & 1);
+    auto e = queue.submit([&](sycl::handler &cgh) {
+      cgh.parallel_for(
+          sycl::nd_range<1>({global_size}, {local_size}),
+          xelink_gather(peers, std::move(remote_info), root, world, buf_sz, nelems));
+    });
+
+    return e;
+
+  }
+
+private:
+  v_T *peers[n_peers];
   v_T *local;
   size_t buf_sz;
   size_t nelems;
@@ -458,17 +564,6 @@ int main(int argc, char* argv[]) {
   auto run_gather = parsed_opts["gather"].as<bool>();
   auto roots = commalist_to_vector(parsed_opts["root"].as<std::string>());
   auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
-
-  //
-  // check for duplication, currently we only support symmetric multiple roots
-  // without any intersection of both sets
-  //
-  for (auto root : roots)
-    for (auto rank : dst_ranks)
-      if (root == rank) {
-        std::cout<<"Root and Destination can't be the same"<<std::endl;
-        return -1;
-      }
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
