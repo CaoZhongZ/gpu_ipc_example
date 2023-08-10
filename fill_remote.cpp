@@ -201,7 +201,7 @@ public:
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_send(peer_ptrs, remote, root, world, nelems));
+          xelink_send(peer_ptrs, remote, root, world, buf_stride, nelems));
     });
     return e;
   }
@@ -327,7 +327,7 @@ public:
     }
   }
 
-  static bool valid_peers(int root, const R& peers) {
+  static bool valid_peers(int root, const std::array<int, R::n_peers>& peers) {
     auto it = std::find(peers.begin(), peers.end(), root);
     return it == peers.end();
   }
@@ -662,11 +662,11 @@ int main(int argc, char* argv[]) {
       }
     } else {
       xelink_send<test_type, v_lane, 1>::launch(
-          peer_ptrs, sub_ranks[0], rank, world, nelems, check_msg);
+          peer_ptrs, sub_ranks[0], rank, world, nelems * sizeof(test_type), nelems, check_msg);
 
       for (int i = 0; i < repeat; ++ i) {
         auto e = xelink_send<test_type, v_lane, 1>::launch(
-            peer_ptrs, sub_ranks[0], rank, world, nelems);
+            peer_ptrs, sub_ranks[0], rank, world, nelems * sizeof(test_type), nelems);
         auto b = bandwidth_from_event<test_type>(e, nelems);
         snprintf(check_msg, msg_len, "Rank %d Send to %d bandwidth: %fGB/s\n", rank, sub_ranks[0], b);
       }
