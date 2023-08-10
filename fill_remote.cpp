@@ -527,18 +527,20 @@ void r_printf(int rank, int world, const char* fmt, ...) {
 }
 
 void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int rank, int world) {
-  snprintf(check_msg, 2048,
-      "Rank %d Peek: %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x\n",
+  auto offset = snprintf(check_msg, 2048,
+      "\nRank %d Peek: %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x\n",
       rank,
-      host_buf[0], host_buf[1],
-      host_buf[alloc_size / sizeof(uint32_t) -2],
-      host_buf[alloc_size / sizeof(uint32_t) -1],
-      host_buf[alloc_size * 2/ sizeof(uint32_t) -2],
-      host_buf[alloc_size * 2/ sizeof(uint32_t) -1],
-      host_buf[alloc_size * 3/ sizeof(uint32_t) -2],
-      host_buf[alloc_size * 3/ sizeof(uint32_t) -1],
-      host_buf[alloc_size * world / sizeof(uint32_t) -2],
-      host_buf[alloc_size * world / sizeof(uint32_t) -1]);
+      host_buf[0], host_buf[alloc_size / sizeof(uint32_t) -1],
+      host_buf[alloc_size / sizeof(uint32_t)], host_buf[alloc_size * 2/ sizeof(uint32_t) -1],
+      host_buf[alloc_size * 2/ sizeof(uint32_t)], host_buf[alloc_size * 3/ sizeof(uint32_t) -1],
+      host_buf[alloc_size * 3 / sizeof(uint32_t)], host_buf[alloc_size * 4 / sizeof(uint32_t) -1]);
+  snprintf(check_msg + offset, 2048 - offset,
+      "Rank %d Peek: %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x\n\n",
+      rank,
+      host_buf[alloc_size * 4 / sizeof(uint32_t)], host_buf[alloc_size * 5/ sizeof(uint32_t) -1],
+      host_buf[alloc_size * 5 / sizeof(uint32_t)], host_buf[alloc_size * 6/ sizeof(uint32_t) -1],
+      host_buf[alloc_size * 6 / sizeof(uint32_t)], host_buf[alloc_size * 7/ sizeof(uint32_t) -1],
+      host_buf[alloc_size * 7 / sizeof(uint32_t)], host_buf[alloc_size * 8/ sizeof(uint32_t) -1]);
 }
 
 int main(int argc, char* argv[]) {
@@ -617,7 +619,7 @@ int main(int argc, char* argv[]) {
   size_t alloc_size = nelems * sizeof(test_type);
 
   void* buffer = sycl::malloc_device(alloc_size * world, queue);
-  queue.memset(buffer, rank + 42, alloc_size);
+  queue.memset(buffer, rank + 42, alloc_size * world);
 
   void *peer_bases[world];
   size_t offsets[world];
