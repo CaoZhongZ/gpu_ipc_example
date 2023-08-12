@@ -6,6 +6,7 @@
 
 #include <initializer_list>
 #include <string>
+#include <random>
 
 #include <mpi.h>
 #include <sycl/sycl.hpp>
@@ -349,7 +350,6 @@ public:
     });
 
     return e;
-
   }
 
 private:
@@ -438,12 +438,94 @@ public:
     });
 
     return e;
-
   }
 
 private:
   v_T *peers[n_peers];
   v_T *local;
+  size_t buf_sz;
+  size_t nelems;
+  // sycl::stream cout;
+};
+
+template <typename T, int fanout>
+struct route_bcast_in_thread {
+  // the const is because peers are from const 'this' pointer.
+  static inline void run(sycl::nd_item<1> pos, T* source, T* root, T *const peers[fanout], size_t stride, size_t off) {
+    // alignment should be managed by user on host
+    auto stride_in_type = stride / sizeof(T);
+
+#   pragma unroll (fanout)
+    for (int f = 0; f < fanout; ++ f) {
+      (local + stride_in_type * f)[off] = peers[f][off];
+    }
+  }
+};
+
+template <typename T, int lane_v, typename R, template <typename, int> class route_policy>
+struct xelink_route {
+  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
+  static constexpr int n_peers = R::n_peers;
+  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
+  static constexpr size_t hw_groups = 512;
+  static constexpr size_t local_size = 128;
+
+public:
+  xelink_route(void *peer_ptrs[], R&& remote_info,
+      int src, int root, int world, size_t buf_sz, size_t nelems/*, sycl::stream s*/)
+    : local(reinterpret_cast<v_T *>((char *)peer_ptrs[root]+buf_sz * root)),
+    source(reinterpret_cast<v_T *>((char *)peer_ptrs[src] + buf_sz * root)),
+    buf_sz(buf_sz), nelems(nelems)/*, cout(s)*/ {
+#   pragma unroll (n_peers)
+    for (int f = 0; f < n_peers; ++ f) {
+      auto remote = remote_info.peers[f]; // can't be root
+      // access different position
+      peers[f] = reinterpret_cast<v_T *>((char *)peer_ptrs[remote] + buf_sz * root);
+    }
+  }
+
+  void operator() (sycl::nd_item<1> pos) const {
+    for (size_t off = pos.get_global_id(0);
+        off < nelems/v_T::size(); off += pos.get_global_range(0)) {
+      fan_policy<v_T, n_peers>::run(pos, source, local, peers, buf_sz, off);
+    }
+  }
+
+  static bool valid_peers(int src, int root, const std::array<int, R::n_peers>& peers) {
+    auto it = std::find(peers.begin(), peers.end(), root);
+    if (it == peers.end()) {
+      it = std::find(peers.begin(), peers.end(), src);
+      if (it == peers.end())
+        return root != src;
+    }
+
+    return false;
+  }
+
+  static sycl::event launch(void* peers[], R&& remote_info, int src,
+      int root, int world, size_t buf_sz, size_t nelems, char *msg = nullptr) {
+    if (!valid_peers(src, root, remote_info.peers))
+      throw std::logic_error("Invalid transmit pattern!");
+
+    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t group_size = std::min(data_groups, hw_groups);
+    size_t global_size = group_size * local_size;
+
+    auto queue = currentQueue(root/2, root & 1);
+    auto e = queue.submit([&](sycl::handler &cgh) {
+      cgh.parallel_for(
+          sycl::nd_range<1>({global_size}, {local_size}),
+          xelink_gather(peers, std::move(remote_info), src, root, world, buf_sz, nelems));
+    });
+
+    return e;
+  }
+
+private:
+  v_T *peers[n_peers];
+  v_T *local;
+  v_T *source;
+
   size_t buf_sz;
   size_t nelems;
   // sycl::stream cout;
@@ -543,6 +625,26 @@ void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int ran
       host_buf[alloc_size * 7 / sizeof(uint32_t)], host_buf[alloc_size * 8/ sizeof(uint32_t) -1]);
 }
 
+void fill_sequential(void *p, int rank, size_t size) {
+  auto sz_int = size / sizeof(int);
+
+  for (size_t i = 0; i < sz_int; ++ i) {
+    ((uint32_t *)p)[i] = i + rank;
+  }
+}
+
+void fill_random(void *p, int rank, size_t size) {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<> distrib(1, 0x4000);
+
+  auto sz_int = size / sizeof(int);
+
+  for (size_t i = 0; i < sz_int; ++ i) {
+    ((uint32_t *)p)[i] = distrib(gen) + rank;
+  }
+}
+
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -619,7 +721,10 @@ int main(int argc, char* argv[]) {
   size_t alloc_size = nelems * sizeof(test_type);
 
   void* buffer = sycl::malloc_device(alloc_size * world, queue);
-  queue.memset(buffer, rank + 42, alloc_size * world);
+  void* b_host = sycl::malloc_host(alloc_size * world, queue);
+
+  fill_random(b_host, rank, alloc_size * world);
+  queue.memcpy(buffer, b_host, alloc_size * world);
 
   void *peer_bases[world];
   size_t offsets[world];
