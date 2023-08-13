@@ -454,15 +454,19 @@ struct route_nsect_bcast {
   // group number is same with fanout
   //
   static inline void run(
-      sycl::nd_item<1> pos,
+      sycl::nd_item<2> pos,
       T* source, int root, T *const peers[fanout], size_t stride, size_t step) {
-    auto g = pos.get_sub_group(0);
-    auto* dest = peers[g];
-    auto next = (root + g) % (fanout + 1);
-    auto g_sz = pos.get_local_range() * sizeof(T);
-    auto group_rank_offset = next * g_sz;
+    auto y = pos.get_local_id(0);
+    auto* dest = peers[y];
+    auto next = (root + y) % (fanout + 1);
+    auto read_width = pos.get_local_range(1) * sizeof(T);
+    auto group_rank_offset = next * read_width;
 
-    for (auto off = pos.get_global_id(); off < step; off += pos.get_global_size()) {
+    for (
+        auto off = pos.get_global_linear_id();
+        off < step;
+        off += pos.get_global_range(0) * pos.get_global_range(1)
+    ) {
       dest[off + group_rank_offset] = source[off];
     }
   }
@@ -473,7 +477,7 @@ struct xelink_route {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   static constexpr int n_peers = R::n_peers;
   static constexpr size_t hw_groups = 512;
-  static constexpr size_t local_size = 128;
+  static constexpr size_t sub_group_size = 32;
 
 public:
   xelink_route(void *peer_ptrs[], R&& remote_info,
@@ -489,7 +493,7 @@ public:
     }
   }
 
-  void operator() (sycl::nd_item<1> pos) const {
+  void operator() (sycl::nd_item<2> pos) const {
     fan_policy<v_T, n_peers>::run(pos, source, local, peers, nelems/v_T::size());
   }
 
@@ -505,19 +509,29 @@ public:
   }
 
   static sycl::event launch(void* peers[], R&& remote_info,
-      int src, int root, int world, size_t nelems) {
+      int src, int root, int world, size_t nelems, char *msg = nullptr) {
     if (!valid_peers(src, root, remote_info.peers))
       throw std::logic_error("Invalid transmit pattern!");
+    auto local_y = n_peers + 1;
+    auto local_x = 2 * sub_group_size;
+    auto local_sz = local_y * local_x;
 
-    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t data_groups = (nelems/v_T::size() + local_sz - 1) / local_sz;
     size_t group_size = std::min(data_groups, hw_groups);
-    size_t global_size = group_size * local_size;
+    size_t global_x = group_size * local_x;
+    size_t global_y = 1 * local_y;
+
+    if (msg != nullptr) {
+      snprintf(msg, 2048,
+          "Launch transmit from %d on rank %d: (%ld, %ld)x(%ld, %ld)\n",
+          src, root, 1, global_x, local_y, local_x);
+    }
 
     auto queue = currentQueue(root/2, root & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
-          sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_gather(peers, std::move(remote_info), src, root, world, buf_sz, nelems));
+          sycl::nd_range<2>({1, global_x}, {local_y, local_x}),
+          xelink_route(peers, std::move(remote_info), src, root, world, buf_sz, nelems));
     });
 
     return e;
@@ -585,7 +599,7 @@ std::vector<int> commalist_to_vector(const std::string& str) {
 }
 
 // collective call, don't miss ranks!
-void r_print(char *check_msg, int rank, int world) {
+void r_print(const char *check_msg, int rank, int world) {
   char check_msgs[world][msg_len];
   MPI_Gather(check_msg, msg_len, MPI_BYTE, check_msgs, msg_len, MPI_BYTE, 0, MPI_COMM_WORLD);
 
@@ -750,7 +764,9 @@ int main(int argc, char* argv[]) {
     std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
 
     auto e = launch<xelink_route, test_type, v_lane, route_nsect_bcast>(
-        peer_ptrs, sub_ranks, source, rank, world, nelems);
+        peer_ptrs, sub_ranks, source, rank, world, nelems, check_msg);
+    r_print(check_msg, rank, world);
+
     double b = 0.0;
 
     for (int i = 0; i < repeat; ++ i) {
@@ -761,6 +777,7 @@ int main(int argc, char* argv[]) {
     snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
   } else {
     check_msg[0] = '\0';
+    r_print(check_msg, rank, world);
   }
 
   r_print(check_msg, rank, world);
