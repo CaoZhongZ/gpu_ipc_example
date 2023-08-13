@@ -449,15 +449,21 @@ private:
 };
 
 template <typename T, int fanout>
-struct route_bcast_in_thread {
-  // the const is because peers are from const 'this' pointer.
-  static inline void run(sycl::nd_item<1> pos, T* source, T* root, T *const peers[fanout], size_t stride, size_t off) {
-    // alignment should be managed by user on host
-    auto stride_in_type = stride / sizeof(T);
+struct route_nsect_bcast {
+  //
+  // group number is same with fanout
+  //
+  static inline void run(
+      sycl::nd_item<1> pos,
+      T* source, int root, T *const peers[fanout], size_t stride, size_t step) {
+    auto g = pos.get_sub_group(0);
+    auto* dest = peers[g];
+    auto next = (root + g) % (fanout + 1);
+    auto g_sz = pos.get_local_range() * sizeof(T);
+    auto group_rank_offset = next * g_sz;
 
-#   pragma unroll (fanout)
-    for (int f = 0; f < fanout; ++ f) {
-      (local + stride_in_type * f)[off] = peers[f][off];
+    for (auto off = pos.get_global_id(); off < step; off += pos.get_global_size()) {
+      dest[off + group_rank_offset] = source[off];
     }
   }
 };
@@ -466,29 +472,25 @@ template <typename T, int lane_v, typename R, template <typename, int> class rou
 struct xelink_route {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   static constexpr int n_peers = R::n_peers;
-  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
   static constexpr size_t hw_groups = 512;
   static constexpr size_t local_size = 128;
 
 public:
   xelink_route(void *peer_ptrs[], R&& remote_info,
-      int src, int root, int world, size_t buf_sz, size_t nelems/*, sycl::stream s*/)
-    : local(reinterpret_cast<v_T *>((char *)peer_ptrs[root]+buf_sz * root)),
-    source(reinterpret_cast<v_T *>((char *)peer_ptrs[src] + buf_sz * root)),
-    buf_sz(buf_sz), nelems(nelems)/*, cout(s)*/ {
+      int src, int root, int world, size_t nelems)
+    : root(root),
+    source(reinterpret_cast<v_T *>(peer_ptrs[src])),
+    nelems(nelems)/*, cout(s)*/ {
 #   pragma unroll (n_peers)
     for (int f = 0; f < n_peers; ++ f) {
       auto remote = remote_info.peers[f]; // can't be root
       // access different position
-      peers[f] = reinterpret_cast<v_T *>((char *)peer_ptrs[remote] + buf_sz * root);
+      peers[f] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
     }
   }
 
   void operator() (sycl::nd_item<1> pos) const {
-    for (size_t off = pos.get_global_id(0);
-        off < nelems/v_T::size(); off += pos.get_global_range(0)) {
-      fan_policy<v_T, n_peers>::run(pos, source, local, peers, buf_sz, off);
-    }
+    fan_policy<v_T, n_peers>::run(pos, source, local, peers, nelems/v_T::size());
   }
 
   static bool valid_peers(int src, int root, const std::array<int, R::n_peers>& peers) {
@@ -502,8 +504,8 @@ public:
     return false;
   }
 
-  static sycl::event launch(void* peers[], R&& remote_info, int src,
-      int root, int world, size_t buf_sz, size_t nelems, char *msg = nullptr) {
+  static sycl::event launch(void* peers[], R&& remote_info,
+      int src, int root, int world, size_t nelems) {
     if (!valid_peers(src, root, remote_info.peers))
       throw std::logic_error("Invalid transmit pattern!");
 
@@ -523,10 +525,9 @@ public:
 
 private:
   v_T *peers[n_peers];
-  v_T *local;
+  int root;
   v_T *source;
 
-  size_t buf_sz;
   size_t nelems;
   // sycl::stream cout;
 };
@@ -655,17 +656,15 @@ int main(int argc, char* argv[]) {
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
+    ("s,source", "Data source", cxxopts::value<std::string>()->default_value("1"))
     ("r,root", "Root of send", cxxopts::value<std::string>()->default_value("0"))
     ("d,dst", "Destinatino of send", cxxopts::value<std::string>()->default_value("1"))
-    ("b,broadcast", "Broadcast instead of send", cxxopts::value<bool>()->default_value("false"))
-    ("g,gather", "Gather instead of send", cxxopts::value<bool>()->default_value("false"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
-  auto run_bcast = parsed_opts["broadcast"].as<bool>();
-  auto run_gather = parsed_opts["gather"].as<bool>();
+  auto sources = commandlist_to_vector(parsed_opts["source"].as<std::string>());
   auto roots = commalist_to_vector(parsed_opts["root"].as<std::string>());
   auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
 
@@ -725,6 +724,7 @@ int main(int argc, char* argv[]) {
 
   fill_random(b_host, rank, alloc_size * world);
   queue.memcpy(buffer, b_host, alloc_size * world);
+  queue.wait();
 
   void *peer_bases[world];
   size_t offsets[world];
@@ -742,42 +742,23 @@ int main(int argc, char* argv[]) {
   if ( it != std::end(roots) ) {
     // chop dst_ranks among roots
     auto dst_sz = dst_ranks.size() / roots.size();
-    auto rank_start = (it - roots.begin()) * dst_sz;
+    auto index = (it - roots.begin());
+    auto source = sources[index];
+    auto rank_start = index * dst_sz;
     auto rank_end = rank_start + dst_sz;
 
     std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
 
-    if (run_bcast) {
-      launch<xelink_bcast, test_type, v_lane, fanout_in_thread>(
-          peer_ptrs, sub_ranks, rank, world, nelems, check_msg);
+    auto e = launch<xelink_route, test_type, v_lane, route_nsect_bcast>(
+        peer_ptrs, sub_ranks, source, rank, world, nelems);
+    double b = 0.0;
 
-      for (int i = 0; i < repeat; ++ i) {
-        auto e = launch<xelink_bcast, test_type, v_lane, fanout_in_thread>(
-            peer_ptrs, sub_ranks, rank, world, nelems);
-        auto b = bandwidth_from_event<test_type>(e, nelems);
-        snprintf(check_msg, msg_len, "Rank %d Broadcast bandwidth: %fGB/s\n", rank, b);
-      }
-    } else if (run_gather) {
-      launch<xelink_gather, test_type, v_lane, fanin_in_thread>(
-          peer_ptrs, sub_ranks, rank, world, nelems * sizeof(test_type), nelems, check_msg);
-
-      for (int i = 0; i < repeat; ++ i) {
-        auto e = launch<xelink_gather, test_type, v_lane, fanin_in_thread>(
-            peer_ptrs, sub_ranks, rank, world, nelems * sizeof(test_type), nelems);
-        auto b = bandwidth_from_event<test_type>(e, nelems);
-        snprintf(check_msg, msg_len, "Rank %d Gather bandwidth: %fGB/s\n", rank, b);
-      }
-    } else {
-      xelink_send<test_type, v_lane, 1>::launch(
-          peer_ptrs, sub_ranks[0], rank, world, nelems * sizeof(test_type), nelems, check_msg);
-
-      for (int i = 0; i < repeat; ++ i) {
-        auto e = xelink_send<test_type, v_lane, 1>::launch(
-            peer_ptrs, sub_ranks[0], rank, world, nelems * sizeof(test_type), nelems);
-        auto b = bandwidth_from_event<test_type>(e, nelems);
-        snprintf(check_msg, msg_len, "Rank %d Send to %d bandwidth: %fGB/s\n", rank, sub_ranks[0], b);
-      }
+    for (int i = 0; i < repeat; ++ i) {
+      auto e = launch<xelink_route, test_type, v_lane, route_nsect_bcast>(
+          peer_ptrs, sub_ranks, source, rank, world, nelems);
+      b = bandwidth_from_event<test_type>(e, nelems);
     }
+    snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
   } else {
     check_msg[0] = '\0';
   }
