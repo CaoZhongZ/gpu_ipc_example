@@ -455,7 +455,7 @@ struct route_nsect_bcast {
   //
   static inline void run(
       sycl::nd_item<2> pos,
-      T* source, int root, T *const peers[fanout], size_t stride, size_t step) {
+      T* source, int root, T *const peers[fanout], size_t step) {
     auto y = pos.get_local_id(0);
     auto* dest = peers[y];
     auto next = (root + y) % (fanout + 1);
@@ -494,7 +494,7 @@ public:
   }
 
   void operator() (sycl::nd_item<2> pos) const {
-    fan_policy<v_T, n_peers>::run(pos, source, local, peers, nelems/v_T::size());
+    route_policy<v_T, n_peers>::run(pos, source, root, peers, nelems/v_T::size());
   }
 
   static bool valid_peers(int src, int root, const std::array<int, R::n_peers>& peers) {
@@ -512,9 +512,9 @@ public:
       int src, int root, int world, size_t nelems, char *msg = nullptr) {
     if (!valid_peers(src, root, remote_info.peers))
       throw std::logic_error("Invalid transmit pattern!");
-    auto local_y = n_peers + 1;
-    auto local_x = 2 * sub_group_size;
-    auto local_sz = local_y * local_x;
+    size_t local_y = n_peers + 1;
+    size_t local_x = 2 * sub_group_size;
+    size_t local_sz = local_y * local_x;
 
     size_t data_groups = (nelems/v_T::size() + local_sz - 1) / local_sz;
     size_t group_size = std::min(data_groups, hw_groups);
@@ -524,14 +524,14 @@ public:
     if (msg != nullptr) {
       snprintf(msg, 2048,
           "Launch transmit from %d on rank %d: (%ld, %ld)x(%ld, %ld)\n",
-          src, root, 1, global_x, local_y, local_x);
+          src, root, global_y, global_x, local_y, local_x);
     }
 
     auto queue = currentQueue(root/2, root & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
-          sycl::nd_range<2>({1, global_x}, {local_y, local_x}),
-          xelink_route(peers, std::move(remote_info), src, root, world, buf_sz, nelems));
+          sycl::nd_range<2>({global_y, global_x}, {local_y, local_x}),
+          xelink_route(peers, std::move(remote_info), src, root, world, nelems));
     });
 
     return e;
@@ -678,7 +678,7 @@ int main(int argc, char* argv[]) {
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
-  auto sources = commandlist_to_vector(parsed_opts["source"].as<std::string>());
+  auto sources = commalist_to_vector(parsed_opts["source"].as<std::string>());
   auto roots = commalist_to_vector(parsed_opts["root"].as<std::string>());
   auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
 
