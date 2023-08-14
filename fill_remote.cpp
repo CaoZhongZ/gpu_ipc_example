@@ -485,11 +485,16 @@ public:
     : root(root),
     source(reinterpret_cast<v_T *>(peer_ptrs[src])),
     nelems(nelems)/*, cout(s)*/ {
-#   pragma unroll (n_peers)
-    for (int f = 0; f < n_peers; ++ f) {
-      auto remote = remote_info.peers[f]; // can't be root
-      // access different position
-      peers[f] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
+
+    std::sort(remote_info.peers.begin(), remote_info.peers.end());
+    auto it = std::find_if(
+        remote_info.peers.begin(), remote_info.peers.end(),
+        [&](int peer) {return peer > root;});
+    peers[it - remote_info.peers.begin()] = peer_ptrs[root];
+
+    for (int f = 0; f < n_peers; ++f) {
+      auto remote = remote_info.peers[f];
+      peers[f + (remote > root)] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
     }
   }
 
@@ -538,7 +543,7 @@ public:
   }
 
 private:
-  v_T *peers[n_peers];
+  v_T *peers[n_peers + 1]; // including the root
   int root;
   v_T *source;
 
