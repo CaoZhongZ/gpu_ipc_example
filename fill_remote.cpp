@@ -490,7 +490,7 @@ public:
     auto it = std::find_if(
         remote_info.peers.begin(), remote_info.peers.end(),
         [&](int peer) {return peer > root;});
-    peers[it - remote_info.peers.begin()] = peer_ptrs[root];
+    peers[it - remote_info.peers.begin()] = reinterpret_cast<v_T *>(peer_ptrs[root]);
 
     for (int f = 0; f < n_peers; ++f) {
       auto remote = remote_info.peers[f];
