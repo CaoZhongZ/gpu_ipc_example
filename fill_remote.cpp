@@ -477,12 +477,15 @@ struct route_nsect_bcast {
   static inline void run(
       sycl::nd_item<2> pos,
       T* source, int root, T *const peers[fanout], size_t nelems) {
-    auto y = pos.get_global_id(0);
+    auto y = pos.get_local_id(0);
     auto* dest = peers[y];
-    auto rank_off = 0; //y * pos.get_local_range(1) * sizeof(T);
-    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1);
+    auto rank_off = 0;
 
-    for (auto off = pos.get_global_linear_id();
+    auto group_stride = pos.get_local_range(0) * pos.get_local_range(1) * sizeof(T);
+    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1) * sizeof(T);
+    auto off = group_stride * pos.get_group(1) + pos.get_local_id(1);
+
+    for (;
         off < nelems;
         off += step_stride) {
       dest[off + rank_off] = source[off];
