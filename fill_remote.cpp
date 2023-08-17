@@ -449,7 +449,7 @@ private:
 };
 
 template <typename T, int fanout>
-struct route_sequential_nsect_bcast {
+struct route_contiguous_scatter {
   //
   // group y dimension is same with fanout
   //
@@ -459,7 +459,7 @@ struct route_sequential_nsect_bcast {
     auto y = pos.get_local_id(0);
     auto* dest = peers[y];
     auto rank_off = 0;
-    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1);
+    auto step_stride = pos.get_global_range().size();
 
     for (auto off = pos.get_global_linear_id();
         off < nelems;
@@ -470,7 +470,7 @@ struct route_sequential_nsect_bcast {
 };
 
 template <typename T, int fanout>
-struct route_nsect_bcast {
+struct route_alternate_scatter {
   //
   // group y dimension is same with fanout
   //
@@ -479,9 +479,9 @@ struct route_nsect_bcast {
       T* source, int root, T *const peers[fanout], size_t nelems) {
     auto* dest = peers[pos.get_local_id(0)];
 
-    auto group_stride = pos.get_local_range(1) * pos.get_local_range(0);
-    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1);
+    auto group_stride = pos.get_local_range().size();
     auto off = group_stride * pos.get_group(1) + pos.get_local_linear_id();
+    auto step_stride = pos.get_global_range().size();
 
     for (;
         off < nelems;
@@ -802,14 +802,14 @@ int main(int argc, char* argv[]) {
 
     std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
 
-    auto e = launch<xelink_route, test_type, v_lane, route_nsect_bcast>(
+    auto e = launch<xelink_route, test_type, v_lane, route_alternate_scatter>(
         peer_ptrs, sub_ranks, source, rank, world, nelems, check_msg);
     r_print(check_msg, rank, world);
 
     double b = 0.0;
 
     for (int i = 0; i < repeat; ++ i) {
-      auto e = launch<xelink_route, test_type, v_lane, route_nsect_bcast>(
+      auto e = launch<xelink_route, test_type, v_lane, route_alternate_scatter>(
           peer_ptrs, sub_ranks, source, rank, world, nelems);
       b = bandwidth_from_event<test_type>(e, nelems);
     }
