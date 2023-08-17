@@ -449,25 +449,43 @@ private:
 };
 
 template <typename T, int fanout>
-struct route_nsect_bcast {
+struct route_sequential_nsect_bcast {
   //
-  // group number is same with fanout
+  // group y dimension is same with fanout
   //
   static inline void run(
       sycl::nd_item<2> pos,
-      T* source, int root, T *const peers[fanout], size_t step) {
+      T* source, int root, T *const peers[fanout], size_t nelems) {
     auto y = pos.get_local_id(0);
     auto* dest = peers[y];
-    auto next = (root + y) % (fanout + 1);
-    auto read_width = pos.get_local_range(1) * sizeof(T);
-    auto group_rank_offset = next * read_width;
+    auto rank_off = 0; //y * pos.get_local_range(1) * sizeof(T);
+    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1);
 
-    for (
-        auto off = pos.get_global_linear_id();
-        off < step;
-        off += pos.get_global_range(0) * pos.get_global_range(1)
-    ) {
-      dest[off + group_rank_offset] = source[off];
+    for (auto off = pos.get_global_linear_id();
+        off < nelems;
+        off += step_stride) {
+      dest[off + rank_off] = source[off];
+    }
+  }
+};
+
+template <typename T, int fanout>
+struct route_nsect_bcast {
+  //
+  // group y dimension is same with fanout
+  //
+  static inline void run(
+      sycl::nd_item<2> pos,
+      T* source, int root, T *const peers[fanout], size_t nelems) {
+    auto y = pos.get_global_id(0);
+    auto* dest = peers[y];
+    auto rank_off = 0; //y * pos.get_local_range(1) * sizeof(T);
+    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1);
+
+    for (auto off = pos.get_global_linear_id();
+        off < nelems;
+        off += step_stride) {
+      dest[off + rank_off] = source[off];
     }
   }
 };
@@ -645,6 +663,18 @@ void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int ran
       host_buf[alloc_size * 7 / sizeof(uint32_t)], host_buf[alloc_size * 8/ sizeof(uint32_t) -1]);
 }
 
+void peek_slice(char *check_msg, uint32_t* host_buf, size_t slice_size, int rank, int world) {
+  auto offset = snprintf(check_msg, 2048,
+      "\nRank %d Peek: %#x, %#x, ..., %#x, %#x",
+      rank,
+      host_buf[0], host_buf[1],
+      host_buf[slice_size -2], host_buf[slice_size -1]);
+  snprintf(check_msg + offset, 2048 - offset,
+      "; %#x, %#x, ..., %#x, %#x\n",
+      host_buf[slice_size], host_buf[slice_size + 1],
+      host_buf[2 * slice_size-2], host_buf[2*slice_size-1]);
+}
+
 void fill_sequential(void *p, int rank, size_t size) {
   auto sz_int = size / sizeof(int);
 
@@ -678,6 +708,7 @@ int main(int argc, char* argv[]) {
     ("s,source", "Data source", cxxopts::value<std::string>()->default_value("1"))
     ("r,root", "Root of send", cxxopts::value<std::string>()->default_value("0"))
     ("d,dst", "Destinatino of send", cxxopts::value<std::string>()->default_value("1"))
+    ("m,split", "Split position of transfer", cxxopts::value<size_t>()->default_value("128"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -686,6 +717,7 @@ int main(int argc, char* argv[]) {
   auto sources = commalist_to_vector(parsed_opts["source"].as<std::string>());
   auto roots = commalist_to_vector(parsed_opts["root"].as<std::string>());
   auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
+  auto split = parsed_opts["split"].as<size_t>();
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -741,7 +773,8 @@ int main(int argc, char* argv[]) {
   void* buffer = sycl::malloc_device(alloc_size * world, queue);
   void* b_host = sycl::malloc_host(alloc_size * world, queue);
 
-  fill_random(b_host, rank, alloc_size * world);
+  if (rank == 1)
+    fill_sequential(b_host, rank, alloc_size * world);
   queue.memcpy(buffer, b_host, alloc_size * world);
   queue.wait();
 
@@ -796,7 +829,7 @@ int main(int argc, char* argv[]) {
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size * world, dma_buf);
 
-  peek_buffer(check_msg, host_buf, alloc_size, rank, world);
+  peek_slice(check_msg, host_buf, split, rank, world);
   r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
