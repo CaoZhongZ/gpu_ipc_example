@@ -458,7 +458,7 @@ struct route_sequential_nsect_bcast {
       T* source, int root, T *const peers[fanout], size_t nelems) {
     auto y = pos.get_local_id(0);
     auto* dest = peers[y];
-    auto rank_off = 0; //y * pos.get_local_range(1) * sizeof(T);
+    auto rank_off = 0;
     auto step_stride = pos.get_global_range(0) * pos.get_global_range(1);
 
     for (auto off = pos.get_global_linear_id();
@@ -477,18 +477,16 @@ struct route_nsect_bcast {
   static inline void run(
       sycl::nd_item<2> pos,
       T* source, int root, T *const peers[fanout], size_t nelems) {
-    auto y = pos.get_local_id(0);
-    auto* dest = peers[y];
-    auto rank_off = 0;
+    auto* dest = peers[pos.get_local_id(0)];
 
-    auto group_stride = pos.get_local_range(0) * pos.get_local_range(1) * sizeof(T);
-    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1) * sizeof(T);
-    auto off = group_stride * pos.get_group(1) + pos.get_local_id(1);
+    auto group_stride = pos.get_local_range(1) * pos.get_local_range(0);
+    auto step_stride = pos.get_global_range(0) * pos.get_global_range(1);
+    auto off = group_stride * pos.get_group(1) + pos.get_local_linear_id();
 
     for (;
         off < nelems;
         off += step_stride) {
-      dest[off + rank_off] = source[off];
+      dest[off] = source[off];
     }
   }
 };
@@ -777,7 +775,7 @@ int main(int argc, char* argv[]) {
   void* b_host = sycl::malloc_host(alloc_size * world, queue);
 
   if (rank == 1)
-    fill_sequential(b_host, rank, alloc_size * world);
+    fill_sequential(b_host, rank, alloc_size);
   queue.memcpy(buffer, b_host, alloc_size * world);
   queue.wait();
 
