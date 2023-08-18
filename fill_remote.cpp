@@ -455,10 +455,10 @@ struct route_contiguous_scatter {
   //
   static inline void run(
       sycl::nd_item<2> pos,
-      T* source, int root, T *const peers[fanout], size_t nelems) {
+      T* source, int slot, T *const peers[fanout], size_t nelems) {
     auto y = pos.get_local_id(0);
     auto* dest = peers[y];
-    auto rank_off = 0;
+    auto rank_off = slot * pos.get_local_range(1);
     auto step_stride = pos.get_global_range().size();
 
     for (auto off = pos.get_global_linear_id();
@@ -476,17 +476,18 @@ struct route_alternate_scatter {
   //
   static inline void run(
       sycl::nd_item<2> pos,
-      T* source, int root, T *const peers[fanout], size_t nelems) {
+      T* source, int slot, T *const peers[fanout], size_t nelems) {
     auto* dest = peers[pos.get_local_id(0)];
 
     auto group_stride = pos.get_local_range().size();
     auto off = group_stride * pos.get_group(1) + pos.get_local_linear_id();
     auto step_stride = pos.get_global_range().size();
+    auto root_off = slot * pos.get_local_range(1);
 
     for (;
         off < nelems;
         off += step_stride) {
-      dest[off] = source[off];
+      dest[off + root_off] = source[off];
     }
   }
 };
@@ -496,7 +497,7 @@ struct xelink_route {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   static constexpr int n_peers = R::n_peers;
   static constexpr size_t hw_groups = 512;
-  static constexpr size_t sub_group_size = 32;
+  static constexpr size_t sub_group_size = 16;
 
 public:
   xelink_route(void *peer_ptrs[], R&& remote_info,
@@ -517,8 +518,8 @@ public:
     }
   }
 
-  void operator() (sycl::nd_item<2> pos) const {
-    route_policy<v_T, n_peers>::run(pos, source, root, peers, nelems/v_T::size());
+  void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (sycl::nd_item<2> pos) const {
+    route_policy<v_T, n_peers>::run(pos, source, root/2, peers, nelems/v_T::size());
   }
 
   static bool valid_peers(int src, int root, const std::array<int, R::n_peers>& peers) {
