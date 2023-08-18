@@ -802,10 +802,11 @@ int main(int argc, char* argv[]) {
   void* buffer = sycl::malloc_device(alloc_size * world, queue);
   void* b_host = sycl::malloc_host(alloc_size * world, queue);
 
+  char check_msg[2048];
   auto it = std::find(roots.begin(), roots.end(), rank);
   fill_sequential<test_type>(b_host, rank, alloc_size);
 
-  peek_slice<test_type>(check_msg, b_host, split, rank, world);
+  peek_slice<test_type>(check_msg, (test_type *)b_host, split, rank, world);
   r_print(check_msg, rank, world);
 
   queue.memcpy(buffer, b_host, alloc_size * world);
@@ -821,7 +822,6 @@ int main(int argc, char* argv[]) {
     peer_ptrs[i] = (char *)peer_bases[i] + offsets[i];
   }
 
-  char check_msg[2048];
 
   if ( it != std::end(roots) ) {
     // chop dst_ranks among roots
