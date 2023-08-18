@@ -805,6 +805,9 @@ int main(int argc, char* argv[]) {
   auto it = std::find(roots.begin(), roots.end(), rank);
   fill_sequential<test_type>(b_host, rank, alloc_size);
 
+  peek_slice<test_type>(check_msg, b_host, split, rank, world);
+  r_print(check_msg, rank, world);
+
   queue.memcpy(buffer, b_host, alloc_size * world);
   queue.wait();
 
