@@ -692,12 +692,12 @@ void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int ran
 template <typename T>
 void peek_slice(char *check_msg, T* host_buf, size_t slice_size, int rank, int world) {
   auto offset = snprintf(check_msg, 2048,
-      "\nRank %d Peek: %#x, %#x, ..., %#x, %#x",
+      "\nRank %d Peek: %.2f, %.2f, ..., %.2f, %.2f",
       rank,
       (float)host_buf[0], (float)host_buf[1],
       (float)host_buf[slice_size -2], (float)host_buf[slice_size -1]);
   snprintf(check_msg + offset, 2048 - offset,
-      "; %#x, %#x, ..., %#x, %#x\n",
+      "; %.2f, %.2f, ..., %.2f, %.2f\n",
       (float)host_buf[slice_size], (float)host_buf[slice_size + 1],
       (float)host_buf[2 * slice_size-2], (float)host_buf[2*slice_size-1]);
 }
@@ -705,9 +705,10 @@ void peek_slice(char *check_msg, T* host_buf, size_t slice_size, int rank, int w
 template <typename T>
 void fill_sequential(void *p, int rank, size_t size) {
   auto typed_sz = size / sizeof(T);
+  auto *p_t = reinterpret_cast<T *>(p);
 
   for (size_t i = 0; i < typed_sz; ++ i) {
-    ((uint32_t *)p)[i] = i + rank;
+    p_t[i] = i + rank;
   }
 }
 
