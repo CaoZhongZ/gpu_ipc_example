@@ -455,7 +455,7 @@ struct route_contiguous_scatter {
   //
   static inline void run(
       sycl::nd_item<2> pos,
-      T* source, int slot, T *const peers[fanout], size_t nelems) {
+      T* source, int slot, T* local, T *const peers[fanout], size_t nelems) {
     auto y = pos.get_local_id(0);
     auto* dest = peers[y];
     auto rank_off = slot * pos.get_local_range(1);
@@ -476,7 +476,7 @@ struct route_alternate_scatter {
   //
   static inline void run(
       sycl::nd_item<2> pos,
-      T* source, int slot, T *const peers[fanout], size_t nelems) {
+      T* source, int slot, T* local, T *const peers[fanout], size_t nelems) {
     auto* dest = peers[pos.get_local_id(0)];
 
     auto group_stride = pos.get_local_range().size();
@@ -492,6 +492,29 @@ struct route_alternate_scatter {
   }
 };
 
+template <typename T, int fanout>
+struct route_alternate_reduce_scatter {
+  //
+  // group y dimension is same with fanout
+  //
+  static inline void run(
+      sycl::nd_item<2> pos,
+      T* source, int slot, T* local, T *const peers[fanout], size_t nelems) {
+    auto* dest = peers[pos.get_local_id(0)];
+
+    auto group_stride = pos.get_local_range().size();
+    auto off = group_stride * pos.get_group(1) + pos.get_local_linear_id();
+    auto step_stride = pos.get_global_range().size();
+    auto root_off = slot * pos.get_local_range(1);
+
+    for (;
+        off < nelems;
+        off += step_stride) {
+      dest[off + root_off] = source[off] + local[off];
+    }
+  }
+};
+
 template <typename T, int lane_v, typename R, template <typename, int> class route_policy>
 struct xelink_route {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
@@ -502,7 +525,7 @@ struct xelink_route {
 public:
   xelink_route(void *peer_ptrs[], R&& remote_info,
       int src, int root, int world, size_t nelems)
-    : root(root),
+    : root(root), local(reinterpret_cast<v_T *>(peer_ptrs[root])),
     source(reinterpret_cast<v_T *>(peer_ptrs[src])),
     nelems(nelems)/*, cout(s)*/ {
 
@@ -519,7 +542,7 @@ public:
   }
 
   void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (sycl::nd_item<2> pos) const {
-    route_policy<v_T, n_peers>::run(pos, source, root/2, peers, nelems/v_T::size());
+    route_policy<v_T, n_peers>::run(pos, source, root/2, local, peers, nelems/v_T::size());
   }
 
   static bool valid_peers(int src, int root, const std::array<int, R::n_peers>& peers) {
@@ -565,6 +588,7 @@ public:
 private:
   v_T *peers[n_peers + 1]; // including the root
   int root;
+  v_T *local;
   v_T *source;
 
   size_t nelems;
@@ -803,14 +827,14 @@ int main(int argc, char* argv[]) {
 
     std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
 
-    auto e = launch<xelink_route, test_type, v_lane, route_alternate_scatter>(
+    auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
         peer_ptrs, sub_ranks, source, rank, world, nelems, check_msg);
     r_print(check_msg, rank, world);
 
     double b = 0.0;
 
     for (int i = 0; i < repeat; ++ i) {
-      auto e = launch<xelink_route, test_type, v_lane, route_alternate_scatter>(
+      auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
           peer_ptrs, sub_ranks, source, rank, world, nelems);
       b = bandwidth_from_event<test_type>(e, nelems);
     }
