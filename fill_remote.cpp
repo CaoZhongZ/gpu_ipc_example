@@ -689,22 +689,24 @@ void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int ran
       host_buf[alloc_size * 7 / sizeof(uint32_t)], host_buf[alloc_size * 8/ sizeof(uint32_t) -1]);
 }
 
-void peek_slice(char *check_msg, uint32_t* host_buf, size_t slice_size, int rank, int world) {
+template <typename T>
+void peek_slice(char *check_msg, T* host_buf, size_t slice_size, int rank, int world) {
   auto offset = snprintf(check_msg, 2048,
       "\nRank %d Peek: %#x, %#x, ..., %#x, %#x",
       rank,
-      host_buf[0], host_buf[1],
-      host_buf[slice_size -2], host_buf[slice_size -1]);
+      (float)host_buf[0], (float)host_buf[1],
+      (float)host_buf[slice_size -2], (float)host_buf[slice_size -1]);
   snprintf(check_msg + offset, 2048 - offset,
       "; %#x, %#x, ..., %#x, %#x\n",
-      host_buf[slice_size], host_buf[slice_size + 1],
-      host_buf[2 * slice_size-2], host_buf[2*slice_size-1]);
+      (float)host_buf[slice_size], (float)host_buf[slice_size + 1],
+      (float)host_buf[2 * slice_size-2], (float)host_buf[2*slice_size-1]);
 }
 
+template <typename T>
 void fill_sequential(void *p, int rank, size_t size) {
-  auto sz_int = size / sizeof(int);
+  auto typed_sz = size / sizeof(T);
 
-  for (size_t i = 0; i < sz_int; ++ i) {
+  for (size_t i = 0; i < typed_sz; ++ i) {
     ((uint32_t *)p)[i] = i + rank;
   }
 }
@@ -799,8 +801,9 @@ int main(int argc, char* argv[]) {
   void* buffer = sycl::malloc_device(alloc_size * world, queue);
   void* b_host = sycl::malloc_host(alloc_size * world, queue);
 
-  if (rank == 1)
-    fill_sequential(b_host, rank, alloc_size);
+  auto it = std::find(roots.begin(), roots.end(), rank);
+  fill_sequential<test_type>(b_host, rank, alloc_size);
+
   queue.memcpy(buffer, b_host, alloc_size * world);
   queue.wait();
 
@@ -816,7 +819,6 @@ int main(int argc, char* argv[]) {
 
   char check_msg[2048];
 
-  auto it = std::find(roots.begin(), roots.end(), rank);
   if ( it != std::end(roots) ) {
     // chop dst_ranks among roots
     auto dst_sz = dst_ranks.size() / roots.size();
@@ -853,9 +855,9 @@ int main(int argc, char* argv[]) {
   // Or we map the device to host
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
-  uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size * world, dma_buf);
+  auto *host_buf = (test_type *)mmap_host(alloc_size * world, dma_buf);
 
-  peek_slice(check_msg, host_buf, split, rank, world);
+  peek_slice<test_type>(check_msg, host_buf, split, rank, world);
   r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
