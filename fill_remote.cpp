@@ -378,7 +378,7 @@ struct reduce_scatter_in_thread {
       }
 
 #     pragma unroll
-      for (int f = 0; f < fanout; ++ fan) {
+      for (int f = 0; f < fanout; ++ f) {
         peers[f][off + rank_off] = sum;
       }
     }
@@ -429,7 +429,7 @@ public:
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_gather(peers, std::move(remote_info), root, world, nelems));
+          xelink_transmit(peers, std::move(remote_info), root, world, nelems));
     });
 
     return e;
@@ -724,12 +724,12 @@ std::vector<int> bisect_ranks(int rank, int world) {
   std::vector<int> odd_ranks {1, 3, 5, 7};
   std::vector<int> peer_ranks;
 
-  it = std::find(even_ranks.begin(), even_ranks.end(), rank) != even_ranks.end()
+  auto it = std::find(even_ranks.begin(), even_ranks.end(), rank);
   if (it != even_ranks.end()) {
     even_ranks.erase(it);
     peer_ranks = even_ranks;
   } else {
-    it = std::find(odd_ranks.begin(), odd_ranks.end(), rank) != odd_ranks.end()
+    it = std::find(odd_ranks.begin(), odd_ranks.end(), rank);
     odd_ranks.erase(it);
     peer_ranks = odd_ranks;
   }
@@ -742,20 +742,21 @@ void adjust_bisect_pointers(
     void *new_ptrs[], void *peer_ptrs[], int rank, int world, size_t nelems) {
   if ( (rank % 2) != 0 ) {
     for (int i = 0; i < world; ++ i) {
-      auto *peer_ptr = reinterpret_cast<T *>(peer_ptrs[n_ranks]);
-      new_ptrs[n_ranks] = (void *)(peer_ptr + nelems/2);
+      auto *peer_ptr = reinterpret_cast<T *>(peer_ptrs[i]);
+      new_ptrs[i] = (void *)(peer_ptr + nelems/2);
     }
   }
 }
 
 template <typename T, int lane_v>
-void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems) {
+void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, int repeat) {
   auto peer_ranks = bisect_ranks(rank, world);
 
   void *new_ptrs[world];
   adjust_bisect_pointers<T>(new_ptrs, peer_ptrs, rank, world, nelems);
 
   auto source = rank ^ 0x1; // rank in same pair
+  char check_msg[2048];
 
   auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
       new_ptrs, peer_ranks, source, rank, world, nelems/2, check_msg);
@@ -767,28 +768,30 @@ void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems) 
   for (int i = 0; i < repeat; ++ i) {
     auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
         new_ptrs, peer_ranks, source, rank, world, nelems/2);
-    b = bandwidth_from_event<test_type>(e, nelems/2);
+    b = bandwidth_from_event<T>(e, nelems/2);
   }
   snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
-  r_rpint(check_msg, rank, world);
+  r_print(check_msg, rank, world);
 }
 
 template <typename T, int lane_v>
-void test_reduce_bcast(void *peer_ptrs[], int rank, int world, size_t nelems) {
+void test_reduce_bcast(void *peer_ptrs[], int rank, int world, size_t nelems, int repeat) {
   auto peer_ranks = bisect_ranks(rank, world);
 
   void *new_ptrs[world];
   adjust_bisect_pointers<T>(new_ptrs, peer_ptrs, rank, world, nelems/2);
-
+  char check_msg[2048];
   // Transfer data back to root
-  auto e = launch<xelink_transmit, T, lane_v, reduce_scatter_in_threads>(
+  auto e = launch<xelink_transmit, T, lane_v, reduce_scatter_in_thread>(
       new_ptrs, peer_ranks, rank, world, nelems, check_msg);
   r_print(check_msg, rank, world);
 
+  double b = 0.0;
+
   for (int i = 0; i < repeat; ++ i) {
     auto e = launch<xelink_transmit, T, lane_v, reduce_scatter_in_thread>(
-        new_ptrs, peer_ranks, source, rank, world, nelems/2);
-    b = bandwidth_from_event<test_type>(e, nelems/2);
+        new_ptrs, peer_ranks, rank, world, nelems/2);
+    b = bandwidth_from_event<T>(e, nelems/2);
   }
   snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
   r_print(check_msg, rank, world);
@@ -938,9 +941,9 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  test_reduce_scatter<test_type, v_lane>(peer_ptrs, rank, world, nelems);
+  test_reduce_scatter<test_type, v_lane>(peer_ptrs, rank, world, nelems, repeat);
   MPI_Barrier(MPI_COMM_WORLD);
-  test_reduce_bcast<test_type, v_lane>(peer_ptrs, rank, world, nelems);
+  test_reduce_bcast<test_type, v_lane>(peer_ptrs, rank, world, nelems, repeat);
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Clean up, close/put ipc handles, free memory, etc.
