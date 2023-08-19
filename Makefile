@@ -2,6 +2,7 @@ CC=clang
 CXX=clang++
 
 OPT=-O3 -fno-strict-aliasing
+# OPT=-g
 
 SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc -internal_options -ze-intel-has-buffer-offset-arg -internal_options -cl-intel-greater-than-4GB-buffer-required"
 CCL_ROOT=../ccl/release/_install

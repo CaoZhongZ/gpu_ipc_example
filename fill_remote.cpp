@@ -566,7 +566,7 @@ public:
 
     if (msg != nullptr) {
       snprintf(msg, 2048,
-          "Launch transmit from %d on rank %d: (%ld, %ld)x(%ld, %ld)\n",
+          "Launch route from %d on rank %d: (%ld, %ld)x(%ld, %ld)\n",
           src, root, global_y, global_x, local_y, local_x);
     }
 
@@ -661,7 +661,7 @@ void r_printf(int rank, int world, const char* fmt, ...) {
 
   va_list args;
   va_start(args, fmt);
-  snprintf(check_msg, msg_len, fmt, args);
+  snprintf(check_msg, sizeof(check_msg), fmt, args);
   va_end(args);
 
   r_print(check_msg, rank, world);
@@ -740,11 +740,12 @@ std::vector<int> bisect_ranks(int rank, int world) {
 template <typename T>
 void adjust_bisect_pointers(
     void *new_ptrs[], void *peer_ptrs[], int rank, int world, size_t nelems) {
-  if ( (rank % 2) != 0 ) {
-    for (int i = 0; i < world; ++ i) {
-      auto *peer_ptr = reinterpret_cast<T *>(peer_ptrs[i]);
+  for (int i = 0; i < world; ++ i) {
+    auto *peer_ptr = reinterpret_cast<T *>(peer_ptrs[i]);
+    if ( (rank % 2) != 0 )
       new_ptrs[i] = (void *)(peer_ptr + nelems/2);
-    }
+    else
+      new_ptrs[i] = (void *)peer_ptr;
   }
 }
 
@@ -753,10 +754,15 @@ void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, 
   auto peer_ranks = bisect_ranks(rank, world);
 
   void *new_ptrs[world];
+
   adjust_bisect_pointers<T>(new_ptrs, peer_ptrs, rank, world, nelems);
+  char check_msg[2048];
+  snprintf(check_msg, sizeof(check_msg), "%p, %p, %p, %p, %p, %p, %p, %p\n",
+      new_ptrs[0], new_ptrs[1], new_ptrs[2], new_ptrs[3],
+      new_ptrs[4], new_ptrs[5], new_ptrs[6], new_ptrs[7]);
+  r_print(check_msg, rank, world);
 
   auto source = rank ^ 0x1; // rank in same pair
-  char check_msg[2048];
 
   auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
       new_ptrs, peer_ranks, source, rank, world, nelems/2, check_msg);
@@ -770,7 +776,7 @@ void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, 
         new_ptrs, peer_ranks, source, rank, world, nelems/2);
     b = bandwidth_from_event<T>(e, nelems/2);
   }
-  snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
+  snprintf(check_msg, msg_len, "Rank %d scatter bandwidth: %fGB/s\n", rank, b);
   r_print(check_msg, rank, world);
 }
 
@@ -793,7 +799,7 @@ void test_reduce_bcast(void *peer_ptrs[], int rank, int world, size_t nelems, in
         new_ptrs, peer_ranks, rank, world, nelems/2);
     b = bandwidth_from_event<T>(e, nelems/2);
   }
-  snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
+  snprintf(check_msg, msg_len, "Rank %d broadcast bandwidth: %fGB/s\n", rank, b);
   r_print(check_msg, rank, world);
 }
 
@@ -876,7 +882,7 @@ int main(int argc, char* argv[]) {
   void* b_host = sycl::malloc_host(alloc_size * world, queue);
 
   char check_msg[2048];
-  auto it = std::find(roots.begin(), roots.end(), rank);
+  // auto it = std::find(roots.begin(), roots.end(), rank);
   fill_sequential<test_type>(b_host, rank, alloc_size);
 
   peek_slice<test_type>(check_msg, (test_type *)b_host, split, rank, world);
@@ -895,49 +901,45 @@ int main(int argc, char* argv[]) {
     peer_ptrs[i] = (char *)peer_bases[i] + offsets[i];
   }
 
-  if ( it != std::end(roots) ) {
-    // chop dst_ranks among roots
-    auto dst_sz = dst_ranks.size() / roots.size();
-    auto index = (it - roots.begin());
-    auto source = sources[index];
-    auto rank_start = index * dst_sz;
-    auto rank_end = rank_start + dst_sz;
-
-    std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
-
-    auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
-        peer_ptrs, sub_ranks, source, rank, world, nelems, check_msg);
-    r_print(check_msg, rank, world);
-
-    double b = 0.0;
-
-    for (int i = 0; i < repeat; ++ i) {
-      auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
-          peer_ptrs, sub_ranks, source, rank, world, nelems);
-      b = bandwidth_from_event<test_type>(e, nelems);
-    }
-    snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
-  } else {
-    check_msg[0] = '\0';
-    r_print(check_msg, rank, world);
-  }
-
-  r_print(check_msg, rank, world);
+//  if ( it != std::end(roots) ) {
+//    // chop dst_ranks among roots
+//    auto dst_sz = dst_ranks.size() / roots.size();
+//    auto index = (it - roots.begin());
+//    auto source = sources[index];
+//    auto rank_start = index * dst_sz;
+//    auto rank_end = rank_start + dst_sz;
+//
+//    std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
+//
+//    auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
+//        peer_ptrs, sub_ranks, source, rank, world, nelems, check_msg);
+//    r_print(check_msg, rank, world);
+//
+//    double b = 0.0;
+//
+//    for (int i = 0; i < repeat; ++ i) {
+//      auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
+//          peer_ptrs, sub_ranks, source, rank, world, nelems);
+//      b = bandwidth_from_event<test_type>(e, nelems);
+//    }
+//    snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
+//  } else {
+//    check_msg[0] = '\0';
+//    r_print(check_msg, rank, world);
+//  }
+//
+//  r_print(check_msg, rank, world);
 
   // avoid race condition
   MPI_Barrier(MPI_COMM_WORLD);
-
-  std::vector<int> even_ranks {0, 2, 4, 6};
-  std::vector<int> odd_ranks {1, 3, 5, 7};
-  std::vector<int> peer_ranks;
 
   // Or we map the device to host
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   auto *host_buf = (test_type *)mmap_host(alloc_size * world, dma_buf);
 
-  peek_slice<test_type>(check_msg, host_buf, split, rank, world);
-  r_print(check_msg, rank, world);
+//  peek_slice<test_type>(check_msg, host_buf, split, rank, world);
+//  r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
