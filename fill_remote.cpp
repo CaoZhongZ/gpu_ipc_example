@@ -767,7 +767,7 @@ void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, 
   auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
       new_ptrs, peer_ranks, source, rank, world, nelems/2, check_msg);
 
-  r_print(check_msg, rank, world);
+  // r_print(check_msg, rank, world);
 
   double b = 0.0;
 
@@ -776,7 +776,7 @@ void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, 
         new_ptrs, peer_ranks, source, rank, world, nelems/2);
     b = bandwidth_from_event<T>(e, nelems/2);
   }
-  snprintf(check_msg, msg_len, "Rank %d scatter bandwidth: %fGB/s\n", rank, b);
+  snprintf(check_msg, sizeof(check_msg), "Rank %d scatter bandwidth: %fGB/s\n", rank, b);
   r_print(check_msg, rank, world);
 }
 
