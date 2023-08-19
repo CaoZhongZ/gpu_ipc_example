@@ -1,5 +1,5 @@
-CC=icx
-CXX=icpx
+CC=clang
+CXX=clang++
 
 OPT=-O3 -fno-strict-aliasing
 
