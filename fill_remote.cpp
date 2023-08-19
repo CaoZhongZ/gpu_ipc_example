@@ -165,126 +165,11 @@ bool checkResults(T *ptr, T c, size_t count) {
   return true;
 }
 
-template <typename T, int lane_v, int fanout=1>
-struct xelink_send {
-  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
-  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
-  static constexpr size_t hw_groups = 512;
-  static constexpr size_t local_size = 128;
-
-public:
-  xelink_send(
-      void *peers[], int remote, int rank, int world, size_t buf_stride, size_t nelems/*, sycl::stream s*/)
-    : peer(reinterpret_cast<v_T *>((char *)peers[remote] + buf_stride * rank))
-      , local(reinterpret_cast<v_T *>((char *)peers[rank] + buf_stride * rank))
-      , nelems(nelems)/*, cout(s)*/ {}
-
-  void operator() (sycl::nd_item<1> pos) const {
-    for (size_t i = pos.get_global_id(0); i < nelems/v_T::size(); i += pos.get_global_range(0))
-      peer[i] = local[i];
-  }
-
-  static bool valid_peers(int root, const std::vector<int>& peers) {
-    return root != peers[0];
-  }
-
-  static sycl::event launch(
-      void* peer_ptrs[], int remote, int root, int world, size_t buf_stride, size_t nelems, char* msg = nullptr) {
-    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
-    size_t group_size = std::min(data_groups, hw_groups);
-
-    auto global_size = group_size * local_size;
-    auto queue = currentQueue(root/2, root & 1);
-
-    if (msg)
-      snprintf(msg, msg_len,
-          "Launch_send_from %d to %d (%ld, %ld)\n", root, remote, group_size, local_size);
-    auto e = queue.submit([&](sycl::handler &cgh) {
-      cgh.parallel_for(
-          sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_send(peer_ptrs, remote, root, world, buf_stride, nelems));
-    });
-    return e;
-  }
-
-private:
-  v_T *peer;
-  v_T *local;
-  size_t nelems;
-  // sycl::stream cout;
-};
-
 template <int F> struct remote_info {
   static constexpr int n_peers = F;
   std::array<int, F> peers;
 
   remote_info(const std::array<int, F>& peer_list) : peers(peer_list) {}
-};
-
-template <typename T, int fanout>
-struct fanout_in_thread {
-  // the const is because peers are from const 'this' pointer.
-  static inline void run(sycl::nd_item<1> pos, T *const peers[fanout], T value, size_t off) {
-#   pragma unroll (fanout)
-    for (int f = 0; f < fanout; ++ f) {
-      peers[f][off] = value;
-    }
-  }
-};
-
-// strategy 1, fanout in thread
-template <typename T, int lane_v, typename R, template <typename, int> class fanout_policy>
-struct xelink_bcast {
-  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
-  static constexpr int fanout = R::n_peers;
-  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
-  static constexpr size_t hw_groups = 512;
-  static constexpr size_t local_size = 128;
-
-public:
-  xelink_bcast(void *peer_ptrs[], R&& remote_info,
-      int root, int world, size_t nelems/*, sycl::stream s*/)
-    : local(reinterpret_cast<v_T *>(peer_ptrs[root])), nelems(nelems)/*, cout(s)*/ {
-#   pragma unroll (fanout)
-    for (int f = 0; f < fanout; ++ f) {
-      auto remote = remote_info.peers[f]; // can't be root
-      peers[f] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
-    }
-  }
-
-  void operator() (sycl::nd_item<1> pos) const {
-    for (size_t off = pos.get_global_id(0);
-        off < nelems/v_T::size(); off += pos.get_global_range(0)) {
-      fanout_policy<v_T, fanout>::run(pos, peers, local[off], off);
-    }
-  }
-
-  static bool valid_peers(int root, const std::array<int, fanout>& peers) {
-    auto it = std::find(peers.begin(), peers.end(), root);
-    return it == peers.end();
-  }
-
-  static sycl::event launch(void* peers[], R&& remote_info,
-      int root, int world, size_t nelems, char * msg = nullptr) {
-    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
-    size_t group_size = std::min(data_groups, hw_groups);
-    size_t global_size = group_size * local_size;
-
-    auto queue = currentQueue(root/2, root & 1);
-    auto e = queue.submit([&](sycl::handler &cgh) {
-      cgh.parallel_for(
-          sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_bcast(peers, std::move(remote_info), root, world, nelems));
-    });
-
-    return e;
-  }
-
-private:
-  v_T *peers[fanout];
-  v_T *local;
-  size_t nelems;
-  // sycl::stream cout;
 };
 
 template <typename T, int fanout>
@@ -428,7 +313,7 @@ public:
     if (msg != nullptr) {
       snprintf(msg, 2048,
           "Launch bcast on rank %d: (%ld, %ld)x(%ld, %ld)\n",
-          root, 1, global_size, 1, local_size);
+          root, (size_t)1, global_size, (size_t)1, local_size);
     }
 
     auto queue = currentQueue(root/2, root & 1);
@@ -773,7 +658,7 @@ void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, 
   auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
       new_ptrs, peer_ranks, source, rank, world, nelems/2, check_msg);
 
-  // r_print(check_msg, rank, world);
+  r_print(check_msg, rank, world);
 
   double b = 0.0;
 
