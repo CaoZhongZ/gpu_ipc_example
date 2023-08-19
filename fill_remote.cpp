@@ -719,6 +719,81 @@ void fill_random(void *p, int rank, size_t size) {
   }
 }
 
+std::vector<int> bisect_ranks(int rank, int world) {
+  std::vector<int> even_ranks {0, 2, 4, 6};
+  std::vector<int> odd_ranks {1, 3, 5, 7};
+  std::vector<int> peer_ranks;
+
+  it = std::find(even_ranks.begin(), even_ranks.end(), rank) != even_ranks.end()
+  if (it != even_ranks.end()) {
+    even_ranks.erase(it);
+    peer_ranks = even_ranks;
+  } else {
+    it = std::find(odd_ranks.begin(), odd_ranks.end(), rank) != odd_ranks.end()
+    odd_ranks.erase(it);
+    peer_ranks = odd_ranks;
+  }
+
+  return peer_ranks;
+}
+
+template <typename T>
+void adjust_bisect_pointers(
+    void *new_ptrs[], void *peer_ptrs[], int rank, int world, size_t nelems) {
+  if ( (rank % 2) != 0 ) {
+    for (int i = 0; i < world; ++ i) {
+      auto *peer_ptr = reinterpret_cast<T *>(peer_ptrs[n_ranks]);
+      new_ptrs[n_ranks] = (void *)(peer_ptr + nelems/2);
+    }
+  }
+}
+
+template <typename T, int lane_v>
+void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems) {
+  auto peer_ranks = bisect_ranks(rank, world);
+
+  void *new_ptrs[world];
+  adjust_bisect_pointers<T>(new_ptrs, peer_ptrs, rank, world, nelems);
+
+  auto source = rank ^ 0x1; // rank in same pair
+
+  auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
+      new_ptrs, peer_ranks, source, rank, world, nelems/2, check_msg);
+
+  r_print(check_msg, rank, world);
+
+  double b = 0.0;
+
+  for (int i = 0; i < repeat; ++ i) {
+    auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
+        new_ptrs, peer_ranks, source, rank, world, nelems/2);
+    b = bandwidth_from_event<test_type>(e, nelems/2);
+  }
+  snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
+  r_rpint(check_msg, rank, world);
+}
+
+template <typename T, int lane_v>
+void test_reduce_bcast(void *peer_ptrs[], int rank, int world, size_t nelems) {
+  auto peer_ranks = bisect_ranks(rank, world);
+
+  void *new_ptrs[world];
+  adjust_bisect_pointers<T>(new_ptrs, peer_ptrs, rank, world, nelems/2);
+
+  // Transfer data back to root
+  auto e = launch<xelink_transmit, T, lane_v, reduce_scatter_in_threads>(
+      new_ptrs, peer_ranks, rank, world, nelems, check_msg);
+  r_print(check_msg, rank, world);
+
+  for (int i = 0; i < repeat; ++ i) {
+    auto e = launch<xelink_transmit, T, lane_v, reduce_scatter_in_thread>(
+        new_ptrs, peer_ranks, source, rank, world, nelems/2);
+    b = bandwidth_from_event<test_type>(e, nelems/2);
+  }
+  snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
+  r_print(check_msg, rank, world);
+}
+
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -853,31 +928,6 @@ int main(int argc, char* argv[]) {
   std::vector<int> odd_ranks {1, 3, 5, 7};
   std::vector<int> peer_ranks;
 
-  it = std::find(even_ranks.begin(), even_ranks.end(), rank) != even_ranks.end()
-  if (it != even_ranks.end()) {
-    even_ranks.erase(it);
-    peer_ranks = even_ranks;
-  } else {
-    it = std::find(odd_ranks.begin(), odd_ranks.end(), rank) != odd_ranks.end()
-    if (it != odd_ranks.end()) {
-      odd_ranks.erase(it);
-      peer_ranks = odd_ranks;
-    }
-  }
-
-  // Transfer data back to root
-  auto e = launch<xelink_transmit, test_type, v_lane, reduce_scatter_in_threads>(
-      peer_ptrs, peer_ranks, source, rank, world, nelems, check_msg);
-  r_print(check_msg, rank, world);
-
-  for (int i = 0; i < repeat; ++ i) {
-    auto e = launch<xelink_transmit, test_type, v_lane, reduce_scatter_in_thread>(
-        peer_ptrs, peer_ranks, source, rank, world, nelems);
-    b = bandwidth_from_event<test_type>(e, nelems);
-  }
-  snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
-  r_print(check_msg, rank, world);
-
   // Or we map the device to host
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
@@ -886,6 +936,11 @@ int main(int argc, char* argv[]) {
   peek_slice<test_type>(check_msg, host_buf, split, rank, world);
   r_print(check_msg, rank, world);
 
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  test_reduce_scatter<test_type, v_lane>(peer_ptrs, rank, world, nelems);
+  MPI_Barrier(MPI_COMM_WORLD);
+  test_reduce_bcast<test_type, v_lane>(peer_ptrs, rank, world, nelems);
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Clean up, close/put ipc handles, free memory, etc.
