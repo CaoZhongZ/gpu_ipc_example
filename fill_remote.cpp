@@ -360,30 +360,27 @@ private:
   // sycl::stream cout;
 };
 
-template <typename T, int fanout>
-struct scatter_in_thread {
-  // the const is because peers are from const 'this' pointer.
-  static inline void run(sycl::nd_item<1> pos, T* local, T *const peers[fanout], size_t stride, size_t off) {
-    // alignment should be managed by user on host
-    auto stride_in_type = stride / sizeof(T);
+template <typename T, int fanout/*, int bisect = 2*/>
+struct reduce_scatter_in_thread {
+  static constexpr int bisect = 2;
 
-#   pragma unroll (fanout)
-    for (int f = 0; f < fanout; ++ f) {
-      peers[f][off] = (local + stride_in_type * f)[off];
-    }
-  }
-};
+  static inline void run(sycl::nd_item<1> pos,
+      T* local, T *const peers[fanout], int rank, size_t nelems) {
+    auto n_blocks = nelems / (fanout + 1);
+    auto rank_off = pos.get_local_range().size() * rank/bisect;
 
-template <typename T, int fanout>
-struct gather_in_thread {
-  // the const is because peers are from const 'this' pointer.
-  static inline void run(sycl::nd_item<1> pos, T* local, T *const peers[fanout], size_t stride, size_t off) {
-    // alignment should be managed by user on host
-    auto stride_in_type = stride / sizeof(T);
+    for (size_t off = pos.get_global_id(0);
+        off < n_blocks; off += pos.get_global_range(0)) {
+      T sum = local[off];
+#     pragma unroll
+      for (int b = 0; b < fanout; ++ b) {
+        sum += local[off + b + 1];
+      }
 
-#   pragma unroll (fanout)
-    for (int f = 0; f < fanout; ++ f) {
-      (local + stride_in_type * f)[off] = peers[f][off];
+#     pragma unroll
+      for (int f = 0; f < fanout; ++ fan) {
+        peers[f][off + rank_off] = sum;
+      }
     }
   }
 };
@@ -392,28 +389,25 @@ template <typename T, int lane_v, typename R, template <typename, int> class fan
 struct xelink_transmit {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   static constexpr int n_peers = R::n_peers;
-  // 64 SS * 8 threads, each with 16(sub-groups) * 8(eu) SIMD lanes
-  static constexpr size_t hw_groups = 512;
-  static constexpr size_t local_size = 128;
+  static constexpr size_t sub_group_size = 16;
+  static constexpr size_t local_size = 2 * sub_group_size;
+  static constexpr size_t hw_groups = 1024;
 
 public:
   xelink_transmit(void *peer_ptrs[], R&& remote_info,
-      int root, int world, size_t buf_sz, size_t nelems/*, sycl::stream s*/)
+      int root, int world, size_t nelems/*, sycl::stream s*/)
     : local(reinterpret_cast<v_T *>(peer_ptrs[root])),
-    buf_sz(buf_sz), nelems(nelems)/*, cout(s)*/ {
+    rank(root), nelems(nelems)/*, cout(s)*/ {
 #   pragma unroll (n_peers)
     for (int f = 0; f < n_peers; ++ f) {
       auto remote = remote_info.peers[f]; // can't be root
       // access different position
-      peers[f] = reinterpret_cast<v_T *>((char *)peer_ptrs[remote] + buf_sz * root);
+      peers[f] = reinterpret_cast<v_T *>((char *)peer_ptrs[remote]);
     }
   }
 
-  void operator() (sycl::nd_item<1> pos) const {
-    for (size_t off = pos.get_global_id(0);
-        off < nelems/v_T::size(); off += pos.get_global_range(0)) {
-      fan_policy<v_T, n_peers>::run(pos, local, peers, buf_sz, off);
-    }
+  void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (sycl::nd_item<1> pos) const {
+    fan_policy<v_T, n_peers>::run(pos, local, peers, rank, nelems/v_T::size());
   }
 
   static bool valid_peers(int root, const std::array<int, R::n_peers>& peers) {
@@ -422,11 +416,12 @@ public:
   }
 
   static sycl::event launch(void* peers[], R&& remote_info,
-      int root, int world, size_t buf_sz, size_t nelems, char *msg = nullptr) {
+      int root, int world, size_t nelems, char *msg = nullptr) {
     if (!valid_peers(root, remote_info.peers))
       throw std::logic_error("Invalid transmit pattern!");
 
-    size_t data_groups = (nelems/v_T::size() + local_size - 1) / local_size;
+    size_t data_groups = (nelems/v_T::size()/n_peers + local_size - 1)
+                                            / local_size;
     size_t group_size = std::min(data_groups, hw_groups);
     size_t global_size = group_size * local_size;
 
@@ -434,7 +429,7 @@ public:
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_gather(peers, std::move(remote_info), root, world, buf_sz, nelems));
+          xelink_gather(peers, std::move(remote_info), root, world, nelems));
     });
 
     return e;
@@ -443,7 +438,7 @@ public:
 private:
   v_T *peers[n_peers];
   v_T *local;
-  size_t buf_sz;
+  int rank;
   size_t nelems;
   // sycl::stream cout;
 };
@@ -822,7 +817,6 @@ int main(int argc, char* argv[]) {
     peer_ptrs[i] = (char *)peer_bases[i] + offsets[i];
   }
 
-
   if ( it != std::end(roots) ) {
     // chop dst_ranks among roots
     auto dst_sz = dst_ranks.size() / roots.size();
@@ -853,8 +847,36 @@ int main(int argc, char* argv[]) {
   r_print(check_msg, rank, world);
 
   // avoid race condition
-  queue.wait();
   MPI_Barrier(MPI_COMM_WORLD);
+
+  std::vector<int> even_ranks {0, 2, 4, 6};
+  std::vector<int> odd_ranks {1, 3, 5, 7};
+  std::vector<int> peer_ranks;
+
+  it = std::find(even_ranks.begin(), even_ranks.end(), rank) != even_ranks.end()
+  if (it != even_ranks.end()) {
+    even_ranks.erase(it);
+    peer_ranks = even_ranks;
+  } else {
+    it = std::find(odd_ranks.begin(), odd_ranks.end(), rank) != odd_ranks.end()
+    if (it != odd_ranks.end()) {
+      odd_ranks.erase(it);
+      peer_ranks = odd_ranks;
+    }
+  }
+
+  // Transfer data back to root
+  auto e = launch<xelink_transmit, test_type, v_lane, reduce_scatter_in_threads>(
+      peer_ptrs, peer_ranks, source, rank, world, nelems, check_msg);
+  r_print(check_msg, rank, world);
+
+  for (int i = 0; i < repeat; ++ i) {
+    auto e = launch<xelink_transmit, test_type, v_lane, reduce_scatter_in_thread>(
+        peer_ptrs, peer_ranks, source, rank, world, nelems);
+    b = bandwidth_from_event<test_type>(e, nelems);
+  }
+  snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
+  r_print(check_msg, rank, world);
 
   // Or we map the device to host
   int dma_buf = 0;
