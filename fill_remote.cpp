@@ -425,6 +425,12 @@ public:
     size_t group_size = std::min(data_groups, hw_groups);
     size_t global_size = group_size * local_size;
 
+    if (msg != nullptr) {
+      snprintf(msg, 2048,
+          "Launch bcast on rank %d: (%ld, %ld)x(%ld, %ld)\n",
+          root, 1, global_size, 1, local_size);
+    }
+
     auto queue = currentQueue(root/2, root & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
