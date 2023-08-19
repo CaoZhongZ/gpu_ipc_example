@@ -10,7 +10,12 @@ sycl::device getSubDevice() {
       sycl::info::partition_property::partition_by_affinity_domain>(
           sycl::info::partition_affinity_domain::numa);
 
-    return subs[nsub];
+    // swap sub-device 2 and 3 for reverting xelink cross connection
+    int map_nsub = nsub;
+    if (ndev == 1)
+      map_nsub = nsub ^ 1;
+
+    return subs[map_nsub];
   } catch (sycl::exception &e) {
     std::cout<<e.what()<<std::endl;
     return dev;
