@@ -1,9 +1,6 @@
 #include <iostream>
 #include <sycl/sycl.hpp>
 
-#include "cxxopts.hpp"
-#include "sycl_misc.hpp"
-
 int main(int argc, char *argv[]) {
   auto devs = sycl::device::get_devices(sycl::info::device_type::gpu);
   for (auto& dev : devs) {
