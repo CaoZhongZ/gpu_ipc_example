@@ -16,6 +16,8 @@
 #include "ze_exception.hpp"
 #include "sycl_misc.hpp"
 
+#include "protocol.h"
+
 static constexpr int msg_len = 2048;
 
 struct exchange_contents {
@@ -335,83 +337,85 @@ private:
 };
 
 template <typename T, int fanout>
-struct route_contiguous_scatter {
+struct allreduce_4stage {
+  static inline void run(
+      sycl::nd_item<2> pos, T* input, size_t nelems) {
+  }
+
+  // 4 groups for each stage
+  static inline void copy_to_temp(
+      sycl::nd_item<2> pos, Cell* local, T* input, size_t nelems, size_t round) {
+    auto group_id = pos.get_group(1) / 4;
+    auto group_stride = pos.get_local_range().size();
+    auto step_stride = pos.get_global_range().size();
+    auto l_off = group_stride * group_id + pos.get_local_linear_id();
+    auto g_off = l_off + round * step_stride;
+
+    if (g_off < nelems)
+      local[group_id].data[off] = input[g_off];
+  }
   //
   // group y dimension is same with fanout
   //
-  static inline void run(
+  static inline void reduce_scatter(
       sycl::nd_item<2> pos,
-      T* source, int slot, T* local, T *const peers[fanout], size_t nelems) {
+      Cell* pair, int slot, Cell* local, Cell* const peers[fanout]) {
+    auto group_id = pos.get_group(1) / 4;
+    auto* dest = peers[pos.get_local_id(0)];
+
+    auto group_stride = pos.get_local_range().size();
+    auto off = group_stride * group_id + pos.get_local_linear_id();
+    auto step_stride = pos.get_global_range().size();
+    auto root_off = slot * pos.get_local_range(1);
+
+    dest[off + root_off] = pair[off] + local[off];
+  }
+
+  static inline void reduce_bcast(
+      sycl::nd_item<2> pos,
+      Cell* local, Cell* const peers[fanout], int rank, size_t nelems) {
+    auto n_blocks = nelems / (fanout + 1);
+    auto rank_off = pos.get_local_range().size() * rank/2;
+    for (size_t off = pos.get_global_id(0);
+        off < n_blocks; off += pos.get_global_range(0)) {
+      T sum = local[off];
+#     pragma unroll
+      for (int b = 0; b < fanout; ++ b) {
+        sum += local[off + b + 1];
+      }
+
+#     pragma unroll
+      for (int f = 0; f < fanout; ++ f) {
+        peers[f][off + rank_off] = sum;
+      }
+    }
+  }
+
+  static inline void gather_to_input(
+      sycl::nd_item<2> pos, T* input, Cell* peers[], size_t nelems, size_t round) {
     auto y = pos.get_local_id(0);
-    auto* dest = peers[y];
-    auto rank_off = slot * pos.get_local_range(1);
-    auto step_stride = pos.get_global_range().size();
+    auto* src = peers[y];
 
-    for (auto off = pos.get_global_linear_id();
-        off < nelems;
-        off += step_stride) {
-      dest[off + rank_off] = source[off];
+    for (size_t off = pos.get_global_linear_id();
+        off < nelems; off += pos.get_global_range().size()) {
+      peers[off] = src[off];
     }
   }
 };
 
-template <typename T, int fanout>
-struct route_alternate_scatter {
-  //
-  // group y dimension is same with fanout
-  //
-  static inline void run(
-      sycl::nd_item<2> pos,
-      T* source, int slot, T* local, T *const peers[fanout], size_t nelems) {
-    auto* dest = peers[pos.get_local_id(0)];
-
-    auto group_stride = pos.get_local_range().size();
-    auto off = group_stride * pos.get_group(1) + pos.get_local_linear_id();
-    auto step_stride = pos.get_global_range().size();
-    auto root_off = slot * pos.get_local_range(1);
-
-    for (;
-        off < nelems;
-        off += step_stride) {
-      dest[off + root_off] = source[off];
-    }
-  }
-};
-
-template <typename T, int fanout>
-struct route_alternate_reduce_scatter {
-  //
-  // group y dimension is same with fanout
-  //
-  static inline void run(
-      sycl::nd_item<2> pos,
-      T* source, int slot, T* local, T *const peers[fanout], size_t nelems) {
-    auto* dest = peers[pos.get_local_id(0)];
-
-    auto group_stride = pos.get_local_range().size();
-    auto off = group_stride * pos.get_group(1) + pos.get_local_linear_id();
-    auto step_stride = pos.get_global_range().size();
-    auto root_off = slot * pos.get_local_range(1);
-
-    for (;
-        off < nelems;
-        off += step_stride) {
-      dest[off + root_off] = source[off] + local[off];
-    }
-  }
-};
-
-template <typename T, int lane_v, typename R, template <typename, int> class route_policy>
-struct xelink_route {
+template <typename T, int lane_v, typename R,
+         template <typename, int> class allreduce_policy>
+struct xelink_allreduce {
   using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
   static constexpr int n_peers = R::n_peers;
   static constexpr size_t hw_groups = 512;
   static constexpr size_t sub_group_size = 16;
 
 public:
-  xelink_route(void *peer_ptrs[], R&& remote_info,
+  xelink_route(void *input, void *peer_ptrs[], R&& remote_info,
       int src, int root, int world, size_t nelems)
-    : root(root), local(reinterpret_cast<v_T *>(peer_ptrs[root])),
+    : root(root), input(reinterpret_cast<v_T *>(input)),
+    local(reinterpret_cast<v_T *>(peer_ptrs[root])),
     source(reinterpret_cast<v_T *>(peer_ptrs[src])),
     nelems(nelems)/*, cout(s)*/ {
 
@@ -474,6 +478,7 @@ public:
 private:
   v_T *peers[n_peers + 1]; // including the root
   int root;
+  v_T *input;
   v_T *local;
   v_T *source;
 
@@ -671,29 +676,6 @@ void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, 
   r_print(check_msg, rank, world);
 }
 
-template <typename T, int lane_v>
-void test_reduce_bcast(void *peer_ptrs[], int rank, int world, size_t nelems, int repeat) {
-  auto peer_ranks = bisect_ranks(rank, world);
-
-  void *new_ptrs[world];
-  adjust_bisect_pointers<T>(new_ptrs, peer_ptrs, rank, world, nelems/2);
-  char check_msg[2048];
-  // Transfer data back to root
-  auto e = launch<xelink_transmit, T, lane_v, reduce_scatter_in_thread>(
-      new_ptrs, peer_ranks, rank, world, nelems, check_msg);
-  r_print(check_msg, rank, world);
-
-  double b = 0.0;
-
-  for (int i = 0; i < repeat; ++ i) {
-    auto e = launch<xelink_transmit, T, lane_v, reduce_scatter_in_thread>(
-        new_ptrs, peer_ranks, rank, world, nelems/2);
-    b = bandwidth_from_event<T>(e, nelems/2);
-  }
-  snprintf(check_msg, msg_len, "Rank %d broadcast bandwidth: %fGB/s\n", rank, b);
-  r_print(check_msg, rank, world);
-}
-
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
@@ -792,35 +774,6 @@ int main(int argc, char* argv[]) {
     peer_ptrs[i] = (char *)peer_bases[i] + offsets[i];
   }
 
-//  if ( it != std::end(roots) ) {
-//    // chop dst_ranks among roots
-//    auto dst_sz = dst_ranks.size() / roots.size();
-//    auto index = (it - roots.begin());
-//    auto source = sources[index];
-//    auto rank_start = index * dst_sz;
-//    auto rank_end = rank_start + dst_sz;
-//
-//    std::vector sub_ranks(dst_ranks.begin() + rank_start, dst_ranks.begin() + rank_end);
-//
-//    auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
-//        peer_ptrs, sub_ranks, source, rank, world, nelems, check_msg);
-//    r_print(check_msg, rank, world);
-//
-//    double b = 0.0;
-//
-//    for (int i = 0; i < repeat; ++ i) {
-//      auto e = launch<xelink_route, test_type, v_lane, route_alternate_reduce_scatter>(
-//          peer_ptrs, sub_ranks, source, rank, world, nelems);
-//      b = bandwidth_from_event<test_type>(e, nelems);
-//    }
-//    snprintf(check_msg, msg_len, "Rank %d transmit bandwidth: %fGB/s\n", rank, b);
-//  } else {
-//    check_msg[0] = '\0';
-//    r_print(check_msg, rank, world);
-//  }
-//
-//  r_print(check_msg, rank, world);
-
   // avoid race condition
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -829,14 +782,9 @@ int main(int argc, char* argv[]) {
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   auto *host_buf = (test_type *)mmap_host(alloc_size * world, dma_buf);
 
-//  peek_slice<test_type>(check_msg, host_buf, split, rank, world);
-//  r_print(check_msg, rank, world);
-
   MPI_Barrier(MPI_COMM_WORLD);
 
   test_reduce_scatter<test_type, v_lane>(peer_ptrs, rank, world, nelems, repeat);
-  MPI_Barrier(MPI_COMM_WORLD);
-  test_reduce_bcast<test_type, v_lane>(peer_ptrs, rank, world, nelems, repeat);
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Clean up, close/put ipc handles, free memory, etc.
