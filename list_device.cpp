@@ -7,6 +7,7 @@ int main(int argc, char *argv[]) {
     auto subs = dev.template create_sub_devices<
       sycl::info::partition_property::partition_by_affinity_domain>(
           sycl::info::partition_affinity_domain::numa);
+    std::cout<<"Device: "<<dev.get_info<sycl::info::device::name>()<<std::endl;
     for (auto& sub : subs) {
       std::cout<<sub.get_info<sycl::info::device::name>()<<std::endl;
     }
