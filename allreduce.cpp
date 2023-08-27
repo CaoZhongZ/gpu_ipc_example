@@ -36,6 +36,63 @@ struct exchange_contents {
         std::make_error_code(std::errc(errno)));  \
   }
 
+template <typename T>
+class atomic_ref : public sycl::atomic_ref<T,
+                      sycl::memory_order::relaxed,
+                      sycl::memory_scope::device,
+                      sycl::access::address_space::global_space> {
+public:
+  atomic_ref(T& r) : sycl::atomic_ref<T,
+    sycl::memory_order::relaxed,
+    sycl::memory_scope::device,
+    sycl::access::address_space::global_space> (r)
+  {}
+
+  static inline void wait_ne(T& r, T value) {
+    atomic_ref<T> flag(r);
+    while(flag != value);
+  }
+
+  static inline void wait_on(T& r, T value) {
+    wait_ne(r, value);
+  }
+
+  static inline void wait_lt(T& r, T value) {
+    atomic_ref<T> flag(r);
+    while(flag < value);
+  }
+
+  static inline void wait_gt(T& r, T value) {
+    atomic_ref<T> flag(r);
+    while(flag > value);
+  }
+
+  static inline void wait_le(T& r, T value) {
+    atomic_ref<T> flag(r);
+    while(flag <= value);
+  }
+
+  static inline void wait_ge(T& r, T value) {
+    atomic_ref<T> flag(r);
+    while(flag >= value);
+  }
+
+  static inline void store(T& r, T value) {
+    atomic_ref<T> flag(r);
+    flag.store(value);
+  }
+
+  static inline void incre(T& r) {
+    atomic_ref<T> flag(r);
+    flag += 1;
+  }
+
+  static inline void clear(T& r) {
+    atomic_ref<T> flag(r);
+    flag.store(0);
+  }
+};
+
 ze_ipc_mem_handle_t open_peer_ipc_mems(
     void* ptr, int rank, int world, void *peer_bases[], size_t offsets[]) {
   // Step 1: Get base address of the pointer
@@ -147,7 +204,7 @@ std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
 }
 
 static size_t align_up(size_t size, size_t align_sz) {
-    return ((size + align_sz -1) / align_sz) * align_sz;
+  return ((size + align_sz -1) / align_sz) * align_sz;
 }
 
 void *mmap_host(size_t map_size, int dma_buf_fd) {
@@ -174,232 +231,255 @@ template <int F> struct remote_info {
   remote_info(const std::array<int, F>& peer_list) : peers(peer_list) {}
 };
 
-template <typename T, int fanout>
-struct gather_contiguous {
-  // the const is because peers are from const 'this' pointer.
-  static inline void run(sycl::nd_item<1> pos, T* local, T *const peers[fanout], size_t nelems) {
-    auto y = pos.get_local_id(0);
-    auto* src = peers[y];
+template <typename T, typename groupTrait, int nPersistGroups>
+struct allreduce_4stages {
+  static constexpr n_buf = 8;
+  static constexpr stage = 2;
 
-    for (size_t off = pos.get_global_linear_id();
-        off < nelems; off += pos.get_global_range().size()) {
-      local[off] = src[off];
-    }
-  }
-};
+  using v_T = sycl::vec<T, groupTrait::laneWidth/sizeof(T)>;
+  using stepBuffer = Cell<T, groupTrait> [n_buf][nPersistGroups][2];
 
-template <typename T, int lane_v, typename R, template <typename, int> class fanin_policy>
-struct xelink_gather {
-  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
-  static constexpr int n_peers = R::n_peers;
-  static constexpr size_t sub_group_size = 16;
-  static constexpr size_t local_size = 2 * sub_group_size;
-  static constexpr size_t hw_groups = 1024;
+  static inline void dispatch_group(
+      sycl::nd_item<2> pos, int rank, v_T* input,
+      stepBuffer* evens[], stepBuffer* odds[],
+      size_t v_nelems, size_t n_step) {
+    auto group_role = pos.get_group(1);
 
-public:
-  xelink_gather(void * local, void *peer_ptrs[], R&& remote_info,
-      int root, int world, size_t nelems/*, sycl::stream s*/)
-    : local(reinterpret_cast<v_T *>(local)), nelems(nelems)/*, cout(s)*/ {
-#   pragma unroll (fanin)
-    for (int f = 0; f < fanin; ++ f) {
-      auto remote = remote_info.peers[f]; // can't be root
-      peers[f] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
-    }
-  }
-
-  void operator() (sycl::nd_item<1> pos) const {
-    fanin_policy<v_T, fanin>::run(pos, local, peers, nelems/v_T::size());
-  }
-
-  static bool valid_peers(int root, const std::array<int, R::n_peers>& peers) {
-    auto it = std::find(peers.begin(), peers.end(), root);
-    return it == peers.end();
-  }
-
-  static sycl::event launch(void* peers[], R&& remote_info,
-      int root, int world, size_t buf_sz, size_t nelems, char *msg = nullptr) {
-    if (!valid_peers(root, remote_info.peers))
-      throw std::logic_error("Invalid transmit pattern!");
-
-    size_t local_y = n_peers;
-    size_t local_x = local_size;
-
-    size_t data_groups = (nelems/v_T::size()/n_peers + local_x - 1) / local_x;
-
-    size_t group_size = std::min(data_groups, hw_groups);
-    size_t global_y = 1 * local_y;
-    size_t global_x = global_size * local_x;
-
-    auto queue = currentQueue(root/2, root & 1);
-    auto e = queue.submit([&](sycl::handler &cgh) {
-      cgh.parallel_for(
-          sycl::nd_range<1>({global_y, global_x}, {local_y, local_x}),
-          xelink_gather(peers, std::move(remote_info), root, world, nelems));
-    });
-
-    return e;
-  }
-
-private:
-  v_T *peers[fanin];
-  v_T *local;
-  size_t nelems;
-  // sycl::stream cout;
-};
-
-template <typename T, int fanout/*, int bisect = 2*/>
-struct reduce_scatter_in_thread {
-  static constexpr int bisect = 2;
-
-  static inline void run(sycl::nd_item<1> pos,
-      T* local, T *const peers[fanout], int rank, size_t nelems) {
-    auto n_blocks = nelems / (fanout + 1);
-    auto rank_off = pos.get_local_range().size() * rank/bisect;
-
-    for (size_t off = pos.get_global_id(0);
-        off < n_blocks; off += pos.get_global_range(0)) {
-      T sum = local[off];
-#     pragma unroll
-      for (int b = 0; b < fanout; ++ b) {
-        sum += local[off + b + 1];
+    if (group_role == 0) {
+      if (rank & 1) {
+        for (int i = 0; i < n_step; ++ i)
+          copy_to_temp(pos, odds[rank/2], evens[rank/2], input, v_nelems, i, 0);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          copy_to_temp(pos, evens[rank/2], odds[rank/2], input, v_nelems, i, 0);
       }
+    }
 
-#     pragma unroll
-      for (int f = 0; f < fanout; ++ f) {
-        peers[f][off + rank_off] = sum;
+    else if (group_role == 1) {
+      if (rank & 1) {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_scatter<1>(pos, rank, odds, odds[rank/2], evens[rank/2], i, 0);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_scatter<0>(pos, rank, evens, evens[rank/2], odds[rank/2], i, 0);
+      }
+    }
+
+    else if (group_role == 2) {
+      if (rank & 1) {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_bcast<1>(pos, rank, odds, evens, odds[rank/2], i, 0);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_bcast<0>(pos, rank, evens, odds, evens[rank/2], i, 0);
+      }
+    }
+
+    else if (group_role == 3) {
+      if ( rank & 1 ) {
+        for (int i = 0; i < n_step; ++ i)
+          temp_to_input<1>(pos, input, evens[rank/2], odds[rank/2], v_nelems, i, 0);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          temp_to_input<0>(pos, input, evens[rank/2], odds[rank/2], v_nelems, i, 0);
       }
     }
   }
-};
 
-template <typename T, int lane_v, typename R, template <typename, int> class fan_policy>
-struct xelink_transmit {
-  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
-  static constexpr int n_peers = R::n_peers;
-  static constexpr size_t sub_group_size = 16;
-  static constexpr size_t local_size = 2 * sub_group_size;
-  static constexpr size_t hw_groups = 1024;
-
-public:
-  xelink_transmit(void *peer_ptrs[], R&& remote_info,
-      int root, int world, size_t nelems/*, sycl::stream s*/)
-    : local(reinterpret_cast<v_T *>(peer_ptrs[root])),
-    rank(root), nelems(nelems)/*, cout(s)*/ {
-#   pragma unroll (n_peers)
-    for (int f = 0; f < n_peers; ++ f) {
-      auto remote = remote_info.peers[f]; // can't be root
-      // access different position
-      peers[f] = reinterpret_cast<v_T *>((char *)peer_ptrs[remote]);
-    }
-  }
-
-  void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (sycl::nd_item<1> pos) const {
-    fan_policy<v_T, n_peers>::run(pos, local, peers, rank, nelems/v_T::size());
-  }
-
-  static bool valid_peers(int root, const std::array<int, R::n_peers>& peers) {
-    auto it = std::find(peers.begin(), peers.end(), root);
-    return it == peers.end();
-  }
-
-  static sycl::event launch(void* peers[], R&& remote_info,
-      int root, int world, size_t nelems, char *msg = nullptr) {
-    if (!valid_peers(root, remote_info.peers))
-      throw std::logic_error("Invalid transmit pattern!");
-
-    size_t data_groups = (nelems/v_T::size()/n_peers + local_size - 1)
-                                            / local_size;
-    size_t group_size = std::min(data_groups, hw_groups);
-    size_t global_size = group_size * local_size;
-
-    if (msg != nullptr) {
-      snprintf(msg, 2048,
-          "Launch bcast on rank %d: (%ld, %ld)x(%ld, %ld)\n",
-          root, (size_t)1, global_size, (size_t)1, local_size);
-    }
-
-    auto queue = currentQueue(root/2, root & 1);
-    auto e = queue.submit([&](sycl::handler &cgh) {
-      cgh.parallel_for(
-          sycl::nd_range<1>({global_size}, {local_size}),
-          xelink_transmit(peers, std::move(remote_info), root, world, nelems));
-    });
-
-    return e;
-  }
-
-private:
-  v_T *peers[n_peers];
-  v_T *local;
-  int rank;
-  size_t nelems;
-  // sycl::stream cout;
-};
-
-template <typename T, int fanout>
-struct allreduce_4stage {
-  static inline void run(
-      sycl::nd_item<2> pos, T* input, size_t nelems) {
-  }
-
-  // 4 groups for each stage
+  // role 0, copy input to local and signal both local and pair
   static inline void copy_to_temp(
-      sycl::nd_item<2> pos, Cell* local, T* input, size_t nelems, size_t round) {
-    auto group_id = pos.get_group(1) / 4;
-    auto group_stride = pos.get_local_range().size();
-    auto step_stride = pos.get_global_range().size();
-    auto l_off = group_stride * group_id + pos.get_local_linear_id();
-    auto g_off = l_off + round * step_stride;
+      sycl::nd_item<2> pos, stepBuffer* local, stepBuffer* pair,
+      v_T* input, size_t v_nelems, size_t step, int seq_no) {
+    auto group_position = pos.get_group(1) / stage;
+    auto local_y = pos.get_local_id(0);
+    auto local_x = pos.get_local_id(1);
+    auto global_stride = pos.get_global_range().size() * 2;
 
-    if (g_off < nelems)
-      local[group_id].data[off] = input[g_off];
+    auto even_off = local_x + local_y * pos.get_local_range(1)
+      + group_position * pos.get_local_range().size() + step * global_stride;
+    auto odd_off = even_off + pos.get_local_range().size();
+
+    auto b_idx = step % n_buf;
+
+    constexpr int stage = 0;
+
+    auto& slot0 = local[stage][b_idx][group_position][0];
+    auto& slot1 = local[stage][b_idx][group_position][1];
+
+    if (local_x == 0 && local_y == 0)
+      atomic_ref<uint32_t>::wait_on(slot0.atomics[0], seq_no);
+
+    if (local_x == 0 && local_y == 1)
+      atomic_ref<uint32_t>::wait_on(slot1.atomics[0], seq_no);
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (even_off < v_nelems)
+      slot0.data[local_y][local_x] = input[even_off];
+
+    if (odd_off < v_nelems) {
+      slot1.data[local_y][local_x] = input[odd_off];
+    }
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (local_x == 0 && local_y == 0)
+      atomic_ref<uint32_t>::incre(slot0.atomics[0]);
+
+    if (local_x == 0 && local_y == 1)
+      atomic_ref<uint32_t>::incre(slot1.atomics[0]);
+
+    if (local_x == 0 && local_y == 2)
+      atomic_ref<uint32_t>::incre(pair[stage][b_idx][group_position][0].atomics[0]);
+
+    if (local_x == 0 && local_y == 3)
+      atomic_ref<uint32_t>::incre(pair[stage][b_idx][group_position][1].atomics[0]);
   }
-  //
-  // group y dimension is same with fanout
-  //
+
+  // role 1
+  template <int eo>
   static inline void reduce_scatter(
-      sycl::nd_item<2> pos,
-      Cell* pair, int slot, Cell* local, Cell* const peers[fanout]) {
-    auto group_id = pos.get_group(1) / 4;
-    auto* dest = peers[pos.get_local_id(0)];
+      sycl::nd_item<2> pos, int rank,
+      stepBuffer* const peers[], stepBuffer* local, stepBuffer* pair,
+      size_t step, int seq_no) {
+    auto group_position = pos.get_group(1) / stage;
+    auto local_y = pos.get_local_id(0);
+    auto local_x = pos.get_local_id(1);
+    auto r_off = rank / 2;
+    constexpr int last_stage = 0;
+    constexpr int stage = 1;
+    auto b_idx = step % n_buf;
 
-    auto group_stride = pos.get_local_range().size();
-    auto off = group_stride * group_id + pos.get_local_linear_id();
-    auto step_stride = pos.get_global_range().size();
-    auto root_off = slot * pos.get_local_range(1);
+    auto& self = local[last_stage][b_idx][group_position][eo];
+    auto& remote = pair[last_stage][b_idx][group_position][eo];
 
-    dest[off + root_off] = pair[off] + local[off];
+    if (pos.get_local_linear_id() == 0) {
+      atomic_ref<uint32_t>::wait_on(self.atomics[0], seq_no + 2);
+    }
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    auto& peer = peers[local_y][stage][b_idx][group_position][0];
+    peer.data[r_off][local_x] = remote.data[local_y][local_x] + self.data[local_y][local_x];
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (local_x == 0)
+      atomic_ref<uint32_t>::incre(peer.atomics[0]);
+
+    if (pos.get_local_linear_id() == 0)
+      atomic_ref<uint32_t>::store(self.atomics[0], seq_no);
   }
 
+  // role 2
+  template <int eo>
   static inline void reduce_bcast(
-      sycl::nd_item<2> pos,
-      Cell* local, Cell* const peers[fanout], int rank, size_t nelems) {
-    auto n_blocks = nelems / (fanout + 1);
-    auto rank_off = pos.get_local_range().size() * rank/2;
-    for (size_t off = pos.get_global_id(0);
-        off < n_blocks; off += pos.get_global_range(0)) {
-      T sum = local[off];
-#     pragma unroll
-      for (int b = 0; b < fanout; ++ b) {
-        sum += local[off + b + 1];
-      }
+      sycl::nd_item<2> pos, int rank,
+      stepBuffer* const peers[], stepBuffer* const pairs[],
+      stepBuffer* local, size_t step, int seq_no) {
+    auto local_y = pos.get_local_id(0);
+    auto group_position = pos.get_group(1) / stage;
+    auto local_x = pos.get_local_id(1);
+    auto r_off = rank / 2;
+    auto buf_index = step % n_buf;
+
+    constexpr int last_stage = 1;
+    constexpr int stage = 1;
+
+    auto& slot = local[last_stage][buf_index][group_position][0];
+
+    if (pos.get_local_linear_id() == 0) {
+      atomic_ref<uint32_t>::wait_on (slot.atomics[0], seq_no + 4);
+    }
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (local_y == 0) {
+      v_T sum {};
 
 #     pragma unroll
-      for (int f = 0; f < fanout; ++ f) {
-        peers[f][off + rank_off] = sum;
-      }
+      for (int i = 0; i < groupTrait::groupY; ++ i)
+        sum += slot.data[i][local_x];
+
+#     pragma unroll
+      for (int i = 0; i < groupTrait::groupY; ++ i)
+        peers[i][stage][buf_index][group_position][1].data[r_off][local_x] = sum;
+    }
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (pos.get_local_linear_id() == 0) {
+      atomic_ref<uint32_t>::store(slot.atomics[0], seq_no);
+    }
+
+    if (local_x == 0 && local_y == 0) {
+      atomic_ref<uint32_t>::incre(
+          peers[0][stage][buf_index][group_position][1].atomics[0]);
+      atomic_ref<uint32_t>::incre(
+          pairs[0][stage][buf_index][group_position][1].atomics[0]);
+    }
+    if (local_x == 0 && local_y == 1) {
+      atomic_ref<uint32_t>::incre(
+          peers[1][stage][buf_index][group_position][1].atomics[0]);
+      atomic_ref<uint32_t>::incre(
+          pairs[1][stage][buf_index][group_position][1].atomics[0]);
+    }
+    if (local_x == 0 && local_y == 2) {
+      atomic_ref<uint32_t>::incre(
+          peers[2][stage][buf_index][group_position][1].atomics[0]);
+      atomic_ref<uint32_t>::incre(
+          pairs[2][stage][buf_index][group_position][1].atomics[0]);
+    }
+    if (local_x == 0 && local_y == 3) {
+      atomic_ref<uint32_t>::incre(
+          peers[3][stage][buf_index][group_position][1].atomics[0]);
+      atomic_ref<uint32_t>::incre(
+          pairs[3][stage][buf_index][group_position][1].atomics[0]);
     }
   }
 
-  static inline void gather_to_input(
-      sycl::nd_item<2> pos, T* input, Cell* peers[], size_t nelems, size_t round) {
-    auto y = pos.get_local_id(0);
-    auto* src = peers[y];
+  // group 3
+  template <int eo>
+  static inline void temp_to_input(
+      sycl::nd_item<2> pos, v_T* input,
+      stepBuffer *first, stepBuffer* second,
+      size_t v_nelems, size_t step, int seq_no) {
+    auto group_position = pos.get_group(1) / stage;
+    auto local_y = pos.get_local_id(0);
+    auto local_x = pos.get_local_id(1);
+    auto global_stride = pos.get_global_range().size() * 2;
+    auto buf_index = step % n_buf;
+    constexpr int stage = 1;
 
-    for (size_t off = pos.get_global_linear_id();
-        off < nelems; off += pos.get_global_range().size()) {
-      peers[off] = src[off];
-    }
+    auto even_off = local_x + local_y * pos.get_local_range(1)
+      + group_position * pos.get_local_range().size() + step * global_stride;
+    auto odd_off = even_off + pos.get_local_range().size();
+
+    auto& even_slot = first[stage][buf_index][group_position][1];
+    auto& odd_slot = second[stage][buf_index][group_position][1];
+
+    if constexpr (eo)
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::wait_on(odd_slot.atomics[0], seq_no + 8);
+    else
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::wait_on(even_slot.atmoics[0], seq_no + 8);
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (even_off < v_nelems)
+      input[even_off] = even[buf_index][group_position][eo].data[local_y][local_x];
+
+    if (odd_off < v_nelems)
+      input[odd_off] = odd[buf_index][group_position][eo].data[local_y][local_x];
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if constexpr (eo)
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::store(odd_slot.atomics[0], seq_no);
+    else
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::store(even_slot.atmoics[0], seq_no);
   }
 };
 
@@ -432,7 +512,8 @@ public:
   }
 
   void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (sycl::nd_item<2> pos) const {
-    route_policy<v_T, n_peers>::run(pos, source, root/2, local, peers, nelems/v_T::size());
+    allreduce_policy<v_T, n_peers>::run(
+        pos, source, root/2, local, peers, nelems/v_T::size());
   }
 
   static bool valid_peers(int src, int root, const std::array<int, R::n_peers>& peers) {
