@@ -233,8 +233,8 @@ template <int F> struct remote_info {
 
 template <typename T, typename groupTrait, int nPersistGroups>
 struct allreduce_4stages {
-  static constexpr n_buf = 8;
   static constexpr stage = 2;
+  static constexpr n_buf = 8;
 
   using v_T = sycl::vec<T, groupTrait::laneWidth/sizeof(T)>;
   using stepBuffer = Cell<T, groupTrait> [n_buf][nPersistGroups][2];
@@ -359,7 +359,7 @@ struct allreduce_4stages {
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
-    auto& peer = peers[local_y][stage][b_idx][group_position][0];
+    auto& peer = peers[local_y] [stage][b_idx][group_position][0];
     peer.data[r_off][local_x] = remote.data[local_y][local_x] + self.data[local_y][local_x];
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
@@ -381,12 +381,12 @@ struct allreduce_4stages {
     auto group_position = pos.get_group(1) / stage;
     auto local_x = pos.get_local_id(1);
     auto r_off = rank / 2;
-    auto buf_index = step % n_buf;
+    auto b_idx = step % n_buf;
 
     constexpr int last_stage = 1;
     constexpr int stage = 1;
 
-    auto& slot = local[last_stage][buf_index][group_position][0];
+    auto& slot = local[last_stage][b_idx][group_position][0];
 
     if (pos.get_local_linear_id() == 0) {
       atomic_ref<uint32_t>::wait_on (slot.atomics[0], seq_no + 4);
@@ -402,7 +402,7 @@ struct allreduce_4stages {
 
 #     pragma unroll
       for (int i = 0; i < groupTrait::groupY; ++ i)
-        peers[i][stage][buf_index][group_position][1].data[r_off][local_x] = sum;
+        peers[i][stage][b_idx][group_position][1].data[r_off][local_x] = sum;
     }
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
@@ -413,27 +413,27 @@ struct allreduce_4stages {
 
     if (local_x == 0 && local_y == 0) {
       atomic_ref<uint32_t>::incre(
-          peers[0][stage][buf_index][group_position][1].atomics[0]);
+          peers[0][stage][b_idx][group_position][1].atomics[0]);
       atomic_ref<uint32_t>::incre(
-          pairs[0][stage][buf_index][group_position][1].atomics[0]);
+          pairs[0][stage][b_idx][group_position][1].atomics[0]);
     }
     if (local_x == 0 && local_y == 1) {
       atomic_ref<uint32_t>::incre(
-          peers[1][stage][buf_index][group_position][1].atomics[0]);
+          peers[1][stage][b_idx][group_position][1].atomics[0]);
       atomic_ref<uint32_t>::incre(
-          pairs[1][stage][buf_index][group_position][1].atomics[0]);
+          pairs[1][stage][b_idx][group_position][1].atomics[0]);
     }
     if (local_x == 0 && local_y == 2) {
       atomic_ref<uint32_t>::incre(
-          peers[2][stage][buf_index][group_position][1].atomics[0]);
+          peers[2][stage][b_idx][group_position][1].atomics[0]);
       atomic_ref<uint32_t>::incre(
-          pairs[2][stage][buf_index][group_position][1].atomics[0]);
+          pairs[2][stage][b_idx][group_position][1].atomics[0]);
     }
     if (local_x == 0 && local_y == 3) {
       atomic_ref<uint32_t>::incre(
-          peers[3][stage][buf_index][group_position][1].atomics[0]);
+          peers[3][stage][b_idx][group_position][1].atomics[0]);
       atomic_ref<uint32_t>::incre(
-          pairs[3][stage][buf_index][group_position][1].atomics[0]);
+          pairs[3][stage][b_idx][group_position][1].atomics[0]);
     }
   }
 
@@ -447,39 +447,39 @@ struct allreduce_4stages {
     auto local_y = pos.get_local_id(0);
     auto local_x = pos.get_local_id(1);
     auto global_stride = pos.get_global_range().size() * 2;
-    auto buf_index = step % n_buf;
+    auto b_idx = step % n_buf;
     constexpr int stage = 1;
 
     auto even_off = local_x + local_y * pos.get_local_range(1)
       + group_position * pos.get_local_range().size() + step * global_stride;
     auto odd_off = even_off + pos.get_local_range().size();
 
-    auto& even_slot = first[stage][buf_index][group_position][1];
-    auto& odd_slot = second[stage][buf_index][group_position][1];
+    auto& left = first[stage][b_idx][group_position][1];
+    auto& right = second[stage][b_idx][group_position][1];
 
     if constexpr (eo)
       if (pos.get_local_linear_id() == 0)
-        atomic_ref<uint32_t>::wait_on(odd_slot.atomics[0], seq_no + 8);
+        atomic_ref<uint32_t>::wait_on(right.atomics[0], seq_no + 8);
     else
       if (pos.get_local_linear_id() == 0)
-        atomic_ref<uint32_t>::wait_on(even_slot.atmoics[0], seq_no + 8);
+        atomic_ref<uint32_t>::wait_on(left.atmoics[0], seq_no + 8);
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
     if (even_off < v_nelems)
-      input[even_off] = even[buf_index][group_position][eo].data[local_y][local_x];
+      input[even_off] = left.data[local_y][local_x];
 
     if (odd_off < v_nelems)
-      input[odd_off] = odd[buf_index][group_position][eo].data[local_y][local_x];
+      input[odd_off] = right.data[local_y][local_x];
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
     if constexpr (eo)
       if (pos.get_local_linear_id() == 0)
-        atomic_ref<uint32_t>::store(odd_slot.atomics[0], seq_no);
+        atomic_ref<uint32_t>::store(right.atomics[0], seq_no);
     else
       if (pos.get_local_linear_id() == 0)
-        atomic_ref<uint32_t>::store(even_slot.atmoics[0], seq_no);
+        atomic_ref<uint32_t>::store(left.atmoics[0], seq_no);
   }
 };
 
