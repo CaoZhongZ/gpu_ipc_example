@@ -91,6 +91,17 @@ public:
     atomic_ref<T> flag(r);
     flag.store(0);
   }
+
+  static inline void mask_wait(T& r, T value, T mask) {
+    atomic_ref<T> flag(r);
+
+    while (flag.load() & mask != value);
+  }
+
+  static inline void or_(T& r, T value) {
+    atomic_ref<T> flag(r);
+    flag |= value;
+  }
 };
 
 ze_ipc_mem_handle_t open_peer_ipc_mems(
@@ -237,6 +248,8 @@ struct allreduce_4stages {
   static constexpr n_buf = 8;
 
   using v_T = sycl::vec<T, groupTrait::laneWidth/sizeof(T)>;
+
+  using copyBuffer = Cell<T, groupTrait> [n_buf * 2][nPersistGroups];
   using stepBuffer = Cell<T, groupTrait> [n_buf][nPersistGroups][2];
 
   static inline void dispatch_group(
@@ -248,10 +261,14 @@ struct allreduce_4stages {
     if (group_role == 0) {
       if (rank & 1) {
         for (int i = 0; i < n_step; ++ i)
-          copy_to_temp(pos, odds[rank/2], evens[rank/2], input, v_nelems, i, 0);
+          copy_to_temp(
+              pos, (copyBuffer*) odds[rank/2], (copyBuffer*) evens[rank/2],
+              input, v_nelems, i, 0);
       } else {
         for (int i = 0; i < n_step; ++ i)
-          copy_to_temp(pos, evens[rank/2], odds[rank/2], input, v_nelems, i, 0);
+          copy_to_temp(
+              pos, (copyBuffer*) evens[rank/2], (copyBuffer*) odds[rank/2],
+              input, v_nelems, i, 0);
       }
     }
 
@@ -288,52 +305,39 @@ struct allreduce_4stages {
 
   // role 0, copy input to local and signal both local and pair
   static inline void copy_to_temp(
-      sycl::nd_item<2> pos, stepBuffer* local, stepBuffer* pair,
+      sycl::nd_item<2> pos, copyBuffer* local, copyBuffer* pair,
       v_T* input, size_t v_nelems, size_t step, int seq_no) {
     auto group_position = pos.get_group(1) / stage;
     auto local_y = pos.get_local_id(0);
     auto local_x = pos.get_local_id(1);
-    auto global_stride = pos.get_global_range().size() * 2;
+    auto global_stride = pos.get_global_range().size();
 
-    auto even_off = local_x + local_y * pos.get_local_range(1)
+    auto g_off = local_x + local_y * pos.get_local_range(1)
       + group_position * pos.get_local_range().size() + step * global_stride;
-    auto odd_off = even_off + pos.get_local_range().size();
 
-    auto b_idx = step % n_buf;
+    // we treat buffer in linear instead of dual-set
+    auto b_idx = step % (n_buf * 2);
 
     constexpr int stage = 0;
 
-    auto& slot0 = local[stage][b_idx][group_position][0];
-    auto& slot1 = local[stage][b_idx][group_position][1];
+    auto& slot = local[stage][b_idx][group_position];
 
     if (local_x == 0 && local_y == 0)
-      atomic_ref<uint32_t>::wait_on(slot0.atomics[0], seq_no);
-
-    if (local_x == 0 && local_y == 1)
-      atomic_ref<uint32_t>::wait_on(slot1.atomics[0], seq_no);
+      atomic_ref<uint32_t>::mask_wait(slot.atomics[0], 0, 0xffff);
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
-    if (even_off < v_nelems)
-      slot0.data[local_y][local_x] = input[even_off];
-
-    if (odd_off < v_nelems) {
-      slot1.data[local_y][local_x] = input[odd_off];
-    }
+    if (g_off < v_nelems)
+      slot.data[local_y][local_x] = input[g_off];
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
     if (local_x == 0 && local_y == 0)
-      atomic_ref<uint32_t>::incre(slot0.atomics[0]);
-
-    if (local_x == 0 && local_y == 1)
-      atomic_ref<uint32_t>::incre(slot1.atomics[0]);
+      atomic_ref<uint32_t>::incre(slot.atomics[0]);
 
     if (local_x == 0 && local_y == 2)
-      atomic_ref<uint32_t>::incre(pair[stage][b_idx][group_position][0].atomics[0]);
-
-    if (local_x == 0 && local_y == 3)
-      atomic_ref<uint32_t>::incre(pair[stage][b_idx][group_position][1].atomics[0]);
+      atomic_ref<uint32_t>::or_(
+          pair[stage][b_idx][group_position].atomics[0], 1 << 16);
   }
 
   // role 1
@@ -354,21 +358,19 @@ struct allreduce_4stages {
     auto& remote = pair[last_stage][b_idx][group_position][eo];
 
     if (pos.get_local_linear_id() == 0) {
-      atomic_ref<uint32_t>::wait_on(self.atomics[0], seq_no + 2);
+      atomic_ref<uint32_t>::wait_on(self.atomics[0], 0x10001);
     }
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
     auto& peer = peers[local_y] [stage][b_idx][group_position][0];
-    peer.data[r_off][local_x] = remote.data[local_y][local_x] + self.data[local_y][local_x];
+    peer.data[r_off][local_x]
+      = remote.data[local_y][local_x] + self.data[local_y][local_x];
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
     if (local_x == 0)
       atomic_ref<uint32_t>::incre(peer.atomics[0]);
-
-    if (pos.get_local_linear_id() == 0)
-      atomic_ref<uint32_t>::store(self.atomics[0], seq_no);
   }
 
   // role 2
@@ -412,28 +414,11 @@ struct allreduce_4stages {
     }
 
     if (local_x == 0 && local_y == 0) {
-      atomic_ref<uint32_t>::incre(
-          peers[0][stage][b_idx][group_position][1].atomics[0]);
-      atomic_ref<uint32_t>::incre(
-          pairs[0][stage][b_idx][group_position][1].atomics[0]);
-    }
-    if (local_x == 0 && local_y == 1) {
-      atomic_ref<uint32_t>::incre(
-          peers[1][stage][b_idx][group_position][1].atomics[0]);
-      atomic_ref<uint32_t>::incre(
-          pairs[1][stage][b_idx][group_position][1].atomics[0]);
-    }
-    if (local_x == 0 && local_y == 2) {
-      atomic_ref<uint32_t>::incre(
-          peers[2][stage][b_idx][group_position][1].atomics[0]);
-      atomic_ref<uint32_t>::incre(
-          pairs[2][stage][b_idx][group_position][1].atomics[0]);
-    }
-    if (local_x == 0 && local_y == 3) {
-      atomic_ref<uint32_t>::incre(
-          peers[3][stage][b_idx][group_position][1].atomics[0]);
-      atomic_ref<uint32_t>::incre(
-          pairs[3][stage][b_idx][group_position][1].atomics[0]);
+      auto peer = peers[local_y][stage][b_idx][group_position][1];
+      auto pair = pairs[local_y][stage][b_idx][group_position][1];
+
+      atomic_ref<uint32_t>::incre(peer.atomics[0]);
+      atomic_ref<uint32_t>::incre(pair.atomics[0]);
     }
   }
 
@@ -480,6 +465,15 @@ struct allreduce_4stages {
     else
       if (pos.get_local_linear_id() == 0)
         atomic_ref<uint32_t>::store(left.atmoics[0], seq_no);
+
+    // signal copy buffer
+    if (local_x == 0 && local_y == 1)
+      atomic_ref<uint32_t>::store(
+          first[stage -1][b_idx][group_position][eo].atomics[0], seq_no);
+
+    if (local_x == 0 && local_y == 2)
+      atomic_ref<uint32_t>::store(
+          second[stage -1][b_idx][group_position][eo].atomics[0], seq_no);
   }
 };
 
