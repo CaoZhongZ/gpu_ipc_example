@@ -243,8 +243,8 @@ template <int F> struct remote_info {
 };
 
 template <typename T, typename groupTrait, int nPersistGroups>
-struct allreduce_4stages {
-  static constexpr stage = 2;
+struct allreduce_interleave {
+  static constexpr role = 4;
   static constexpr n_buf = 8;
 
   using v_T = sycl::vec<T, groupTrait::laneWidth/sizeof(T)>;
@@ -254,7 +254,7 @@ struct allreduce_4stages {
 
   static inline void dispatch_group(
       sycl::nd_item<2> pos, int rank, v_T* input,
-      stepBuffer* evens[], stepBuffer* odds[],
+      stepBuffer* const evens[], stepBuffer* const odds[],
       size_t v_nelems, size_t n_step) {
     auto group_role = pos.get_group(1);
 
@@ -477,87 +477,81 @@ struct allreduce_4stages {
   }
 };
 
-template <typename T, int lane_v, typename R,
-         template <typename, int> class allreduce_policy>
+template <typename T, typename LaunchPolicy,
+         template <typename, typename, int> class AllreducePolicy>
 struct xelink_allreduce {
-  using v_T = sycl::vec<T, sizeof(float)/sizeof(T) * lane_v>;
-  static constexpr int n_peers = R::n_peers;
-  static constexpr size_t hw_groups = 512;
-  static constexpr size_t sub_group_size = 16;
+  using v_T = AllreducePolicy::v_T;
+  using stepBuffer = AllreducePolicy::stepBuffer;
+
+  static constexpr size_t nMaxGroups = 512;
+  static constexpr size_t sub_group_size = LaunchPolicy::subGroupSize;
+  static constexpr size_t group_y_range = LaunchPolicy::groupY;
+  static constexpr size_t group_x_range = LaunchPolicy::groupX;
 
 public:
-  xelink_route(void *input, void *peer_ptrs[], R&& remote_info,
-      int src, int root, int world, size_t nelems)
-    : root(root), input(reinterpret_cast<v_T *>(input)),
-    local(reinterpret_cast<v_T *>(peer_ptrs[root])),
-    source(reinterpret_cast<v_T *>(peer_ptrs[src])),
-    nelems(nelems)/*, cout(s)*/ {
+  xelink_allreduce(void *input, void *peer_ptrs[], R&& remote_info,
+      int rank, int world, size_t nelems, size_t n_steps/*, sycl::stream s*/)
+    : input(reinterpret_cast<v_T *>(input)),
+    local(reinterpret_cast<stepBuffer *>(peer_ptrs[rank])),
+    pair(reinterpret_cast<stepBuffer *>(peer_ptrs[rank ^ 1])),
+    rank(rank),
+    nelems(nelems),
+    n_steps(n_steps)/*, cout(s)*/ {
 
-    std::sort(remote_info.peers.begin(), remote_info.peers.end());
-    auto it = std::find_if(
-        remote_info.peers.begin(), remote_info.peers.end(),
-        [&](int peer) {return peer > root;});
-    peers[it - remote_info.peers.begin()] = reinterpret_cast<v_T *>(peer_ptrs[root]);
-
-    for (int f = 0; f < n_peers; ++f) {
-      auto remote = remote_info.peers[f];
-      peers[f + (remote > root)] = reinterpret_cast<v_T *>(peer_ptrs[remote]);
-    }
-  }
-
-  void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (sycl::nd_item<2> pos) const {
-    allreduce_policy<v_T, n_peers>::run(
-        pos, source, root/2, local, peers, nelems/v_T::size());
-  }
-
-  static bool valid_peers(int src, int root, const std::array<int, R::n_peers>& peers) {
-    auto it = std::find(peers.begin(), peers.end(), root);
-    if (it == peers.end()) {
-      it = std::find(peers.begin(), peers.end(), src);
-      if (it == peers.end())
-        return root != src;
+    for (int i = 1, j = 0; i < world; i += 2, j ++) {
+      evens[j] = reinterpret_cast<stepBuffer *>(peers_ptrs[i -1]);
+      odds[j] = reinterpret_cast<stepBuffer *>(peers_ptrs[i]);
     }
 
-    return false;
   }
 
-  static sycl::event launch(void* peers[], R&& remote_info,
-      int src, int root, int world, size_t nelems, char *msg = nullptr) {
-    if (!valid_peers(src, root, remote_info.peers))
-      throw std::logic_error("Invalid transmit pattern!");
-    size_t local_y = n_peers + 1;
-    size_t local_x = 2 * sub_group_size;
+  void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (
+      sycl::nd_item<2> pos) const {
+    AllreducePolicy<T, LaunchPolicy, nMaxGroups>::dispatch_group(
+        pos, rank, input, evens, odds, nelems/v_T::size(), n_steps);
+  }
+
+  static sycl::event launch(
+      void *input, void* peers[],
+      int rank, int world, size_t nelems, char *msg = nullptr) {
+    size_t local_y = group_y_range;
+    size_t local_x = group_x_range;
     size_t local_sz = local_y * local_x;
 
     size_t data_groups = (nelems/v_T::size() + local_sz - 1) / local_sz;
-    size_t group_size = std::min(data_groups, hw_groups);
+    size_t group_size = std::min(data_groups, nMaxGroups);
     size_t global_x = group_size * local_x;
     size_t global_y = 1 * local_y;
+    size_t n_steps = (group_size + nMaxGroups -1) / nMaxGroups;
 
     if (msg != nullptr) {
       snprintf(msg, 2048,
-          "Launch route from %d on rank %d: (%ld, %ld)x(%ld, %ld)\n",
-          src, root, global_y, global_x, local_y, local_x);
+          "Launch allreduce on rank %d: (%ld, %ld)x(%ld, %ld)\n",
+          rank, global_y, global_x, local_y, local_x);
     }
 
     auto queue = currentQueue(root/2, root & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<2>({global_y, global_x}, {local_y, local_x}),
-          xelink_route(peers, std::move(remote_info), src, root, world, nelems));
+          xelink_allreduce(input, peers, rank, world, nelems, n_steps));
     });
 
     return e;
   }
 
 private:
-  v_T *peers[n_peers + 1]; // including the root
-  int root;
-  v_T *input;
-  v_T *local;
-  v_T *source;
+  void *input;
 
+  // IPC scratches
+  stepBuffer *evens[group_y_range];
+  stepBuffer *odds[group_y_range];
+  stepBuffer *local;
+  stepBuffer *pair;
+
+  int rank;
   size_t nelems;
+  size_t n_steps;
   // sycl::stream cout;
 };
 
