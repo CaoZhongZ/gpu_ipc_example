@@ -489,7 +489,7 @@ struct xelink_allreduce {
   static constexpr size_t group_x_range = LaunchPolicy::groupX;
 
 public:
-  xelink_allreduce(void *input, void *peer_ptrs[], R&& remote_info,
+  xelink_allreduce(void *input, void *peer_ptrs[],
       int rank, int world, size_t nelems, size_t n_steps/*, sycl::stream s*/)
     : input(reinterpret_cast<v_T *>(input)),
     local(reinterpret_cast<stepBuffer *>(peer_ptrs[rank])),
@@ -714,60 +714,32 @@ void adjust_bisect_pointers(
   }
 }
 
-template <typename T, int lane_v>
-void test_reduce_scatter(void *peer_ptrs[], int rank, int world, size_t nelems, int repeat) {
-  auto peer_ranks = bisect_ranks(rank, world);
+template <typename T>
+void test_reduce(
+    void *input, void *peer_ptrs[],
+    int rank, int world, size_t nelems, int repeat) {
 
-  void *new_ptrs[world];
-
-  adjust_bisect_pointers<T>(new_ptrs, peer_ptrs, rank, world, nelems);
-  char check_msg[2048];
-  snprintf(check_msg, sizeof(check_msg), "%p, %p, %p, %p, %p, %p, %p, %p\n",
-      new_ptrs[0], new_ptrs[1], new_ptrs[2], new_ptrs[3],
-      new_ptrs[4], new_ptrs[5], new_ptrs[6], new_ptrs[7]);
-  r_print(check_msg, rank, world);
-
-  auto source = rank ^ 0x1; // rank in same pair
-
-  auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
-      new_ptrs, peer_ranks, source, rank, world, nelems/2, check_msg);
-
-  r_print(check_msg, rank, world);
-
-  double b = 0.0;
-
-  for (int i = 0; i < repeat; ++ i) {
-    auto e = launch<xelink_route, T, lane_v, route_alternate_reduce_scatter>(
-        new_ptrs, peer_ranks, source, rank, world, nelems/2);
-    b = bandwidth_from_event<T>(e, nelems/2);
-  }
-  snprintf(check_msg, sizeof(check_msg), "Rank %d scatter bandwidth: %fGB/s\n", rank, b);
+  auto e = xelink_allreduce<T, launchConfig1, allreduce_interleave>(
+      input, peer_ptrs, rank, world, nelems, check_msg);
+  e.wait();
   r_print(check_msg, rank, world);
 }
 
 int main(int argc, char* argv[]) {
   // parse command line options
   cxxopts::Options opts(
-      "Fill remote GPU memory",
-      "Exchange IPC handle to next rank (wrap around), and fill received buffer");
+      "Allreduce",
+      "Test Xelink Allreduce performance");
 
   opts.allow_unrecognised_options();
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
-    ("s,source", "Data source", cxxopts::value<std::string>()->default_value("1"))
-    ("r,root", "Root of send", cxxopts::value<std::string>()->default_value("0"))
-    ("d,dst", "Destinatino of send", cxxopts::value<std::string>()->default_value("1"))
-    ("m,split", "Split position of transfer", cxxopts::value<size_t>()->default_value("128"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
-  auto sources = commalist_to_vector(parsed_opts["source"].as<std::string>());
-  auto roots = commalist_to_vector(parsed_opts["root"].as<std::string>());
-  auto dst_ranks = commalist_to_vector(parsed_opts["dst"].as<std::string>());
-  auto split = parsed_opts["split"].as<size_t>();
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -785,15 +757,6 @@ int main(int argc, char* argv[]) {
 
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-  if (std::any_of(roots.begin(), roots.end(),
-        [&](int r) {return r >= world;}) ||
-      std::any_of(dst_ranks.begin(), dst_ranks.end(),
-        [&](int d) {return d >= world;})) {
-    std::cout
-      <<"Configuration error, root or destination must be inside the comm size"<<std::endl;
-    return -1;
-  }
 
   // rank 0, device 0, subdevice 0
   // rank 1, device 0, subdevice 1
@@ -816,29 +779,30 @@ int main(int argc, char* argv[]) {
   nelems = stoull(nelems_string) * base;
 
   using test_type = sycl::half;
-  constexpr uint32_t v_lane = 4;
   // allocate more for gather case
   size_t alloc_size = nelems * sizeof(test_type);
 
-  void* buffer = sycl::malloc_device(alloc_size * world, queue);
-  void* b_host = sycl::malloc_host(alloc_size * world, queue);
+  void* input = sycl::malloc_device(alloc_size, queue);
+
+  auto scratch_size = alloc_size;
+  // test smaller intermediates
+  void* ipc_scratch = sycl::malloc_device(scratch_size, queue);
+  void* b_host = sycl::malloc_host(alloc_size, queue);
 
   char check_msg[2048];
   // auto it = std::find(roots.begin(), roots.end(), rank);
   fill_sequential<test_type>(b_host, rank, alloc_size);
 
-  peek_slice<test_type>(check_msg, (test_type *)b_host, split, rank, world);
-  r_print(check_msg, rank, world);
-
-  queue.memcpy(buffer, b_host, alloc_size * world);
+  queue.memcpy(input, b_host, alloc_size);
   queue.wait();
 
   void *peer_bases[world];
   size_t offsets[world];
-  auto ipc_handle = open_peer_ipc_mems(buffer, rank, world, peer_bases, offsets);
+
+  auto ipc_handle = open_peer_ipc_mems(
+      ipc_scratch, rank, world, peer_bases, offsets);
 
   void *peer_ptrs[world];
-
   for (int i = 0; i < world; ++ i) {
     peer_ptrs[i] = (char *)peer_bases[i] + offsets[i];
   }
@@ -846,21 +810,22 @@ int main(int argc, char* argv[]) {
   // avoid race condition
   MPI_Barrier(MPI_COMM_WORLD);
 
-  // Or we map the device to host
-  int dma_buf = 0;
-  memcpy(&dma_buf, &ipc_handle, sizeof(int));
-  auto *host_buf = (test_type *)mmap_host(alloc_size * world, dma_buf);
+  test_reduce<test_type>(input, peer_ptrs, rank, world, nelems, 1);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  test_reduce_scatter<test_type, v_lane>(peer_ptrs, rank, world, nelems, repeat);
+  // Or we map the device to host
+  int dma_buf = 0;
+  memcpy(&dma_buf, &ipc_handle, sizeof(int));
+  auto *host_buf = (test_type *)mmap_host(scratch_size, dma_buf);
+
   MPI_Barrier(MPI_COMM_WORLD);
 
   // Clean up, close/put ipc handles, free memory, etc.
   auto l0_ctx = sycl::get_native<
     sycl::backend::ext_oneapi_level_zero>(queue.get_context());
 
-  munmap(host_buf, alloc_size);
+  munmap(host_buf, scratch_size);
 
   for (int i = 0; i < world; ++ i)
     if (i != rank)
@@ -868,5 +833,7 @@ int main(int argc, char* argv[]) {
 
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
+  sycl::free(ipc_scratch, queue);
+  sycl::free(b_host);
   return 0;
 }
