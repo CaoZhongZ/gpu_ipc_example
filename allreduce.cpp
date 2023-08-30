@@ -830,7 +830,7 @@ int main(int argc, char* argv[]) {
   auto peek_size = alloc_size < scratch_size ? alloc_size : scratch_size;
 
   char check_msg[2048];
-  peek_slice<test_type>(check_msg, (test_type *)host_buf, peek_size, rank, world);
+  peek_slice<test_type>(check_msg, (test_type *)host_buf, peek_size/sizeof(test_type), rank, world);
   r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
