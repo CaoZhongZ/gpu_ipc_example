@@ -514,8 +514,8 @@ public:
   static sycl::event launch(
       void *input, void* peers[],
       int rank, int world, size_t nelems, char *msg = nullptr) {
-    size_t local_y = group_y_range;
     size_t local_x = group_x_range;
+    size_t local_y = group_y_range;
     size_t local_sz = local_y * local_x;
 
     size_t data_groups = (nelems/v_T::size() + local_sz - 1) / local_sz;
@@ -718,10 +718,13 @@ template <typename T>
 void test_reduce(
     void *input, void *peer_ptrs[],
     int rank, int world, size_t nelems, int repeat) {
+  char check_msg[2048];
 
   auto e = xelink_allreduce<T, launchConfig1, allreduce_interleave>(
       input, peer_ptrs, rank, world, nelems, check_msg);
-  e.wait();
+  r_print(check_msg, rank, world);
+  bandwidth_from_event(e, nelems);
+  snprintf(check_msg, sizeof(check_msg), "Rank %d scatter bandwidth: %fGB/s\n", rank, b);
   r_print(check_msg, rank, world);
 }
 
