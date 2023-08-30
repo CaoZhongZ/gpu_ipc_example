@@ -489,12 +489,14 @@ template <typename T, typename LaunchPolicy,
          template <typename, typename, int> class AllreducePolicy>
 struct xelink_allreduce {
   static constexpr size_t nMaxGroups = 512;
+
   using v_T = typename AllreducePolicy<T, LaunchPolicy, nMaxGroups>::v_T;
   using stepBuffer = typename AllreducePolicy<T, LaunchPolicy, nMaxGroups>::stepBuffer;
 
   static constexpr size_t sub_group_size = LaunchPolicy::subGroupSize;
   static constexpr size_t group_y_range = LaunchPolicy::groupY;
   static constexpr size_t group_x_range = LaunchPolicy::groupX;
+  static constexpr int n_roles = AllreducePolicy<T, LaunchPolicy, nMaxGroups>::n_roles;
 
 public:
   xelink_allreduce(void *input, void *peer_ptrs[],
@@ -527,7 +529,8 @@ public:
     size_t local_sz = local_y * local_x;
 
     size_t data_groups = (nelems/v_T::size() + local_sz - 1) / local_sz;
-    size_t group_size = std::min(data_groups, nMaxGroups);
+    size_t group_size = std::min(data_groups, nMaxGroups) * n_roles;
+
     size_t global_x = group_size * local_x;
     size_t global_y = 1 * local_y;
     size_t n_steps = (group_size + nMaxGroups -1) / nMaxGroups;
