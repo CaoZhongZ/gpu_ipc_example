@@ -16,7 +16,7 @@ public:
     char bytes[ groupTrait::laneWidth * groupTrait::groupY * groupTrait::groupX ];
     uint16_t words[ sizeof(bytes)/sizeof(uint16_t) ];
     sycl::half halfs[ sizeof(bytes)/sizeof(sycl::half) ];
-    uint32_t dwords[ sizeof(bytes]/sizeof(uint32_t) ];
+    uint32_t dwords[ sizeof(bytes)/sizeof(uint32_t) ];
     float floats[ sizeof(bytes)/sizeof(float) ];
 
     sycl::vec<T, groupTrait::laneWidth/sizeof(T)> data[groupTrait::groupY][groupTrait::groupX];
@@ -30,7 +30,7 @@ public:
     char bytes[ groupTrait::laneWidth * groupTrait::groupY * groupTrait::groupX ];
     uint16_t words[ sizeof(bytes)/sizeof(uint16_t) ];
     sycl::half halfs[ sizeof(bytes)/sizeof(sycl::half) ];
-    uint32_t dwords[ sizeof(bytes]/sizeof(uint32_t) ];
+    uint32_t dwords[ sizeof(bytes)/sizeof(uint32_t) ];
     float floats[ sizeof(bytes)/sizeof(float) ];
 
     sycl::vec<T, groupTrait::laneWidth/sizeof(T)> data[groupTrait::groupY][groupTrait::groupX];

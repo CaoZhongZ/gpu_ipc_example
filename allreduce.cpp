@@ -41,6 +41,13 @@ class atomic_ref : public sycl::atomic_ref<T,
                       sycl::memory_order::relaxed,
                       sycl::memory_scope::device,
                       sycl::access::address_space::global_space> {
+  using baseT = sycl::atomic_ref<
+    T,
+    sycl::memory_order::relaxed,
+    sycl::memory_scope::device,
+    sycl::access::address_space::global_space>;
+
+  using baseT::store;
 public:
   atomic_ref(T& r) : sycl::atomic_ref<T,
     sycl::memory_order::relaxed,
@@ -94,8 +101,7 @@ public:
 
   static inline void mask_wait(T& r, T value, T mask) {
     atomic_ref<T> flag(r);
-
-    while (flag.load() & mask != value);
+    while ((flag.load() & mask) != value);
   }
 
   static inline void or_(T& r, T value) {
@@ -244,8 +250,8 @@ template <int F> struct remote_info {
 
 template <typename T, typename groupTrait, int nPersistGroups>
 struct allreduce_interleave {
-  static constexpr role = 4;
-  static constexpr n_buf = 8;
+  static constexpr int n_roles = 4;
+  static constexpr int n_buf = 8;
 
   using v_T = sycl::vec<T, groupTrait::laneWidth/sizeof(T)>;
 
@@ -253,7 +259,7 @@ struct allreduce_interleave {
   using stepBuffer = Cell<T, groupTrait> [n_buf][nPersistGroups][2];
 
   static inline void dispatch_group(
-      sycl::nd_item<2> pos, int rank, v_T* input,
+      sycl::nd_item<2> pos, int rank, v_T* const input,
       stepBuffer* const evens[], stepBuffer* const odds[],
       size_t v_nelems, size_t n_step) {
     auto group_role = pos.get_group(1);
@@ -306,8 +312,8 @@ struct allreduce_interleave {
   // role 0, copy input to local and signal both local and pair
   static inline void copy_to_temp(
       sycl::nd_item<2> pos, copyBuffer* local, copyBuffer* pair,
-      v_T* input, size_t v_nelems, size_t step, int seq_no) {
-    auto group_position = pos.get_group(1) / stage;
+      v_T* input, size_t v_nelems, size_t step, uint32_t seq_no) {
+    auto group_position = pos.get_group(1) / n_roles;
     auto local_y = pos.get_local_id(0);
     auto local_x = pos.get_local_id(1);
     auto global_stride = pos.get_global_range().size();
@@ -345,8 +351,8 @@ struct allreduce_interleave {
   static inline void reduce_scatter(
       sycl::nd_item<2> pos, int rank,
       stepBuffer* const peers[], stepBuffer* local, stepBuffer* pair,
-      size_t step, int seq_no) {
-    auto group_position = pos.get_group(1) / stage;
+      size_t step, uint32_t seq_no) {
+    auto group_position = pos.get_group(1) / n_roles;
     auto local_y = pos.get_local_id(0);
     auto local_x = pos.get_local_id(1);
     auto r_off = rank / 2;
@@ -378,10 +384,10 @@ struct allreduce_interleave {
   static inline void reduce_bcast(
       sycl::nd_item<2> pos, int rank,
       stepBuffer* const peers[], stepBuffer* const pairs[],
-      stepBuffer* local, size_t step, int seq_no) {
-    auto local_y = pos.get_local_id(0);
-    auto group_position = pos.get_group(1) / stage;
+      stepBuffer* local, size_t step, uint32_t seq_no) {
+    auto group_position = pos.get_group(1) / n_roles;
     auto local_x = pos.get_local_id(1);
+    auto local_y = pos.get_local_id(0);
     auto r_off = rank / 2;
     auto b_idx = step % n_buf;
 
@@ -414,8 +420,8 @@ struct allreduce_interleave {
     }
 
     if (local_x == 0 && local_y == 0) {
-      auto peer = peers[local_y][stage][b_idx][group_position][1];
-      auto pair = pairs[local_y][stage][b_idx][group_position][1];
+      auto& peer = peers[local_y][stage][b_idx][group_position][1];
+      auto& pair = pairs[local_y][stage][b_idx][group_position][1];
 
       atomic_ref<uint32_t>::incre(peer.atomics[0]);
       atomic_ref<uint32_t>::incre(pair.atomics[0]);
@@ -427,8 +433,8 @@ struct allreduce_interleave {
   static inline void temp_to_input(
       sycl::nd_item<2> pos, v_T* input,
       stepBuffer *first, stepBuffer* second,
-      size_t v_nelems, size_t step, int seq_no) {
-    auto group_position = pos.get_group(1) / stage;
+      size_t v_nelems, size_t step, uint32_t seq_no) {
+    auto group_position = pos.get_group(1) / n_roles;
     auto local_y = pos.get_local_id(0);
     auto local_x = pos.get_local_id(1);
     auto global_stride = pos.get_global_range().size() * 2;
@@ -442,12 +448,13 @@ struct allreduce_interleave {
     auto& left = first[stage][b_idx][group_position][1];
     auto& right = second[stage][b_idx][group_position][1];
 
-    if constexpr (eo)
+    if constexpr (eo) {
       if (pos.get_local_linear_id() == 0)
         atomic_ref<uint32_t>::wait_on(right.atomics[0], seq_no + 8);
-    else
+    } else {
       if (pos.get_local_linear_id() == 0)
-        atomic_ref<uint32_t>::wait_on(left.atmoics[0], seq_no + 8);
+        atomic_ref<uint32_t>::wait_on(left.atomics[0], seq_no + 8);
+    }
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
@@ -459,12 +466,13 @@ struct allreduce_interleave {
 
     sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
 
-    if constexpr (eo)
+    if constexpr (eo) {
       if (pos.get_local_linear_id() == 0)
         atomic_ref<uint32_t>::store(right.atomics[0], seq_no);
-    else
+    } else {
       if (pos.get_local_linear_id() == 0)
-        atomic_ref<uint32_t>::store(left.atmoics[0], seq_no);
+        atomic_ref<uint32_t>::store(left.atomics[0], seq_no);
+    }
 
     // signal copy buffer
     if (local_x == 0 && local_y == 1)
@@ -480,10 +488,10 @@ struct allreduce_interleave {
 template <typename T, typename LaunchPolicy,
          template <typename, typename, int> class AllreducePolicy>
 struct xelink_allreduce {
-  using v_T = AllreducePolicy::v_T;
-  using stepBuffer = AllreducePolicy::stepBuffer;
-
   static constexpr size_t nMaxGroups = 512;
+  using v_T = typename AllreducePolicy<T, LaunchPolicy, nMaxGroups>::v_T;
+  using stepBuffer = typename AllreducePolicy<T, LaunchPolicy, nMaxGroups>::stepBuffer;
+
   static constexpr size_t sub_group_size = LaunchPolicy::subGroupSize;
   static constexpr size_t group_y_range = LaunchPolicy::groupY;
   static constexpr size_t group_x_range = LaunchPolicy::groupX;
@@ -499,8 +507,8 @@ public:
     n_steps(n_steps)/*, cout(s)*/ {
 
     for (int i = 1, j = 0; i < world; i += 2, j ++) {
-      evens[j] = reinterpret_cast<stepBuffer *>(peers_ptrs[i -1]);
-      odds[j] = reinterpret_cast<stepBuffer *>(peers_ptrs[i]);
+      evens[j] = reinterpret_cast<stepBuffer *>(peer_ptrs[i -1]);
+      odds[j] = reinterpret_cast<stepBuffer *>(peer_ptrs[i]);
     }
 
   }
@@ -530,7 +538,7 @@ public:
           rank, global_y, global_x, local_y, local_x);
     }
 
-    auto queue = currentQueue(root/2, root & 1);
+    auto queue = currentQueue(rank / 2, rank & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
       cgh.parallel_for(
           sycl::nd_range<2>({global_y, global_x}, {local_y, local_x}),
@@ -541,7 +549,7 @@ public:
   }
 
 private:
-  void *input;
+  v_T *input;
 
   // IPC scratches
   stepBuffer *evens[group_y_range];
@@ -720,10 +728,10 @@ void test_reduce(
     int rank, int world, size_t nelems, int repeat) {
   char check_msg[2048];
 
-  auto e = xelink_allreduce<T, launchConfig1, allreduce_interleave>(
+  auto e = xelink_allreduce<T, launchConfig1, allreduce_interleave>::launch(
       input, peer_ptrs, rank, world, nelems, check_msg);
   r_print(check_msg, rank, world);
-  bandwidth_from_event(e, nelems);
+  auto b = bandwidth_from_event<T>(e, nelems);
   snprintf(check_msg, sizeof(check_msg), "Rank %d scatter bandwidth: %fGB/s\n", rank, b);
   r_print(check_msg, rank, world);
 }
@@ -792,8 +800,6 @@ int main(int argc, char* argv[]) {
   void* ipc_scratch = sycl::malloc_device(scratch_size, queue);
   void* b_host = sycl::malloc_host(alloc_size, queue);
 
-  char check_msg[2048];
-  // auto it = std::find(roots.begin(), roots.end(), rank);
   fill_sequential<test_type>(b_host, rank, alloc_size);
 
   queue.memcpy(input, b_host, alloc_size);
@@ -813,7 +819,7 @@ int main(int argc, char* argv[]) {
   // avoid race condition
   MPI_Barrier(MPI_COMM_WORLD);
 
-  test_reduce<test_type>(input, peer_ptrs, rank, world, nelems, 1);
+  test_reduce<test_type>(input, peer_ptrs, rank, world, nelems, repeat);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -835,8 +841,8 @@ int main(int argc, char* argv[]) {
       zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
 
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
-  sycl::free(buffer, queue);
+  sycl::free(input, queue);
   sycl::free(ipc_scratch, queue);
-  sycl::free(b_host);
+  sycl::free(b_host, queue);
   return 0;
 }
