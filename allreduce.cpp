@@ -803,6 +803,7 @@ int main(int argc, char* argv[]) {
   fill_sequential<test_type>(b_host, rank, alloc_size);
 
   queue.memcpy(input, b_host, alloc_size);
+  queue.memset(ipc_scratch, 0, scratch_size);
   queue.wait();
 
   void *peer_bases[world];
