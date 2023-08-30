@@ -662,15 +662,11 @@ void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int ran
 
 template <typename T>
 void peek_slice(char *check_msg, T* host_buf, size_t slice_size, int rank, int world) {
-  auto offset = snprintf(check_msg, 2048,
+  snprintf(check_msg, 2048,
       "\nRank %d Peek: %.2f, %.2f, ..., %.2f, %.2f",
       rank,
       (float)host_buf[0], (float)host_buf[1],
       (float)host_buf[slice_size -2], (float)host_buf[slice_size -1]);
-  snprintf(check_msg + offset, 2048 - offset,
-      "; %.2f, %.2f, ..., %.2f, %.2f\n",
-      (float)host_buf[slice_size], (float)host_buf[slice_size + 1],
-      (float)host_buf[2 * slice_size-2], (float)host_buf[2*slice_size-1]);
 }
 
 template <typename T>
@@ -798,7 +794,7 @@ int main(int argc, char* argv[]) {
 
   void* input = sycl::malloc_device(alloc_size, queue);
 
-  auto scratch_size = alloc_size;
+  auto scratch_size = 64 * 1024 * 1024;
   // test smaller intermediates
   void* ipc_scratch = sycl::malloc_device(scratch_size, queue);
   void* b_host = sycl::malloc_host(alloc_size, queue);
@@ -831,6 +827,11 @@ int main(int argc, char* argv[]) {
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   auto *host_buf = (test_type *)mmap_host(scratch_size, dma_buf);
+  auto peek_size = alloc_size < scratch_size ? alloc_size : scratch_size;
+
+  char check_msg[2048];
+  peek_slice<test_type>(check_msg, (test_type *)host_buf, peek_size, rank, world);
+  r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
