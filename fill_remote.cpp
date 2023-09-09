@@ -181,9 +181,10 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
   }
 
   std::future<std::tuple<int, int, size_t>> future_fds[world -1];
-  int slot = 0, send_progress = 0;
+  int slot = 0;
+  uint32_t send_progress = 1<<rank;
 
-  while (slot != world-1 || send_progress != world-1) {
+  while (slot < world-1 || send_progress == (1<<world) -1) {
     sysCheck(ppoll(fdarray, world, nullptr, nullptr));
 
     for (int i = 0; i < world; ++ i) {
@@ -191,9 +192,9 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
         auto accept_sock = serv_accept(fdarray[i].fd);
         future_fds[slot ++] = std::async(
             std::launch::async, [&]() {return un_recv_fd(accept_sock);});
-      } else if (fdarray[i].revents & POLLOUT) {
+      } else if ((send_progress & (1<<i)) == 0 && fdarray[i].revents & POLLOUT) {
         un_send_fd(fdarray[i].fd, send_buf.fd, rank, send_buf.offset);
-        send_progress ++;
+        send_progress |= 1<<i;
       }
     }
   }
