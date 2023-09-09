@@ -239,8 +239,8 @@ ze_ipc_mem_handle_t open_peer_ipc_mems(
   zeCheck(zeMemGetAddressRange(l0_ctx, ptr, &base_addr, &base_size));
 
   // Step 2: Get IPC mem handle from base address
-  exchange_content send_buf;
-  exchange_content recv_buf[world];
+  exchange_contents send_buf;
+  exchange_contents recv_buf[world];
 
   memset(recv_buf, 0, sizeof(recv_buf));
 
