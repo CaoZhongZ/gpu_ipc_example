@@ -161,6 +161,22 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
   MPI_Barrier(MPI_COMM_WORLD);
 
   pollfd fdarray[world];
+  int recv_socks[world-1];
+
+  auto fd_guard = [&]() {
+    for (int i = 0, j = 0; i < world; ++ i) {
+      if ( i != rank )
+        sysCheck(close(recv_socks[j++]));
+      sysCheck(close(fdarray[i].fd));
+    }
+  };
+
+  struct guard__{
+    using F = decltype(fd_guard);
+    F f;
+    guard__(const F &f) : f(f) {}
+    ~guard__() { f(); }
+  } free_fd(fd_guard);
 
   // connect to all ranks
   for (int i = 0; i < world; ++ i) {
@@ -183,7 +199,6 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
   }
 
   // std::future<std::tuple<int, int, size_t>> future_fds[world -1];
-  int recv_socks[world-1];
   int slot = 0;
   uint32_t send_progress = 1<<rank;
 
@@ -194,12 +209,15 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
       if (i == rank && (fdarray[i].revents & POLLIN)) {
         // auto accept_sock = serv_accept(fdarray[i].fd);
         // future_fds[slot ++] = std::async(
-        //     std::launch::async, [&]() {
+        //     std::launch::async, [=]() {
+        //     struct sock_guard{
+        //       int sock;
+        //       sock_guard(int sock) : sock(sock) {}
+        //       ~guard_sock() {sysCheck(close(sock));}
+        //     } release(accept_sock);
         //     auto ret = un_recv_fd(accept_sock);
-        //     close(accept_sock);
         //     return ret;});
         recv_socks[slot ++] = serv_accept(fdarray[i].fd);
-        // printf("Accept sock %d on rank %d\n", recv_socks[slot -1], rank);
       } else if ((send_progress & (1<<i)) == 0 && fdarray[i].revents & POLLOUT) {
         un_send_fd(fdarray[i].fd, send_buf.fd, rank, send_buf.offset);
         send_progress |= 1<<i;
@@ -211,7 +229,6 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
     // future_fds[i].wait();
     // auto [fd, peer, offset] = future_fds[i].get();
     auto [fd, peer, offset] = un_recv_fd(recv_socks[i]);
-    close(recv_socks[i]);
     recv_buf[peer].fd = fd;
     recv_buf[peer].offset = offset;
   }
