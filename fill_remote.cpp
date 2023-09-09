@@ -100,7 +100,7 @@ int prepare_socket(const char *sockname) {
 
 int serv_listen(const char *sockname) {
   sockaddr_un un;
-  unlink(sockname);
+  // unlink(sockname);
   auto sock = prepare_socket(sockname);
   sycCheck(listen(sock, 10));
 
@@ -140,6 +140,9 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
   const char* sockname_prefix = "open-peer-ipc-mem-rank_";
   char client_name[64];
   snprintf(client_name, 64, "%s%d", sockname_prefix, rank);
+  unlink(client_name);
+
+  MPI_Barrier(MPI_COMM_WORLD);
 
   pollfd fdarray[world];
 
