@@ -141,16 +141,7 @@ int client_connect(const char *server, const char *client) {
   return sock;
 }
 
-struct un_exchange {
-  // first 4-byte is file descriptor for drmbuf or gem object
-  union {
-    ze_ipc_mem_handle_t ipc_handle;
-    int fd = -1;
-  };
-  size_t offset = 0;
-};
-
-void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int world) {
+void un_allgather(exchange_contents send_buf, exchange_contents recv_buf[], int rank, int world) {
   const char* servername_prefix = "/tmp/open-peer-ipc-mem-server-rank_";
   const char* clientname_prefix = "/tmp/open-peer-ipc-mem-client-rank_";
   char server_name[64];
@@ -248,8 +239,8 @@ ze_ipc_mem_handle_t open_peer_ipc_mems(
   zeCheck(zeMemGetAddressRange(l0_ctx, ptr, &base_addr, &base_size));
 
   // Step 2: Get IPC mem handle from base address
-  un_exchange send_buf;
-  un_exchange recv_buf[world];
+  exchange_content send_buf;
+  exchange_content recv_buf[world];
 
   memset(recv_buf, 0, sizeof(recv_buf));
 
