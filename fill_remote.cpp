@@ -33,8 +33,18 @@ struct exchange_contents {
 
 #define CONTROLLEN  CMSG_LEN(sizeof(int))
 
-struct exchange_fd : cmsghdr {
+// We can't inherit it from cmsghdr because flexible array member
+struct exchange_fd {
+  char obscure[CMSG_LEN(sizeof(int)) - sizeof(int)];
   int dmabuf_fd;
+
+  exchange_fd(int cmsg_level, int cmsg_type, int fd)
+    : dmabuf_fd(fd) {
+    auto* cmsg = reinterpret_cast<cmsghdr *>(obscure);
+    cmsg->cmsg_len = sizeof(exchange_fd);
+    cmsg->cmsg_level = cmsg_level;
+    cmsg->cmsg_type = cmsg_type;
+  }
 };
 
 void un_send_fd(int sock, int rank, int fd, size_t offset) {
@@ -49,12 +59,7 @@ void un_send_fd(int sock, int rank, int fd, size_t offset) {
   msg.msg_name = nullptr;
   msg.msg_namelen = 0;
 
-  exchange_fd cmsg {
-    .cmsg_level = SOL_SOCKET;
-    .cmsg_type = SCM_RIGHTS;
-    .cmsg_len = sizeof(exchange_fd);
-    .dmabuf_fd = fd;
-  };
+  exchange_fd cmsg (SOL_SOCKET, SCM_RIGHTS, fd);
 
   msg.msg_control = &cmsg;
   msg.msg_controllen = sizeof(exchange_fd);
