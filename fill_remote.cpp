@@ -48,7 +48,9 @@ struct exchange_fd {
     cmsg->cmsg_type = cmsg_type;
   }
 
-  exchange_fd() : fd(-1) {};
+  exchange_fd() : fd(-1) {
+    memset(obscure, 0, sizeof(obscure));
+  };
 };
 
 void un_send_fd(int sock, int rank, int fd, size_t offset) {
@@ -100,7 +102,9 @@ int prepare_socket(const char *sockname) {
 
   auto sock = socket(AF_UNIX, SOCK_STREAM, 0);
   sysCheck(sock);
-  sysCheck(ioctl(sock, FIOASYNC));
+
+  int on = 1;
+  sysCheck(ioctl(sock, FIONBIO, &on));
 
   auto size = offsetof(sockaddr_un, sun_path) + strlen(un.sun_path);
   sysCheck(bind(sock, (sockaddr *)&un, size));
@@ -147,10 +151,15 @@ struct un_exchange {
 };
 
 void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int world) {
-  const char* sockname_prefix = "open-peer-ipc-mem-rank_";
+  const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
+  const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
   char client_name[64];
-  snprintf(client_name, 64, "%s%d", sockname_prefix, rank);
+  char server_name[64];
+  snprintf(server_name, sizeof(server_name), "%s%d", servername_prefix, rank);
+  snprintf(client_name, sizeof(client_name), "%s%d", clientname_prefix, rank);
+  unlink(server_name);
   unlink(client_name);
+  auto s_listen = server_listen(server_name);
 
   MPI_Barrier(MPI_COMM_WORLD);
 
@@ -159,12 +168,12 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
   // connect to all ranks
   for (int i = 0; i < world; ++ i) {
     if (rank == i) {
-      fdarray[i].fd = server_listen(client_name);
+      fdarray[i].fd = s_listen;
       fdarray[i].events = POLLIN;
       fdarray[i].revents = 0;
     } else {
-      char server_name[64];
-      snprintf(server_name, sizeof(server_name), "%s%d", sockname_prefix, i);
+      char peer_name[64];
+      snprintf(peer_name, sizeof(peer_name), "%s%d", servername_prefix, i);
       fdarray[i].fd = client_connect(server_name, client_name);
       fdarray[i].events = POLLOUT;
       fdarray[i].revents = 0;
