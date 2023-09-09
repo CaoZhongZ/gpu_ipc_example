@@ -5,7 +5,9 @@
 #include <sys/ioctl.h>
 #include <stddef.h>
 #include <unistd.h>
+#include <poll.h>
 #include <system_error>
+#include <future>
 
 #include <mpi.h>
 #include <sycl/sycl.hpp>
@@ -36,15 +38,17 @@ struct exchange_contents {
 // We can't inherit it from cmsghdr because flexible array member
 struct exchange_fd {
   char obscure[CMSG_LEN(sizeof(int)) - sizeof(int)];
-  int dmabuf_fd;
+  int fd;
 
   exchange_fd(int cmsg_level, int cmsg_type, int fd)
-    : dmabuf_fd(fd) {
+    : fd(fd) {
     auto* cmsg = reinterpret_cast<cmsghdr *>(obscure);
     cmsg->cmsg_len = sizeof(exchange_fd);
     cmsg->cmsg_level = cmsg_level;
     cmsg->cmsg_type = cmsg_type;
   }
+
+  exchange_fd() : fd(-1) {};
 };
 
 void un_send_fd(int sock, int rank, int fd, size_t offset) {
@@ -77,19 +81,20 @@ std::tuple<int, int, size_t> un_recv_fd(int sock) {
   msg.msg_iovlen = 1;
   msg.msg_name = nullptr;
   msg.msg_namelen = 0;
+
   exchange_fd cmsg;
-  msg.msg_control = cmsg;
+  msg.msg_control = &cmsg;
   msg.msg_controllen = sizeof(exchange_fd);
   int n_recv = recvmsg(sock, &msg, 0);
   sysCheck(n_recv);
   // assert(n_recv == sizeof(int));
 
-  return std::make_tuple(cmsg.dmabuf_fd, rank_offset.first, rank_offset.second);
+  return std::make_tuple(cmsg.fd, rank_offset.first, rank_offset.second);
 }
 
 int prepare_socket(const char *sockname) {
   sockaddr_un un;
-  memset(un, 0, sizeof(un));
+  memset(&un, 0, sizeof(un));
   un.sun_family = AF_UNIX;
   strcpy(un.sun_path, sockname);
 
@@ -97,17 +102,16 @@ int prepare_socket(const char *sockname) {
   sysCheck(sock);
   sysCheck(ioctl(sock, FIOASYNC));
 
-  size = offsetof(sockaddr_un, sun_path) + strlen(un.sun_path);
+  auto size = offsetof(sockaddr_un, sun_path) + strlen(un.sun_path);
   sysCheck(bind(sock, (sockaddr *)&un, size));
 
   return sock;
 }
 
-int serv_listen(const char *sockname) {
-  sockaddr_un un;
+int server_listen(const char *sockname) {
   // unlink(sockname);
   auto sock = prepare_socket(sockname);
-  sycCheck(listen(sock, 10));
+  sysCheck(listen(sock, 10));
 
   return sock;
 }
@@ -115,7 +119,8 @@ int serv_listen(const char *sockname) {
 int serv_accept(int listen_sock) {
   sockaddr_un  un;
 
-  auto accept_sock = accept(listen_sock, (sockaddr *)&un, sizeof(un));
+  socklen_t len = sizeof(un);
+  auto accept_sock = accept(listen_sock, (sockaddr *)&un, &len);
   sysCheck(accept_sock);
 
   return accept_sock;
@@ -127,7 +132,7 @@ int client_connect(const char *server, const char *client) {
   memset(&sun, 0, sizeof(sun));
   sun.sun_family = AF_UNIX;
   strcpy(sun.sun_path, server);
-  len = offsetof(sockaddr_un, sun_path) + strlen(server);
+  auto len = offsetof(sockaddr_un, sun_path) + strlen(server);
   sysCheck(connect(sock, (sockaddr *)&sun, len));
   return sock;
 }
@@ -151,14 +156,10 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
 
   pollfd fdarray[world];
 
-  fdarray[rank].fd = s_listen;
-  fdarray[rank].events = POLLIN;
-  fdarray[rank].revents = 0;
-
   // connect to all ranks
   for (int i = 0; i < world; ++ i) {
     if (rank == i) {
-      fdarray[i].fd = serv_listen(client_name);
+      fdarray[i].fd = server_listen(client_name);
       fdarray[i].events = POLLIN;
       fdarray[i].revents = 0;
     } else {
@@ -192,13 +193,13 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
     future_fds[i].wait();
     auto [fd, peer, offset] = future_fds[i].get();
     recv_buf[peer].fd = fd;
-    recv_buf.offset = offset;
+    recv_buf[peer].offset = offset;
   }
 
   recv_buf[rank] = send_buf;
 }
 
-void open_peer_ipc_mems(
+ze_ipc_mem_handle_t open_peer_ipc_mems(
     void *ptr, int rank, int world, void *peer_bases[], size_t offsets[]) {
   // Step 1: Get base address of the pointer
   sycl::queue queue = currentQueue(rank / 2, rank & 1);
@@ -213,7 +214,9 @@ void open_peer_ipc_mems(
   un_exchange send_buf;
   un_exchange recv_buf[world];
 
-  size_t send_buf.offset = (char *)ptr - (char *)base_addr;
+  memset(recv_buf, 0, sizeof(recv_buf));
+
+  send_buf.offset = (char *)ptr - (char *)base_addr;
   zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &send_buf.ipc_handle));
 
   un_allgather(send_buf, recv_buf, rank, world);
@@ -228,12 +231,15 @@ void open_peer_ipc_mems(
       offsets[i] = 0;
     } else {
       auto* peer = recv_buf + i;
+      void* peer_base;
       zeCheck(zeMemOpenIpcHandle(
           l0_ctx, l0_device, peer->ipc_handle, ZE_IPC_MEMORY_FLAG_BIAS_CACHED, &peer_base));
-      peer_bases[i] = peer_base;
+      peer_bases[i] = (char *)peer_base;
       offsets[i] = peer->offset;
     }
   }
+
+  return send_buf.ipc_handle;
 }
 
 std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
@@ -358,7 +364,14 @@ int main(int argc, char* argv[]) {
   void* buffer = sycl::malloc_device(alloc_size, queue);
 
   // XXX: gain access to remote pointers
-  auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem(buffer, rank, world);
+  void *peer_bases[world];
+  size_t peer_offsets[world];
+
+  auto ipc_handle = open_peer_ipc_mems(buffer, rank, world, peer_bases, peer_offsets);
+  int next_peer = rank + 1;
+  if (next_peer >= world) next_peer = next_peer - world;
+
+  auto* peer_ptr = (char *)peer_bases[next_peer] + peer_offsets[next_peer];
 
   // run fill kernel to fill remote GPU memory
   if (dtype == "fp16")
@@ -402,7 +415,11 @@ int main(int argc, char* argv[]) {
     sycl::backend::ext_oneapi_level_zero>(queue.get_context());
 
   munmap(host_buf, alloc_size);
-  zeCheck(zeMemCloseIpcHandle(l0_ctx, (char*)peer_ptr - offset));
+
+  for (int i = 0; i < world; ++ i) {
+    if (i == rank)
+      zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
+  }
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
   // sycl::free(host_buf, queue);
