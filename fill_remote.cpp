@@ -151,14 +151,11 @@ struct un_exchange {
 };
 
 void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int world) {
-  const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
-  const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
-  char client_name[64];
+  const char* servername_prefix = "/tmp/open-peer-ipc-mem-server-rank_";
+  const char* clientname_prefix = "/tmp/open-peer-ipc-mem-client-rank_";
   char server_name[64];
   snprintf(server_name, sizeof(server_name), "%s%d", servername_prefix, rank);
-  snprintf(client_name, sizeof(client_name), "%s%d", clientname_prefix, rank);
   unlink(server_name);
-  unlink(client_name);
   auto s_listen = server_listen(server_name);
 
   MPI_Barrier(MPI_COMM_WORLD);
@@ -173,6 +170,11 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
       fdarray[i].revents = 0;
     } else {
       char peer_name[64];
+      char client_name[64];
+
+      snprintf(client_name, sizeof(client_name), "%s%d-%d", clientname_prefix, rank, i);
+      unlink(client_name);
+
       snprintf(peer_name, sizeof(peer_name), "%s%d", servername_prefix, i);
       fdarray[i].fd = client_connect(peer_name, client_name);
       fdarray[i].events = POLLOUT;
@@ -184,7 +186,7 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
   int slot = 0;
   uint32_t send_progress = 1<<rank;
 
-  while (slot < world-1 || send_progress == (1<<world) -1) {
+  while (slot < world-1 || send_progress != (1<<world) -1) {
     sysCheck(ppoll(fdarray, world, nullptr, nullptr));
 
     for (int i = 0; i < world; ++ i) {
@@ -427,7 +429,7 @@ int main(int argc, char* argv[]) {
   munmap(host_buf, alloc_size);
 
   for (int i = 0; i < world; ++ i) {
-    if (i == rank)
+    if (i != rank)
       zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
   }
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
