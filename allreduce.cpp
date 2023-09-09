@@ -278,7 +278,7 @@ struct allreduce_interleave {
       }
     }
 
-    else if (group_role == 1) {
+    /* else if (group_role == 1) {
       if (rank & 1) {
         for (int i = 0; i < n_step; ++ i)
           reduce_scatter<1>(pos, rank, odds, odds[rank/2], evens[rank/2], i, 0);
@@ -306,7 +306,7 @@ struct allreduce_interleave {
         for (int i = 0; i < n_step; ++ i)
           temp_to_input<0>(pos, input, evens[rank/2], odds[rank/2], v_nelems, i, 0);
       }
-    }
+    }*/
   }
 
   // role 0, copy input to local and signal both local and pair
@@ -663,7 +663,7 @@ void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int ran
 template <typename T>
 void peek_slice(char *check_msg, T* host_buf, size_t slice_size, int rank, int world) {
   snprintf(check_msg, 2048,
-      "\nRank %d Peek: %.2f, %.2f, ..., %.2f, %.2f",
+      "\nRank %d Peek: %.2f, %.2f, ..., %.2f, %.2f\n",
       rank,
       (float)host_buf[0], (float)host_buf[1],
       (float)host_buf[slice_size -2], (float)host_buf[slice_size -1]);

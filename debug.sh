@@ -5,9 +5,9 @@ export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
 # export LD_LIBRARY_PATH=/home/caozhong/Workspace/ccl/release/_install/lib:$LD_LIBRARY_PATH
 
 mpirun -disable-auto-cleanup \
-  -np 1 ./fill_remote $@ : \
-  -np 1 ./fill_remote $@ : \
-  -np 1 gdbserver :44555 ./fill_remote $@ : \
-  -np 5 ./fill_remote $@
+  -np 1 ./allreduce $@ : \
+  -np 1 ./allreduce $@ : \
+  -np 1 gdbserver :44555 ./allreduce $@ : \
+  -np 5 ./allreduce $@
 
-#  -np 1 gdbserver :44555 ./fill_remote $@
+#  -np 1 gdbserver :44555 ./allreduce $@
