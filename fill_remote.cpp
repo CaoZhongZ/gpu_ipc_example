@@ -182,7 +182,8 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
     }
   }
 
-  std::future<std::tuple<int, int, size_t>> future_fds[world -1];
+  // std::future<std::tuple<int, int, size_t>> future_fds[world -1];
+  int recv_socks[world-1];
   int slot = 0;
   uint32_t send_progress = 1<<rank;
 
@@ -191,9 +192,14 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
 
     for (int i = 0; i < world; ++ i) {
       if (i == rank && (fdarray[i].revents & POLLIN)) {
-        auto accept_sock = serv_accept(fdarray[i].fd);
-        future_fds[slot ++] = std::async(
-            std::launch::async, [&]() {return un_recv_fd(accept_sock);});
+        // auto accept_sock = serv_accept(fdarray[i].fd);
+        // future_fds[slot ++] = std::async(
+        //     std::launch::async, [&]() {
+        //     auto ret = un_recv_fd(accept_sock);
+        //     close(accept_sock);
+        //     return ret;});
+        recv_socks[slot ++] = serv_accept(fdarray[i].fd);
+        // printf("Accept sock %d on rank %d\n", recv_socks[slot -1], rank);
       } else if ((send_progress & (1<<i)) == 0 && fdarray[i].revents & POLLOUT) {
         un_send_fd(fdarray[i].fd, send_buf.fd, rank, send_buf.offset);
         send_progress |= 1<<i;
@@ -202,8 +208,10 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
   }
 
   for (int i = 0; i < world -1; ++i) {
-    future_fds[i].wait();
-    auto [fd, peer, offset] = future_fds[i].get();
+    // future_fds[i].wait();
+    // auto [fd, peer, offset] = future_fds[i].get();
+    auto [fd, peer, offset] = un_recv_fd(recv_socks[i]);
+    close(recv_socks[i]);
     recv_buf[peer].fd = fd;
     recv_buf[peer].offset = offset;
   }
