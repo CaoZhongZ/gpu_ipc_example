@@ -33,8 +33,6 @@ struct exchange_contents {
         std::make_error_code(std::errc(errno)));  \
   }
 
-#define CONTROLLEN  CMSG_LEN(sizeof(int))
-
 // We can't inherit it from cmsghdr because flexible array member
 struct exchange_fd {
   char obscure[CMSG_LEN(sizeof(int)) - sizeof(int)];
