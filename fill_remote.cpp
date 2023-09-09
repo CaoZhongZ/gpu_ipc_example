@@ -53,7 +53,7 @@ struct exchange_fd {
   };
 };
 
-void un_send_fd(int sock, int rank, int fd, size_t offset) {
+void un_send_fd(int sock, int fd, int rank, size_t offset) {
   iovec iov[1];
   msghdr msg;
   auto rank_offset = std::make_pair(rank, offset);
@@ -174,7 +174,7 @@ void un_allgather(un_exchange send_buf, un_exchange recv_buf[], int rank, int wo
     } else {
       char peer_name[64];
       snprintf(peer_name, sizeof(peer_name), "%s%d", servername_prefix, i);
-      fdarray[i].fd = client_connect(server_name, client_name);
+      fdarray[i].fd = client_connect(peer_name, client_name);
       fdarray[i].events = POLLOUT;
       fdarray[i].revents = 0;
     }
