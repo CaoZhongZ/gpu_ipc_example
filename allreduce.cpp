@@ -261,7 +261,7 @@ struct allreduce_interleave {
   static inline void dispatch_group(
       sycl::nd_item<2> pos, int rank, v_T* const input,
       stepBuffer* const evens[], stepBuffer* const odds[],
-      size_t v_nelems, size_t n_step) {
+      size_t v_nelems, size_t n_step, sycl::stream cout) {
     auto group_role = pos.get_group(1) % n_roles;
 
     if (group_role == 0) {
@@ -278,16 +278,17 @@ struct allreduce_interleave {
       }
     }
 
-    /* else if (group_role == 1) {
+    else if (group_role == 1) {
       if (rank & 1) {
         for (int i = 0; i < n_step; ++ i)
-          reduce_scatter<1>(pos, rank, odds, odds[rank/2], evens[rank/2], i, 0);
+          reduce_scatter<1>(pos, rank, odds, odds[rank/2], evens[rank/2], i, 0, cout);
       } else {
         for (int i = 0; i < n_step; ++ i)
-          reduce_scatter<0>(pos, rank, evens, evens[rank/2], odds[rank/2], i, 0);
+          reduce_scatter<0>(pos, rank, evens, evens[rank/2], odds[rank/2], i, 0, cout);
       }
     }
 
+    /*
     else if (group_role == 2) {
       if (rank & 1) {
         for (int i = 0; i < n_step; ++ i)
@@ -351,7 +352,7 @@ struct allreduce_interleave {
   static inline void reduce_scatter(
       sycl::nd_item<2> pos, int rank,
       stepBuffer* const peers[], stepBuffer* local, stepBuffer* pair,
-      size_t step, uint32_t seq_no) {
+      size_t step, uint32_t seq_no, sycl::stream cout) {
     auto group_position = pos.get_group(1) / n_roles;
     auto local_y = pos.get_local_id(0);
     auto local_x = pos.get_local_id(1);
@@ -364,6 +365,7 @@ struct allreduce_interleave {
     auto& remote = pair[last_stage][b_idx][group_position][eo];
 
     if (pos.get_local_linear_id() == 0) {
+      cout<<"Atomic: "<<self.atomics[0]<<", ";
       atomic_ref<uint32_t>::wait_on(self.atomics[0], 0x10001);
     }
 
@@ -500,25 +502,24 @@ struct xelink_allreduce {
 
 public:
   xelink_allreduce(void *input, void *peer_ptrs[],
-      int rank, int world, size_t nelems, size_t n_steps/*, sycl::stream s*/)
+      int rank, int world, size_t nelems, size_t n_steps, sycl::stream s)
     : input(reinterpret_cast<v_T *>(input)),
     local(reinterpret_cast<stepBuffer *>(peer_ptrs[rank])),
     pair(reinterpret_cast<stepBuffer *>(peer_ptrs[rank ^ 1])),
     rank(rank),
     nelems(nelems),
-    n_steps(n_steps)/*, cout(s)*/ {
+    n_steps(n_steps), cout(s) {
 
     for (int i = 1, j = 0; i < world; i += 2, j ++) {
       evens[j] = reinterpret_cast<stepBuffer *>(peer_ptrs[i -1]);
       odds[j] = reinterpret_cast<stepBuffer *>(peer_ptrs[i]);
     }
-
   }
 
   void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (
       sycl::nd_item<2> pos) const {
     AllreducePolicy<T, LaunchPolicy, nMaxGroups>::dispatch_group(
-        pos, rank, input, evens, odds, nelems/v_T::size(), n_steps);
+        pos, rank, input, evens, odds, nelems/v_T::size(), n_steps, cout);
   }
 
   static sycl::event launch(
@@ -543,9 +544,10 @@ public:
 
     auto queue = currentQueue(rank / 2, rank & 1);
     auto e = queue.submit([&](sycl::handler &cgh) {
+      sycl::stream cout(0x100000, 2048, cgh);
       cgh.parallel_for(
           sycl::nd_range<2>({global_y, global_x}, {local_y, local_x}),
-          xelink_allreduce(input, peers, rank, world, nelems, n_steps));
+          xelink_allreduce(input, peers, rank, world, nelems, n_steps, cout));
     });
 
     return e;
