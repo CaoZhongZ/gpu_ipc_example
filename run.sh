@@ -6,4 +6,4 @@ export NEOReadDebugKeys=1
 export SetCommandStreamReceiver=3
 export ProductFamilyOverride=pvc
 
-mpirun -np 2 ./fill_remote -c 16 -t fp16
+mpirun -np 8 ./fill_remote -c 16 -t fp16
