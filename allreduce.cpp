@@ -262,7 +262,7 @@ struct allreduce_interleave {
       sycl::nd_item<2> pos, int rank, v_T* const input,
       stepBuffer* const evens[], stepBuffer* const odds[],
       size_t v_nelems, size_t n_step) {
-    auto group_role = pos.get_group(1);
+    auto group_role = pos.get_group(1) % n_roles;
 
     if (group_role == 0) {
       if (rank & 1) {
