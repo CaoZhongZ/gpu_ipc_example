@@ -139,7 +139,7 @@ int client_connect(const char *server, const char *client) {
   return sock;
 }
 
-void un_allgather(exchange_contents send_buf, exchange_contents recv_buf[], int rank, int world) {
+void un_allgather(exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world) {
   const char* servername_prefix = "/tmp/open-peer-ipc-mem-server-rank_";
   const char* clientname_prefix = "/tmp/open-peer-ipc-mem-client-rank_";
   char server_name[64];
@@ -152,11 +152,15 @@ void un_allgather(exchange_contents send_buf, exchange_contents recv_buf[], int 
   pollfd fdarray[world];
   int recv_socks[world-1];
 
+  for (auto& pollfd : fdarray) pollfd.fd = -1;
+  std::fill(recv_socks, recv_socks + world -1, -1);
+
   auto fd_guard = [&]() {
     for (int i = 0, j = 0; i < world; ++ i) {
-      if ( i != rank )
+      if ( i != rank && recv_socks[j] != -1)
         sysCheck(close(recv_socks[j++]));
-      sysCheck(close(fdarray[i].fd));
+      if ( fdarray[i].fd != -1 )
+        sysCheck(close(fdarray[i].fd));
     }
   };
 
@@ -208,7 +212,7 @@ void un_allgather(exchange_contents send_buf, exchange_contents recv_buf[], int 
         //     return ret;});
         recv_socks[slot ++] = serv_accept(fdarray[i].fd);
       } else if ((send_progress & (1<<i)) == 0 && fdarray[i].revents & POLLOUT) {
-        un_send_fd(fdarray[i].fd, send_buf.fd, rank, send_buf.offset);
+        un_send_fd(fdarray[i].fd, send_buf->fd, rank, send_buf->offset);
         send_progress |= 1<<i;
       }
     }
@@ -222,7 +226,7 @@ void un_allgather(exchange_contents send_buf, exchange_contents recv_buf[], int 
     recv_buf[peer].offset = offset;
   }
 
-  recv_buf[rank] = send_buf;
+  recv_buf[rank] = *send_buf;
 }
 
 ze_ipc_mem_handle_t open_peer_ipc_mems(
@@ -245,7 +249,7 @@ ze_ipc_mem_handle_t open_peer_ipc_mems(
   send_buf.offset = (char *)ptr - (char *)base_addr;
   zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &send_buf.ipc_handle));
 
-  un_allgather(send_buf, recv_buf, rank, world);
+  un_allgather(&send_buf, recv_buf, rank, world);
 
   // Step 3: Open IPC handle of remote peer
   auto l0_device
