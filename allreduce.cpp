@@ -669,6 +669,20 @@ void peek_slice(char *check_msg, T* host_buf, size_t slice_size, int rank, int w
       (float)host_buf[slice_size -2], (float)host_buf[slice_size -1]);
 }
 
+template <typename T, typename groupTrait>
+void peek_cell(char *msg, T* host_buf, size_t index, int rank, int world) {
+  auto* cell_buf = reinterpret_cast<Cell<T, groupTrait>>(host_buf);
+  auto& cell_data = cell_buf[index].halfs;
+  auto& atmoics = cell_buf[index].atomics;
+  constexpr auto cell_dsz = sizeof(cell_buf[index].halfs)/sizeof(sycl::half);
+
+  snprintf(check_msg, 2048,
+      "\nRank %d Peek: %.2f, %.2f, ..., %.2f, %.2f (%#x)\n",
+      rank,
+      cell_data[0], cell_data[1],
+      cell_data[cell_dsz - 2], cell_data[cell_dsz -1], atomics[0]);
+}
+
 template <typename T>
 void fill_sequential(void *p, int rank, size_t size) {
   auto typed_sz = size / sizeof(T);
@@ -745,11 +759,13 @@ int main(int argc, char* argv[]) {
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
+    ("s,show", "Check cell index", cxxopts::value<size_t>()->defulat_value("0"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto repeat = parsed_opts["repeat"].as<uint32_t>();
+  auto check_idx = parsed_opts["show"].as<size_t>();
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -830,7 +846,8 @@ int main(int argc, char* argv[]) {
   auto peek_size = alloc_size < scratch_size ? alloc_size : scratch_size;
 
   char check_msg[2048];
-  peek_slice<test_type>(check_msg, (test_type *)host_buf, peek_size/sizeof(test_type), rank, world);
+  peek_cell<test_type, launchConfig1>(
+      check_msg, (test_type *)host_buf, check_idx, rank, world);
   r_print(check_msg, rank, world);
 
   MPI_Barrier(MPI_COMM_WORLD);
