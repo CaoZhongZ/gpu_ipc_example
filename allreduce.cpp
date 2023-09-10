@@ -643,44 +643,18 @@ void r_printf(int rank, int world, const char* fmt, ...) {
   r_print(check_msg, rank, world);
 }
 
-void peek_buffer(char *check_msg, uint32_t* host_buf, size_t alloc_size, int rank, int world) {
-  auto offset = snprintf(check_msg, 2048,
-      "\nRank %d Peek: %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x\n",
-      rank,
-      host_buf[0], host_buf[alloc_size / sizeof(uint32_t) -1],
-      host_buf[alloc_size / sizeof(uint32_t)], host_buf[alloc_size * 2/ sizeof(uint32_t) -1],
-      host_buf[alloc_size * 2/ sizeof(uint32_t)], host_buf[alloc_size * 3/ sizeof(uint32_t) -1],
-      host_buf[alloc_size * 3 / sizeof(uint32_t)], host_buf[alloc_size * 4 / sizeof(uint32_t) -1]);
-  snprintf(check_msg + offset, 2048 - offset,
-      "Rank %d Peek: %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x, %#x, ..., %#x\n\n",
-      rank,
-      host_buf[alloc_size * 4 / sizeof(uint32_t)], host_buf[alloc_size * 5/ sizeof(uint32_t) -1],
-      host_buf[alloc_size * 5 / sizeof(uint32_t)], host_buf[alloc_size * 6/ sizeof(uint32_t) -1],
-      host_buf[alloc_size * 6 / sizeof(uint32_t)], host_buf[alloc_size * 7/ sizeof(uint32_t) -1],
-      host_buf[alloc_size * 7 / sizeof(uint32_t)], host_buf[alloc_size * 8/ sizeof(uint32_t) -1]);
-}
-
-template <typename T>
-void peek_slice(char *check_msg, T* host_buf, size_t slice_size, int rank, int world) {
-  snprintf(check_msg, 2048,
-      "\nRank %d Peek: %.2f, %.2f, ..., %.2f, %.2f\n",
-      rank,
-      (float)host_buf[0], (float)host_buf[1],
-      (float)host_buf[slice_size -2], (float)host_buf[slice_size -1]);
-}
-
 template <typename T, typename groupTrait>
-void peek_cell(char *msg, T* host_buf, size_t index, int rank, int world) {
-  auto* cell_buf = reinterpret_cast<Cell<T, groupTrait>>(host_buf);
+void peek_cell(char *check_msg, void* host_buf, size_t index, int rank, int world) {
+  auto* cell_buf = reinterpret_cast<Cell<T, groupTrait> *>(host_buf);
   auto& cell_data = cell_buf[index].halfs;
-  auto& atmoics = cell_buf[index].atomics;
+  auto& atomics = cell_buf[index].atomics;
   constexpr auto cell_dsz = sizeof(cell_buf[index].halfs)/sizeof(sycl::half);
 
   snprintf(check_msg, 2048,
-      "\nRank %d Peek: %.2f, %.2f, ..., %.2f, %.2f (%#x)\n",
+      "Rank %d Peek: %.2f, %.2f, ..., %.2f, %.2f (%#x)\n",
       rank,
-      cell_data[0], cell_data[1],
-      cell_data[cell_dsz - 2], cell_data[cell_dsz -1], atomics[0]);
+      (float)cell_data[0], (float)cell_data[1],
+      (float)cell_data[cell_dsz - 2], (float)cell_data[cell_dsz -1], atomics[0]);
 }
 
 template <typename T>
@@ -759,7 +733,7 @@ int main(int argc, char* argv[]) {
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ("i,repeat", "Repeat times", cxxopts::value<uint32_t>()->default_value("16"))
-    ("s,show", "Check cell index", cxxopts::value<size_t>()->defulat_value("0"))
+    ("s,show", "Check cell index", cxxopts::value<size_t>()->default_value("0"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -843,7 +817,6 @@ int main(int argc, char* argv[]) {
   int dma_buf = 0;
   memcpy(&dma_buf, &ipc_handle, sizeof(int));
   auto *host_buf = (test_type *)mmap_host(scratch_size, dma_buf);
-  auto peek_size = alloc_size < scratch_size ? alloc_size : scratch_size;
 
   char check_msg[2048];
   peek_cell<test_type, launchConfig1>(
