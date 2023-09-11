@@ -12,7 +12,7 @@ LIBRARIES=-L$(CCL_ROOT)/lib -lmpi -lze_loader
 
 CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES)
 
-all : allreduce
+all : allreduce copy_baseline
 
 clean:
 	rm -f fill_remote atomic_2020 linearize allreduce list_device
