@@ -278,6 +278,7 @@ struct allreduce_interleave {
       }
     }
 
+    /*
     else if (group_role == 1) {
       if (rank & 1) {
         for (int i = 0; i < n_step; ++ i)
@@ -286,7 +287,7 @@ struct allreduce_interleave {
         for (int i = 0; i < n_step; ++ i)
           reduce_scatter<0>(pos, rank, evens, evens[rank/2], odds[rank/2], i, 0, cout);
       }
-    }
+    }*/
 
     /*
     else if (group_role == 2) {
@@ -317,7 +318,7 @@ struct allreduce_interleave {
     auto group_position = pos.get_group(1) / n_roles;
     auto local_y = pos.get_local_id(0);
     auto local_x = pos.get_local_id(1);
-    auto global_stride = pos.get_global_range().size();
+    auto global_stride = pos.get_global_range().size()/4;
 
     auto g_off = local_x + local_y * pos.get_local_range(1)
       + group_position * pos.get_local_range().size() + step * global_stride;
@@ -534,12 +535,12 @@ public:
 
     size_t global_x = group_size * local_x;
     size_t global_y = 1 * local_y;
-    size_t n_steps = (group_size + nMaxGroups -1) / nMaxGroups;
+    size_t n_steps = (data_groups + nMaxGroups -1) / nMaxGroups;
 
     if (msg != nullptr) {
       snprintf(msg, 2048,
-          "Launch allreduce on rank %d: (%ld, %ld)x(%ld, %ld)\n",
-          rank, global_y, global_x, local_y, local_x);
+          "Launch allreduce on rank %d: (%ld, %ld)x(%ld, %ld), steps: %ld\n",
+          rank, global_y, global_x, local_y, local_x, n_steps);
     }
 
     auto queue = currentQueue(rank / 2, rank & 1);
@@ -565,7 +566,7 @@ private:
   int rank;
   size_t nelems;
   size_t n_steps;
-  // sycl::stream cout;
+  sycl::stream cout;
 };
 
 // Calc bandwidth from event;
@@ -786,7 +787,7 @@ int main(int argc, char* argv[]) {
 
   void* input = sycl::malloc_device(alloc_size, queue);
 
-  auto scratch_size = 64 * 1024 * 1024;
+  auto scratch_size = 2 * 1024 * 1024 * 1024ull;
   // test smaller intermediates
   void* ipc_scratch = sycl::malloc_device(scratch_size, queue);
   void* b_host = sycl::malloc_host(alloc_size, queue);
@@ -812,8 +813,6 @@ int main(int argc, char* argv[]) {
   MPI_Barrier(MPI_COMM_WORLD);
 
   test_reduce<test_type>(input, peer_ptrs, rank, world, nelems, repeat);
-
-  MPI_Barrier(MPI_COMM_WORLD);
 
   // Or we map the device to host
   int dma_buf = 0;
