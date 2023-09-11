@@ -8,7 +8,7 @@ template <typename T, int lane_v>
 struct copy_persist {
   using v_T = sycl::vec<T, lane_v/sizeof(T)>;
 
-  void operator() [[sycl::reqd_sub_group_size(sub_group_size)]] (
+  void operator() [[sycl::reqd_sub_group_size(16)]] (
       sycl::nd_item<1> pos) const {
     for (size_t off = pos.get_global_id(0);
         off < v_elems; off += pos.get_global_range(0)) {
@@ -16,30 +16,31 @@ struct copy_persist {
     }
   }
 
-  copy_persist(T* dst, T* src, size_t elems) :
-    src(reinterpret_cast<v_T *>(src)),
+  copy_persist(T* dst, const T* src, size_t elems) :
+    src(reinterpret_cast<const v_T *>(src)),
     dst(reinterpret_cast<v_T *>(dst)),
     v_elems(elems/v_T::size()) {}
 
-  static sycl::event launch(T* dst, const T* src, size_t elems) {
+  static sycl::event launch(T* dst, const T* src, size_t nelems) {
     constexpr size_t max_group = 512;
     constexpr size_t local_size = 128;
 
     size_t group_size = (nelems/v_T::size() + local_size -1)/local_size;
-    size_t group_size = std::min(group_size, max_group);
+    group_size = std::min(group_size, max_group);
     size_t global_size = group_size * local_size;
 
     auto queue = currentQueue(0, 0);
     auto e = queue.submit([&](sycl::handler &cgh) {
-        cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size},
-              copy_persist(dst, src, elems)));
+        cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
+              copy_persist(dst, src, nelems));
     });
+    return e;
   }
 
-  v_T* src;
+  const v_T* src;
   v_T* dst;
   size_t v_elems;
-}
+};
 
 size_t parse_nelems(const std::string& nelems_string) {
   size_t base = 1;
@@ -77,10 +78,12 @@ double bandwidth_from_event(sycl::event e, size_t nelems) {
 
 int main(int argc, char *argv[]) {
   cxxopts::Options opts("Copy", "Copy baseline for performance");
+  opts.allow_unrecognised_options();
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
     ;
 
+  auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
   auto nelems = parse_nelems(nelems_string);
   using test_type = sycl::half;
@@ -89,15 +92,15 @@ int main(int argc, char *argv[]) {
 
   auto queue = currentQueue(0, 0);
 
-  auto* src = sycl::malloc_device(alloc_size, queue);
-  auto* dst = sycl::malloc_device(alloc_size, queue);
+  auto* src = (test_type *)sycl::malloc_device(alloc_size, queue);
+  auto* dst = (test_type *)sycl::malloc_device(alloc_size, queue);
   auto* b_host = sycl::malloc_device(alloc_size, queue);
   fill_sequential<test_type>(b_host, 0, alloc_size);
 
-  queue.memcopy(src, b_host, alloc_size);
+  queue.memcpy(src, b_host, alloc_size);
   queue.wait();
 
-  auto e = copy_persist::launch(dst, src, nelems);
+  auto e = copy_persist<test_type, v_lane>::launch(dst, src, nelems);
   auto bandwidth = bandwidth_from_event<test_type>(e, nelems);
   printf("Copy persistent kernel bandwidth: %fGB/s\n", bandwidth);
 }
