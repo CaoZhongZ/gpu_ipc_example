@@ -488,6 +488,209 @@ struct allreduce_interleave {
   }
 };
 
+template <typename T, typename groupTrait, int nPersistGroups>
+struct allreduce_interleave_v2 {
+  using v_T = sycl::vec<T, groupTrait::laneWidth/sizeof(T)>;
+  using stepBuffer = stepCell<T, groupTrait>;
+
+  // role 0, copy input to local and signal both local and pair
+  static inline void copy_to_temp(
+      sycl::nd_item<2> pos, stepBuffer* local, stepBuffer* pair,
+      v_T* input, size_t v_nelems, size_t step, uint32_t seq_no) {
+  }
+
+  static inline void dispatch_group(
+      sycl::nd_item<2> pos, int rank, v_T* const input,
+      stepBuffer* const evens[], stepBuffer* const odds[],
+      size_t v_nelems, size_t n_step, sycl::stream cout) {
+    auto group_role = pos.get_group(1) % n_roles;
+
+    if (group_role == 0) {
+      if (rank & 1) {
+        for (int i = 0; i < n_step; ++ i)
+          copy_to_temp(
+              pos, (copyBuffer*) odds[rank/2], (copyBuffer*) evens[rank/2],
+              input, v_nelems, i, 0);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          copy_to_temp(
+              pos, (copyBuffer*) evens[rank/2], (copyBuffer*) odds[rank/2],
+              input, v_nelems, i, 0);
+      }
+    }
+
+    /*
+    else if (group_role == 1) {
+      if (rank & 1) {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_scatter<1>(pos, rank, odds, odds[rank/2], evens[rank/2], i, 0, cout);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_scatter<0>(pos, rank, evens, evens[rank/2], odds[rank/2], i, 0, cout);
+      }
+    }
+
+    else if (group_role == 2) {
+      if (rank & 1) {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_bcast<1>(pos, rank, odds, evens, odds[rank/2], i, 0);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          reduce_bcast<0>(pos, rank, evens, odds, evens[rank/2], i, 0);
+      }
+    }
+
+    else if (group_role == 3) {
+      if ( rank & 1 ) {
+        for (int i = 0; i < n_step; ++ i)
+          temp_to_input<1>(pos, input, evens[rank/2], odds[rank/2], v_nelems, i, 0);
+      } else {
+        for (int i = 0; i < n_step; ++ i)
+          temp_to_input<0>(pos, input, evens[rank/2], odds[rank/2], v_nelems, i, 0);
+      }
+    }*/
+  }
+
+  // role 1
+  template <int eo>
+  static inline void reduce_scatter(
+      sycl::nd_item<2> pos, int rank,
+      stepBuffer* const peers[], stepBuffer* local, stepBuffer* pair,
+      size_t step, uint32_t seq_no, sycl::stream cout) {
+    auto group_position = pos.get_group(1) / n_roles;
+    auto local_y = pos.get_local_id(0);
+    auto local_x = pos.get_local_id(1);
+    auto r_off = rank / 2;
+    constexpr int last_stage = 0;
+    constexpr int stage = 1;
+    auto b_idx = step % n_buf;
+
+    auto& self = local[last_stage][b_idx][group_position][eo];
+    auto& remote = pair[last_stage][b_idx][group_position][eo];
+
+    if (pos.get_local_linear_id() == 0) {
+      cout<<"Atomic: "<<self.atomics[0]<<", ";
+      atomic_ref<uint32_t>::wait_on(self.atomics[0], 0x10001);
+    }
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    auto& peer = peers[local_y] [stage][b_idx][group_position][0];
+    peer.data[r_off][local_x]
+      = remote.data[local_y][local_x] + self.data[local_y][local_x];
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (local_x == 0)
+      atomic_ref<uint32_t>::incre(peer.atomics[0]);
+  }
+
+  // role 2
+  template <int eo>
+  static inline void reduce_bcast(
+      sycl::nd_item<2> pos, int rank,
+      stepBuffer* const peers[], stepBuffer* const pairs[],
+      stepBuffer* local, size_t step, uint32_t seq_no) {
+    auto group_position = pos.get_group(1) / n_roles;
+    auto local_x = pos.get_local_id(1);
+    auto local_y = pos.get_local_id(0);
+    auto r_off = rank / 2;
+    auto b_idx = step % n_buf;
+
+    constexpr int last_stage = 1;
+    constexpr int stage = 1;
+
+    auto& slot = local[last_stage][b_idx][group_position][0];
+
+    if (pos.get_local_linear_id() == 0) {
+      atomic_ref<uint32_t>::wait_on (slot.atomics[0], seq_no + 4);
+    }
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (local_y == 0) {
+      v_T sum {};
+
+#     pragma unroll
+      for (int i = 0; i < groupTrait::groupY; ++ i)
+        sum += slot.data[i][local_x];
+
+#     pragma unroll
+      for (int i = 0; i < groupTrait::groupY; ++ i)
+        peers[i][stage][b_idx][group_position][1].data[r_off][local_x] = sum;
+    }
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (pos.get_local_linear_id() == 0) {
+      atomic_ref<uint32_t>::store(slot.atomics[0], seq_no);
+    }
+
+    if (local_x == 0 && local_y == 0) {
+      auto& peer = peers[local_y][stage][b_idx][group_position][1];
+      auto& pair = pairs[local_y][stage][b_idx][group_position][1];
+
+      atomic_ref<uint32_t>::incre(peer.atomics[0]);
+      atomic_ref<uint32_t>::incre(pair.atomics[0]);
+    }
+  }
+
+  // group 3
+  template <int eo>
+  static inline void temp_to_input(
+      sycl::nd_item<2> pos, v_T* input,
+      stepBuffer *first, stepBuffer* second,
+      size_t v_nelems, size_t step, uint32_t seq_no) {
+    auto group_position = pos.get_group(1) / n_roles;
+    auto local_y = pos.get_local_id(0);
+    auto local_x = pos.get_local_id(1);
+    auto global_stride = pos.get_global_range().size() * 2;
+    auto b_idx = step % n_buf;
+    constexpr int stage = 1;
+
+    auto even_off = local_x + local_y * pos.get_local_range(1)
+      + group_position * pos.get_local_range().size() + step * global_stride;
+    auto odd_off = even_off + pos.get_local_range().size();
+
+    auto& left = first[stage][b_idx][group_position][1];
+    auto& right = second[stage][b_idx][group_position][1];
+
+    if constexpr (eo) {
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::wait_on(right.atomics[0], seq_no + 8);
+    } else {
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::wait_on(left.atomics[0], seq_no + 8);
+    }
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if (even_off < v_nelems)
+      input[even_off] = left.data[local_y][local_x];
+
+    if (odd_off < v_nelems)
+      input[odd_off] = right.data[local_y][local_x];
+
+    sycl::group_barrier(pos.get_group(), sycl::memory_scope::work_group);
+
+    if constexpr (eo) {
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::store(right.atomics[0], seq_no);
+    } else {
+      if (pos.get_local_linear_id() == 0)
+        atomic_ref<uint32_t>::store(left.atomics[0], seq_no);
+    }
+
+    // signal copy buffer
+    if (local_x == 0 && local_y == 1)
+      atomic_ref<uint32_t>::store(
+          first[stage -1][b_idx][group_position][eo].atomics[0], seq_no);
+
+    if (local_x == 0 && local_y == 2)
+      atomic_ref<uint32_t>::store(
+          second[stage -1][b_idx][group_position][eo].atomics[0], seq_no);
+  }
+};
+
 template <typename T, typename LaunchPolicy,
          template <typename, typename, int> class AllreducePolicy>
 struct xelink_allreduce {
