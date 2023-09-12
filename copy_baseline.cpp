@@ -10,10 +10,10 @@ struct power_copy {
     for (size_t off = pos.get_global_id(0);
         off < elems; off += pos.get_global_range(0)) {
 #     pragma unroll
-      for (int i = 0; i < Unroll; ++ i)
+      for (int i = 0; i < Unroll; ++ i) {
         auto i_off = Unroll * off + i;
-        if (i_off < elems)
-          dst[i_off] = src[i_off];
+        dst[i_off] = src[i_off];
+      }
     }
   }
 };
@@ -22,12 +22,11 @@ template <typename T, int Unroll>
 struct jump_copy {
   static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
     for (size_t off = pos.get_global_id(0);
-        off  < elems; off += pos.get_global_range(0) * Unroll) {
+        off  < elems * Unroll; off += pos.get_global_range(0)* Unroll) {
 #     pragma unroll
       for (int i = 0; i < Unroll; ++ i) {
         auto i_off = off + pos.get_global_range(0) * i;
-        if (i_off < elems)
-          dst[i_off + pos.get_global_range(0) * i] = src[i_off + pos.get_global_range(0) * i];
+        dst[i_off] = src[i_off];
       }
     }
   }
@@ -154,16 +153,16 @@ int main(int argc, char *argv[]) {
   sycl::event e;
   switch (unroll) {
     case 1:
-      e = copy_persist<test_type, v_lane, 1, power_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 1, jump_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     case 2:
-      e = copy_persist<test_type, v_lane, 2, power_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 2, jump_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     case 4:
-      e = copy_persist<test_type, v_lane, 4, power_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 4, jump_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     case 8:
-      e = copy_persist<test_type, v_lane, 8, power_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 8, jump_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     default:
       throw std::logic_error("Unroll request not supported");
