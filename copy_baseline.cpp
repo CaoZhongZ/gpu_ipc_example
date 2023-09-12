@@ -7,12 +7,13 @@
 template <typename T, int Unroll>
 struct power_copy {
   static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    for (size_t off = pos.get_global_id(0) * Unroll;
-        off < elems; off += pos.get_global_range(0) * Unroll) {
+    for (size_t off = pos.get_global_id(0);
+        off < elems; off += pos.get_global_range(0)) {
 #     pragma unroll
       for (int i = 0; i < Unroll; ++ i)
-        if (off + i < elems)
-          dst[off + i] = src[off + i];
+        auto i_off = Unroll * off + i;
+        if (i_off < elems)
+          dst[i_off] = src[i_off];
     }
   }
 };
@@ -26,7 +27,7 @@ struct jump_copy {
       for (int i = 0; i < Unroll; ++ i) {
         auto i_off = off + pos.get_global_range(0) * i;
         if (i_off < elems)
-          dst[off + pos.get_global_range(0) * i] = src[off + pos.get_global_range(0) * i];
+          dst[i_off + pos.get_global_range(0) * i] = src[i_off + pos.get_global_range(0) * i];
       }
     }
   }
@@ -43,7 +44,7 @@ struct copy_persist {
   copy_persist(T* dst, const T* src, size_t elems) :
     src(reinterpret_cast<const v_T *>(src)),
     dst(reinterpret_cast<v_T *>(dst)),
-    v_elems(elems/v_T::size()) {}
+    v_elems(elems/v_T::size()/Unroll) {}
 
   static sycl::event launch(T* dst, const T* src, size_t nelems, size_t max_group =64, size_t local_size = 1024) {
     auto v_nelems = nelems / v_T::size();
@@ -153,16 +154,16 @@ int main(int argc, char *argv[]) {
   sycl::event e;
   switch (unroll) {
     case 1:
-      e = copy_persist<test_type, v_lane, 1, jump_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 1, power_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     case 2:
-      e = copy_persist<test_type, v_lane, 2, jump_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 2, power_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     case 4:
-      e = copy_persist<test_type, v_lane, 4, jump_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 4, power_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     case 8:
-      e = copy_persist<test_type, v_lane, 8, jump_copy>::launch(dst, src, nelems, max_groups, local);
+      e = copy_persist<test_type, v_lane, 8, power_copy>::launch(dst, src, nelems, max_groups, local);
       break;
     default:
       throw std::logic_error("Unroll request not supported");
