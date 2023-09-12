@@ -5,7 +5,7 @@
 #include "sycl_misc.hpp"
 
 template <typename T, int Unroll>
-struct power_copy {
+struct seq_copy {
   static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
     for (size_t off = pos.get_global_id(0);
         off < elems; off += pos.get_global_range(0)) {
@@ -37,23 +37,27 @@ struct copy_persist {
   using v_T = sycl::vec<T, lane_v/sizeof(T)>;
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    copy_policy<v_T, Unroll>::run(pos, dst, src, v_elems);
+    copy_policy<v_T, Unroll>::run(pos, dst, src, vu_nelems);
   }
 
   copy_persist(T* dst, const T* src, size_t elems) :
     src(reinterpret_cast<const v_T *>(src)),
     dst(reinterpret_cast<v_T *>(dst)),
-    v_elems(elems/v_T::size()/Unroll) {}
+    vu_nelems(elems/v_T::size()/Unroll) {}
 
-  static sycl::event launch(T* dst, const T* src, size_t nelems, size_t max_group =64, size_t local_size = 1024) {
+  static sycl::event launch(T* dst, const T* src, size_t nelems,
+      size_t max_group =64, size_t local_size = 1024) {
+    if (nelems < v_T::size() || nelems % v_T::size() != 0)
+      throw std::logic_error("Vectorize can't be satisfied");
+
     auto v_nelems = nelems / v_T::size();
 
     if (v_nelems % Unroll != 0)
       throw std::logic_error("Unroll can't be satisfied");
 
-    v_nelems /= Unroll;
+    auto vu_nelems /= Unroll;
 
-    size_t required_groups = (v_nelems + local_size -1)/local_size;
+    size_t required_groups = (vu_nelems + local_size -1)/local_size;
     auto group_num = std::min(required_groups, max_group);
     size_t global_size = group_num * local_size;
 
@@ -69,7 +73,7 @@ struct copy_persist {
 
   const v_T* src;
   v_T* dst;
-  size_t v_elems;
+  size_t vu_nelems;
 };
 
 size_t parse_nelems(const std::string& nelems_string) {
@@ -127,6 +131,7 @@ int main(int argc, char *argv[]) {
     ("u,unroll", "Unroll request", cxxopts::value<uint32_t>()->default_value("1"))
     ("g,groups", "Max Group Size", cxxopts::value<size_t>()->default_value("64"))
     ("l,local", "Local size", cxxopts::value<size_t>()->default_value("512"))
+    ("s,sequential", "Sequential Unroll", cxxopts::value<bool>()->default_value("false"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -134,6 +139,7 @@ int main(int argc, char *argv[]) {
   auto unroll =  parsed_opts["unroll"].as<uint32_t>();
   auto local = parsed_opts["local"].as<size_t>();
   auto max_groups = parsed_opts["groups"].as<size_t>();
+  auto seq = parsed_opts["sequential"].as<size_t>();
 
   auto nelems = parse_nelems(nelems_string);
   using test_type = sycl::half;
@@ -151,21 +157,41 @@ int main(int argc, char *argv[]) {
   queue.wait();
 
   sycl::event e;
-  switch (unroll) {
-    case 1:
-      e = copy_persist<test_type, v_lane, 1, jump_copy>::launch(dst, src, nelems, max_groups, local);
-      break;
-    case 2:
-      e = copy_persist<test_type, v_lane, 2, jump_copy>::launch(dst, src, nelems, max_groups, local);
-      break;
-    case 4:
-      e = copy_persist<test_type, v_lane, 4, jump_copy>::launch(dst, src, nelems, max_groups, local);
-      break;
-    case 8:
-      e = copy_persist<test_type, v_lane, 8, jump_copy>::launch(dst, src, nelems, max_groups, local);
-      break;
-    default:
-      throw std::logic_error("Unroll request not supported");
+
+  if (seq) {
+    switch (unroll) {
+      case 1:
+        e = copy_persist<test_type, v_lane, 1, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      case 2:
+        e = copy_persist<test_type, v_lane, 2, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      case 4:
+        e = copy_persist<test_type, v_lane, 4, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      case 8:
+        e = copy_persist<test_type, v_lane, 8, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      default:
+        throw std::logic_error("Unroll request not supported");
+    }
+  } else {
+    switch (unroll) {
+      case 1:
+        e = copy_persist<test_type, v_lane, 1, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      case 2:
+        e = copy_persist<test_type, v_lane, 2, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      case 4:
+        e = copy_persist<test_type, v_lane, 4, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      case 8:
+        e = copy_persist<test_type, v_lane, 8, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        break;
+      default:
+        throw std::logic_error("Unroll request not supported");
+    }
   }
   // auto e = queue.memcpy(dst, src, alloc_size);
   auto bandwidth = bandwidth_from_event<test_type>(e, nelems);
