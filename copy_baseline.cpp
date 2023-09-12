@@ -55,7 +55,7 @@ struct copy_persist {
     if (v_nelems % Unroll != 0)
       throw std::logic_error("Unroll can't be satisfied");
 
-    auto vu_nelems /= Unroll;
+    auto vu_nelems = v_nelems / Unroll;
 
     size_t required_groups = (vu_nelems + local_size -1)/local_size;
     auto group_num = std::min(required_groups, max_group);
@@ -139,7 +139,7 @@ int main(int argc, char *argv[]) {
   auto unroll =  parsed_opts["unroll"].as<uint32_t>();
   auto local = parsed_opts["local"].as<size_t>();
   auto max_groups = parsed_opts["groups"].as<size_t>();
-  auto seq = parsed_opts["sequential"].as<size_t>();
+  auto seq = parsed_opts["sequential"].as<bool>();
 
   auto nelems = parse_nelems(nelems_string);
   using test_type = sycl::half;
