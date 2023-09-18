@@ -132,6 +132,7 @@ int main(int argc, char *argv[]) {
     ("g,groups", "Max Group Size", cxxopts::value<size_t>()->default_value("64"))
     ("l,local", "Local size", cxxopts::value<size_t>()->default_value("512"))
     ("s,sequential", "Sequential Unroll", cxxopts::value<bool>()->default_value("false"))
+    ("t,tile", "On which tile to deploy the test", cxxopts::value<uint32_t>()->default_value("0"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -140,13 +141,14 @@ int main(int argc, char *argv[]) {
   auto local = parsed_opts["local"].as<size_t>();
   auto max_groups = parsed_opts["groups"].as<size_t>();
   auto seq = parsed_opts["sequential"].as<bool>();
+  auto tile = parsed_opts["tile"].as<uint32_t>();
 
   auto nelems = parse_nelems(nelems_string);
   using test_type = sycl::half;
   constexpr uint32_t v_lane = 16;
   size_t alloc_size = nelems * sizeof(test_type);
 
-  auto queue = currentQueue(0, 0);
+  auto queue = currentQueue(tile >> 1, tile & 1);
 
   auto* src = (test_type *)sycl::malloc_device(alloc_size, queue);
   auto* dst = (test_type *)sycl::malloc_device(alloc_size, queue);
