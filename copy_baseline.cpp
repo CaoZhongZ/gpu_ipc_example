@@ -45,8 +45,8 @@ struct copy_persist {
     dst(reinterpret_cast<v_T *>(dst)),
     vu_nelems(elems/v_T::size()/Unroll) {}
 
-  static sycl::event launch(T* dst, const T* src, size_t nelems,
-      size_t max_group =64, size_t local_size = 1024) {
+  static sycl::event launch(sycl::queue queue, T* dst, const T* src, size_t nelems,
+      size_t max_group =64, size_t local_size = 1024, uint32_t repeat = 1) {
     if (nelems < v_T::size() || nelems % v_T::size() != 0)
       throw std::logic_error("Vectorize can't be satisfied");
 
@@ -63,11 +63,17 @@ struct copy_persist {
 
     printf("Launch copy_persist (%zu, %zu) with unroll %d\n", group_num, local_size, Unroll);
 
-    auto queue = currentQueue(0, 0);
     auto e = queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
               copy_persist(dst, src, nelems));
     });
+
+    for (int i = 1; i < repeat; ++ i) {
+      e = queue.submit([&](sycl::handler &cgh) {
+          cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
+                copy_persist(dst, src, nelems));
+      });
+    }
     return e;
   }
 
@@ -163,16 +169,16 @@ int main(int argc, char *argv[]) {
   if (seq) {
     switch (unroll) {
       case 1:
-        e = copy_persist<test_type, v_lane, 1, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 1, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 2:
-        e = copy_persist<test_type, v_lane, 2, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 2, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 4:
-        e = copy_persist<test_type, v_lane, 4, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 4, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 8:
-        e = copy_persist<test_type, v_lane, 8, seq_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 8, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       default:
         throw std::logic_error("Unroll request not supported");
@@ -180,16 +186,16 @@ int main(int argc, char *argv[]) {
   } else {
     switch (unroll) {
       case 1:
-        e = copy_persist<test_type, v_lane, 1, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 1, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 2:
-        e = copy_persist<test_type, v_lane, 2, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 2, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 4:
-        e = copy_persist<test_type, v_lane, 4, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 4, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 8:
-        e = copy_persist<test_type, v_lane, 8, jump_copy>::launch(dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 8, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       default:
         throw std::logic_error("Unroll request not supported");
