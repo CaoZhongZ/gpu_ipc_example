@@ -32,6 +32,40 @@ struct jump_copy {
   }
 };
 
+template <typename t, int Unroll>
+struct group_copy {
+  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
+    auto grp = pos.get_group();
+    auto n_grps = grp.get_group_linear_range();
+    auto grp_sz = grp.get_local_linear_range();
+
+    auto grp_id = grp.get_group_id(0);
+    auto loc_id = grp.get_local_id(0);
+    auto slice = elems / grp_sz;
+    auto base_off = grp_id * slice;
+
+    for (auto off = base_off + loc_id; off < base_off + slice; off += grp_sz * Unroll) {
+#     pragma unroll
+      for (int i = 0; i < Unroll; ++ i)
+        dst[off + i * grp_sz] = src[off + i * grp_sz];
+    }
+  }
+};
+
+template <typename T, int Unroll>
+struct subgroup_copy {
+  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
+    auto sgrp = pos.get_sub_group();
+    auto sgrp_sz = sgrp.get_local_range().size();
+
+    for (size_t off = pos.get_global_id(0); off  < elems; off += pos.get_global_range(0)) {
+      auto i_off = off + pos.get_global_range(0) * i;
+      dst[i_off] = src[i_off];
+    }
+  }
+};
+
+
 template <typename T, int lane_v, int Unroll, template <typename, int> class copy_policy>
 struct copy_persist {
   using v_T = sycl::vec<T, lane_v/sizeof(T)>;
