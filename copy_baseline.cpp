@@ -32,7 +32,7 @@ struct jump_copy {
   }
 };
 
-template <typename t, int Unroll>
+template <typename T, int Unroll>
 struct group_copy {
   static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
     auto grp = pos.get_group();
@@ -56,13 +56,6 @@ struct group_copy {
 template <typename T, int Unroll>
 struct subgroup_copy {
   static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    auto sgrp = pos.get_sub_group();
-    auto sgrp_sz = sgrp.get_local_range().size();
-
-    for (size_t off = pos.get_global_id(0); off  < elems; off += pos.get_global_range(0)) {
-      auto i_off = off + pos.get_global_range(0) * i;
-      dst[i_off] = src[i_off];
-    }
   }
 };
 
@@ -204,16 +197,16 @@ int main(int argc, char *argv[]) {
   if (seq) {
     switch (unroll) {
       case 1:
-        e = copy_persist<test_type, v_lane, 1, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 1, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 2:
-        e = copy_persist<test_type, v_lane, 2, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 2, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 4:
-        e = copy_persist<test_type, v_lane, 4, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 4, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       case 8:
-        e = copy_persist<test_type, v_lane, 8, seq_copy>::launch(queue, dst, src, nelems, max_groups, local);
+        e = copy_persist<test_type, v_lane, 8, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
         break;
       default:
         throw std::logic_error("Unroll request not supported");
