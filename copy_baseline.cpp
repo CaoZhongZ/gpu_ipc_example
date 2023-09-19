@@ -41,13 +41,14 @@ struct group_copy {
 
     auto grp_id = grp.get_group_id(0);
     auto loc_id = grp.get_local_id(0);
-    auto slice = elems / grp_sz;
+    auto slice = elems / n_grps;
     auto base_off = grp_id * slice;
 
     for (auto off = base_off + loc_id; off < base_off + slice; off += grp_sz * Unroll) {
 #     pragma unroll
-      for (int i = 0; i < Unroll; ++ i)
+      for (int i = 0; i < Unroll; ++ i) {
         dst[off + i * grp_sz] = src[off + i * grp_sz];
+      }
     }
   }
 };
