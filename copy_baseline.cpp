@@ -41,7 +41,7 @@ struct group_copy {
 
     auto grp_id = grp.get_group_id(0);
     auto loc_id = grp.get_local_id(0);
-    auto slice = elems / n_grps;
+    auto slice = elems * Unroll / n_grps;
     auto base_off = grp_id * slice;
 
     for (auto off = base_off + loc_id; off < base_off + slice; off += grp_sz * Unroll) {
@@ -53,19 +53,12 @@ struct group_copy {
   }
 };
 
-template <typename T, int Unroll>
-struct subgroup_copy {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-  }
-};
-
-
 template <typename T, int lane_v, int Unroll, template <typename, int> class copy_policy>
-struct copy_persist {
+struct copy_persist : copy_policy<v_T, Unroll> {
   using v_T = sycl::vec<T, lane_v/sizeof(T)>;
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    copy_policy<v_T, Unroll>::run(pos, dst, src, vu_nelems);
+    this->run(pos, dst, src, vu_nelems);
   }
 
   copy_persist(T* dst, const T* src, size_t elems) :
@@ -109,6 +102,30 @@ struct copy_persist {
   v_T* dst;
   size_t vu_nelems;
 };
+
+template <template <typename, int, int, template <typename, int> class> class copy,
+         typename T, int lane_v, template <typename, int> class copy_policy,
+         typename ... Args>
+static sycl::event launch(sycl::queue queue, int unroll, Args&& ... args) {
+#define CASE(Unroll)  \
+  case Unroll: \
+    { \
+      return copy<T, lane_v, Unroll, copy_policy>::launch(queue, \
+          std::forward<Args>(args)...); \
+    } \
+    break;
+
+  switch (unroll) {
+  CASE(1);
+  CASE(2);
+  CASE(4);
+  CASE(8);
+  default:
+    throw std::length_error("Unsupported pattern.");
+    break;
+  }
+#undef CASE
+}
 
 size_t parse_nelems(const std::string& nelems_string) {
   size_t base = 1;
@@ -195,40 +212,13 @@ int main(int argc, char *argv[]) {
   sycl::event e;
 
   if (seq) {
-    switch (unroll) {
-      case 1:
-        e = copy_persist<test_type, v_lane, 1, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      case 2:
-        e = copy_persist<test_type, v_lane, 2, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      case 4:
-        e = copy_persist<test_type, v_lane, 4, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      case 8:
-        e = copy_persist<test_type, v_lane, 8, group_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      default:
-        throw std::logic_error("Unroll request not supported");
-    }
+    e = launch<copy_persist, test_type, v_lane, group_copy>(
+        queue, unroll, dst, src, nelems, max_groups, local);
   } else {
-    switch (unroll) {
-      case 1:
-        e = copy_persist<test_type, v_lane, 1, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      case 2:
-        e = copy_persist<test_type, v_lane, 2, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      case 4:
-        e = copy_persist<test_type, v_lane, 4, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      case 8:
-        e = copy_persist<test_type, v_lane, 8, jump_copy>::launch(queue, dst, src, nelems, max_groups, local);
-        break;
-      default:
-        throw std::logic_error("Unroll request not supported");
-    }
+    e = launch<copy_persist, test_type, v_lane, jump_copy>(
+        queue, unroll, dst, src, nelems, max_groups, local);
   }
+
   // auto e = queue.memcpy(dst, src, alloc_size);
   auto bandwidth = bandwidth_from_event<test_type>(e, nelems);
   auto time = time_from_event(e);
