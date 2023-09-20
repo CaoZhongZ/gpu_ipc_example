@@ -90,6 +90,6 @@ template <typename F>
 class release_guard {
   F f;
 public:
-  local_guard(F f) : f(f) {}
-  ~local_guard() { f(); }
+  release_guard(F f) : f(f) {}
+  ~release_guard() { f(); }
 };
