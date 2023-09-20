@@ -54,7 +54,7 @@ struct group_copy {
 };
 
 template <typename T, int lane_v, int Unroll, template <typename, int> class copy_policy>
-struct copy_persist : copy_policy<v_T, Unroll> {
+struct copy_persist : copy_policy<sycl::vec<T, lane_v/sizeof(T)>, Unroll> {
   using v_T = sycl::vec<T, lane_v/sizeof(T)>;
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
