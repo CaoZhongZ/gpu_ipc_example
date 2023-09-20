@@ -134,7 +134,7 @@ static sycl::event launch(sycl::queue queue, int v_lane, int unroll, Args&& ... 
 #define CASE(LaneV)  \
   case LaneV: \
     { \
-      return launch<T, LaneV, Unroll, copy_policy>( \
+      return launch<copy, T, LaneV, copy_policy>( \
           queue, unroll, std::forward<Args>(args)...); \
     } \
     break;
@@ -208,7 +208,7 @@ int main(int argc, char *argv[]) {
     ("l,local", "Local size", cxxopts::value<size_t>()->default_value("512"))
     ("s,sequential", "Sequential Unroll", cxxopts::value<bool>()->default_value("false"))
     ("t,tile", "On which tile to deploy the test", cxxopts::value<uint32_t>()->default_value("0"))
-    ("v,lanev", "Vecterize amoung SIMD lane", cxxopts::value<int>()->default_value("16");
+    ("v,lanev", "Vecterize amoung SIMD lane", cxxopts::value<int>()->default_value("16"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
