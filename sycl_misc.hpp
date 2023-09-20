@@ -85,3 +85,11 @@ sycl::device currentSubDevice() {
 sycl::queue currentQueue() {
   return currentQueue(g_dev_num, g_part_num);
 }
+
+template <typename F>
+class release_guard {
+  F f;
+public:
+  local_guard(F f) : f(f) {}
+  ~local_guard() { f(); }
+};

@@ -229,6 +229,15 @@ int main(int argc, char *argv[]) {
   auto* src = (test_type *)sycl::malloc_device(alloc_size, queue);
   auto* dst = (test_type *)sycl::malloc_device(alloc_size, queue);
   auto* b_host = sycl::malloc_host(alloc_size, queue);
+  auto* b_check = sycl::malloc_host(alloc_size, queue);
+
+  release_guard __guard([&]{
+    sycl::free(src, queue);
+    sycl::free(dst, queue);
+    sycl::free(b_host, queue);
+    sycl::free(b_check, queue);
+  });
+
   fill_sequential<test_type>(b_host, 0, alloc_size);
 
   queue.memcpy(src, b_host, alloc_size);
@@ -249,7 +258,6 @@ int main(int argc, char *argv[]) {
   auto time = time_from_event(e);
   printf("Copy %zu half in %fns, bandwidth: %fGB/s\n", alloc_size, time, bandwidth);
 
-  auto* b_check = sycl::malloc_host(alloc_size, queue);
   queue.memcpy(b_check, dst, alloc_size);
   queue.wait();
 
