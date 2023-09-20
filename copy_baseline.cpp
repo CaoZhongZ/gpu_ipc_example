@@ -121,7 +121,31 @@ static sycl::event launch(sycl::queue queue, int unroll, Args&& ... args) {
   CASE(4);
   CASE(8);
   default:
-    throw std::length_error("Unsupported pattern.");
+    throw std::length_error("Unsupported unroll.");
+    break;
+  }
+#undef CASE
+}
+
+template <template <typename, int, int, template <typename, int> class> class copy,
+         typename T, template <typename, int> class copy_policy,
+         typename ... Args>
+static sycl::event launch(sycl::queue queue, int v_lane, int unroll, Args&& ... args) {
+#define CASE(LaneV)  \
+  case LaneV: \
+    { \
+      return launch<T, LaneV, Unroll, copy_policy>( \
+          queue, unroll, std::forward<Args>(args)...); \
+    } \
+    break;
+
+  switch (v_lane) {
+    CASE(2);
+    CASE(4);
+    CASE(8);
+    CASE(16);
+  default:
+    throw std::length_error("Unsupported lane width.");
     break;
   }
 #undef CASE
@@ -184,6 +208,7 @@ int main(int argc, char *argv[]) {
     ("l,local", "Local size", cxxopts::value<size_t>()->default_value("512"))
     ("s,sequential", "Sequential Unroll", cxxopts::value<bool>()->default_value("false"))
     ("t,tile", "On which tile to deploy the test", cxxopts::value<uint32_t>()->default_value("0"))
+    ("v,lanev", "Vecterize amoung SIMD lane", cxxopts::value<int>()->default_value("16");
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -193,10 +218,10 @@ int main(int argc, char *argv[]) {
   auto max_groups = parsed_opts["groups"].as<size_t>();
   auto seq = parsed_opts["sequential"].as<bool>();
   auto tile = parsed_opts["tile"].as<uint32_t>();
+  auto v_lane = parsed_opts["lanev"].as<int>();
 
   auto nelems = parse_nelems(nelems_string);
   using test_type = sycl::half;
-  constexpr uint32_t v_lane = 16;
   size_t alloc_size = nelems * sizeof(test_type);
 
   auto queue = currentQueue(tile >> 1, tile & 1);
@@ -212,11 +237,11 @@ int main(int argc, char *argv[]) {
   sycl::event e;
 
   if (seq) {
-    e = launch<copy_persist, test_type, v_lane, group_copy>(
-        queue, unroll, dst, src, nelems, max_groups, local);
+    e = launch<copy_persist, test_type, group_copy>(
+        queue, v_lane, unroll, dst, src, nelems, max_groups, local);
   } else {
-    e = launch<copy_persist, test_type, v_lane, jump_copy>(
-        queue, unroll, dst, src, nelems, max_groups, local);
+    e = launch<copy_persist, test_type, jump_copy>(
+        queue, v_lane, unroll, dst, src, nelems, max_groups, local);
   }
 
   // auto e = queue.memcpy(dst, src, alloc_size);
