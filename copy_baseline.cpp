@@ -84,15 +84,19 @@ struct copy_persist : copy_policy<sycl::vec<T, lane_v/sizeof(T)>, Unroll> {
 
     printf("Launch copy_persist (%zu, %zu) with unroll %d\n", group_num, local_size, Unroll);
 
+    sycl::ext::oneapi::experimental::properties kernel_config {
+      sycl::ext::intel::experimental::grf_size_automatic
+    };
+
     auto e = queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-              copy_persist(dst, src, nelems));
+            kernel_config, copy_persist(dst, src, nelems));
     });
 
     for (int i = 1; i < repeat; ++ i) {
       e = queue.submit([&](sycl::handler &cgh) {
           cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-                copy_persist(dst, src, nelems));
+              kernel_config, copy_persist(dst, src, nelems));
       });
     }
     return e;
@@ -230,6 +234,14 @@ int main(int argc, char *argv[]) {
   auto* dst = (test_type *)sycl::malloc_device(alloc_size, queue);
   auto* b_host = sycl::malloc_host(alloc_size, queue);
   auto* b_check = sycl::malloc_host(alloc_size, queue);
+
+  if (src == nullptr
+      || dst == nullptr
+      || b_host == nullptr
+      || b_check == nullptr) {
+    printf("Insuffient memory\n");
+    return -1;
+  }
 
   release_guard __guard([&]{
     sycl::free(src, queue);
