@@ -93,3 +93,30 @@ public:
   release_guard(F f) : f(f) {}
   ~release_guard() { f(); }
 };
+
+// Copy from sycl runtime, change the interface a little bit
+template <typename T, typename Group, typename... Args>
+std::enable_if_t<std::is_trivially_destructible<T>::value &&
+                     sycl::detail::is_group<Group>::value,
+                 sycl::local_ptr<typename std::remove_extent<T>::type>>
+    __SYCL_ALWAYS_INLINE __shared__(Group g, Args &&...args) {
+  (void)g;
+#ifdef __SYCL_DEVICE_ONLY__
+  __attribute__((opencl_local)) std::uint8_t *AllocatedMem =
+      __sycl_allocateLocalMemory(sizeof(T), alignof(T));
+
+  if constexpr (!std::is_trivial_v<T>) {
+    sycl::id<3> Id = __spirv::initLocalInvocationId<3, sycl::id<3>>();
+    if (Id == sycl::id<3>(0, 0, 0))
+      new (AllocatedMem) T(std::forward<Args>(args)...);
+    sycl::detail::workGroupBarrier();
+  }
+  return reinterpret_cast<
+      __attribute__((opencl_local)) typename std::remove_extent<T>::type *>(AllocatedMem);
+#else
+  // Silence unused variable warning
+  [&args...] {}();
+  throw sycl::exception(sycl::errc::feature_not_supported,
+      "sycl_ext_oneapi_local_memory extension is not supported on host device");
+#endif
+}
