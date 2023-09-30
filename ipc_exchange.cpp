@@ -15,6 +15,7 @@
 #include "cxxopts.hpp"
 #include "ze_exception.hpp"
 #include "sycl_misc.hpp"
+#include "ipc_exchange.h"
 
 static constexpr int msg_len = 2048;
 

@@ -1,8 +1,10 @@
 #include <iostream>
+#include <mpi.h>
 #include <sycl/sycl.hpp>
 
 #include "cxxopts.hpp"
 #include "sycl_misc.hpp"
+#include "ze_exception.hpp"
 #include "ipc_exchange.h"
 
 template <typename T, int Unroll>
@@ -86,18 +88,20 @@ public:
   static inline void init_slm_flags(
       sycl::nd_item<1>,
       sycl::local_ptr<uint32_t>,
-      sycl::local_ptr<bool>,
+      sycl::local_ptr<uint32_t>,
       size_t
   ) {}
 
   static inline void wait_on(
-      sycl::nd_item<1>, uint32_t*, uint32_t
+      sycl::nd_item<1>, uint32_t*, uint32_t,
       sycl::local_ptr<uint32_t>,
       sycl::local_ptr<uint32_t>
   ) {}
 
   static inline void finish(
-      sycl::nd_item<1>, uint32_t, uint32_t*, uint32_t*
+      sycl::nd_item<1>, uint32_t, uint32_t*, uint32_t*,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
   ) {};
 
   static inline size_t get_target(
@@ -113,12 +117,12 @@ public:
   static inline void init_slm_flags(
       sycl::nd_item<1> pos,
       sycl::local_ptr<uint32_t> counter_array,
-      sycl::local_ptr<bool> wait_array,
+      sycl::local_ptr<uint32_t> wait_array,
       size_t n_slot
   ) {}
 
   static inline void wait_on(
-      sycl::nd_item<1> pos, uint32_t* flag, uint32_t value
+      sycl::nd_item<1> pos, uint32_t* flag, uint32_t value,
       sycl::local_ptr<uint32_t>,
       sycl::local_ptr<uint32_t>
   ) {
@@ -129,11 +133,13 @@ public:
     }
 
     // remove it if not needed
-    sycl::group_barrier(g.get_sub_group());
+    sycl::group_barrier(pos.get_sub_group());
   }
 
   static inline void finish(
-      sycl::nd_item<1> pos, uint32_t target, uint32_t* flag, uint32_t *remote
+      sycl::nd_item<1> pos, uint32_t target, uint32_t* flag, uint32_t *remote,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
   ) {
     atomic_ref g_flag(*flag);
     atomic_ref r_flag(*remote);
@@ -145,13 +151,13 @@ public:
         r_flag += g_flag.load();
     }
     // remove it if not needed
-    sycl::group_barrier(g.get_sub_group());
+    sycl::group_barrier(pos.get_sub_group());
   };
 
   static inline size_t get_target(
       sycl::nd_item<1> pos
   ) {
-    return pos.get_sub_group().get_group_range(0);
+    return pos.get_sub_group().get_group_range()[0];
   }
 };
 
@@ -169,7 +175,7 @@ class hierarchy_sync {
       sycl::local_ptr<uint32_t> local_counter
   ) {
     slm_atomic_ref l_c(*local_counter);
-    return (l_c ++ == 2*pos.get_sub_group().get_group_range() -1);
+    return (l_c ++ == 2*pos.get_sub_group().get_group_range()[0] -1);
   }
 
 public:
@@ -177,10 +183,10 @@ public:
   static inline void init_slm_flags(
       sycl::nd_item<1> pos,
       sycl::local_ptr<uint32_t> counter_array,
-      sycl::local_ptr<bool> wait_array,
+      sycl::local_ptr<uint32_t> wait_array,
       size_t n_slot
   ) {
-    auto off = pos.get_local_size();
+    auto off = pos.get_local_range(0);
     if (off < n_slot) {
       counter_array[off] = 0;
       wait_array[off] = true;
@@ -210,11 +216,12 @@ public:
     }
 
     // remove it if not needed
-    sycl::group_barrier(g.get_sub_group());
+    sycl::group_barrier(pos.get_sub_group());
   }
 
   static inline void finish(
-      sycl::nd_item<1> pos, uint32_t target, uint32_t* flag, uint32_t *remote
+      sycl::nd_item<1> pos,
+      uint32_t target, uint32_t* flag, uint32_t *remote,
       sycl::local_ptr<uint32_t> local_counter,
       sycl::local_ptr<uint32_t> local_wait
   ) {
@@ -235,7 +242,7 @@ public:
       }
     }
     // remove it if not needed
-    sycl::group_barrier(g.get_sub_group());
+    sycl::group_barrier(pos.get_sub_group());
   };
 
   static inline size_t get_target(
@@ -253,12 +260,12 @@ public:
 template <typename T, size_t NElems>
 struct chunk_copy {
   static constexpr size_t v_lane = NElems * sizeof(T) < 16 ? 8 : 16;
-  static constexpr size_t v_T = sycl::vec<T, v_lane/sizeof(T)>;
+  using v_T = sycl::vec<T, v_lane/sizeof(T)>;
   static_assert(NElems % v_T::size() == 0);
   static constexpr size_t n_loop = NElems / v_T::size();
 
   static inline size_t chunk_size(sycl::nd_item<1> pos) {
-    return NElems * pos.get_global_size(0) * n_loop;
+    return NElems * pos.get_global_range(0) * n_loop;
   }
 
   static inline size_t item_size() {
@@ -271,7 +278,7 @@ struct chunk_copy {
       size_t start, size_t nelems
   ) {
     auto* v_dst = reinterpret_cast<v_T *>(dst);
-    auto* v_src = reinterpret_cast<v_T *>(src);
+    auto* v_src = reinterpret_cast<const v_T *>(src);
     auto bound = nelems / v_T::size();
     auto off = pos.get_global_id(0) + start;
     auto step = pos.get_global_range(0);
@@ -283,44 +290,44 @@ struct chunk_copy {
       off += step;
     }
   }
-}
+};
 
 //
 // If we launching full GPU occupancy, we have 256K ~ 4M elems of half type
 //
-template <typename T, class SyncProto, template <typename, size_t> CopyPolicy>
+template <typename T, class SyncProto, template <typename, size_t> class CopyPolicy>
 struct copy_persist {
   static constexpr int sync_size = 16;
   static constexpr int slice = 32; // 2M granularity
 
   using copy_type = CopyPolicy<T, slice>;
-  using v_T = copy_type::v_T;
+  using v_T = typename copy_type::v_T;
 
   copy_persist(T* dst, const T* src, uint32_t *sync, uint32_t* remote, size_t nelems)
     : src(src), dst(dst), sync(sync), remote(remote), nelems(nelems) {}
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    auto* local_sync = __shared__<uint32_t[sync_size]>(pos.get_group());
-    auto* local_wait = __shared__<bool[sync_size]>(pos.get_group());
-    sync_protocol::init_slm_flags(pos, local_sync, local_wait, sync_size);
+    auto local_sync = __shared__<uint32_t[sync_size]>(pos.get_group());
+    auto local_wait = __shared__<uint32_t[sync_size]>(pos.get_group());
+    SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
 
     uint32_t progress = 0;
     uint32_t start = 0;
 
     while (start < nelems) {
       SyncProto::wait_on(
-          pos, sync + progress,
+          pos, sync + progress, 0,
           local_sync + progress % sync_size, local_wait + progress % sync_size);
 
       copy_type::run(pos, dst, src, start, nelems);
 
       SyncProto::finish(
-          pos, sync_protocol::get_target(),
+          pos, SyncProto::get_target(pos),
           sync + progress, remote + progress,
           local_sync + progress % sync_size, local_wait + progress % sync_size);
 
       ++ progress;
-      start += copy_type<T, slice>::chunk_size(pos);
+      start += copy_type::chunk_size(pos);
     }
   }
 
@@ -332,8 +339,8 @@ struct copy_persist {
     if (nelems < v_T::size() || nelems % v_T::size() != 0)
       throw std::logic_error("Vectorize can't be satisfied");
 
-    size_t required_items = (nelems + chunk_copy::item_size() -1)
-                                    / chunk_copy::item_size();
+    size_t required_items = (nelems + copy_type::item_size() -1)
+                                    / copy_type::item_size();
     size_t required_groups = (required_items + local_size -1)
                                     / local_size;
 
@@ -344,14 +351,14 @@ struct copy_persist {
 
     auto e = queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-              copy_persist(dst, src, nelems));
+              copy_persist(dst, src, sync, remote, nelems));
     });
 
     // for performance evaluation
     for (int i = 1; i < repeat; ++ i) {
       e = queue.submit([&](sycl::handler &cgh) {
           cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-                copy_persist(dst, src, nelems));
+                copy_persist(dst, src, sync, remote, nelems));
       });
     }
     return e;
@@ -365,8 +372,8 @@ private:
   size_t nelems;
 };
 
-template <template <typename, class, class> class Copy,
-         typename T, class SyncProto, template <typename, int> class CopyPolicy,
+template <template <typename, class, template <typename, size_t> class> class Copy,
+         typename T, class SyncProto, template <typename, size_t> class CopyPolicy,
          typename ... Args>
 static sycl::event launch(sycl::queue queue, Args&& ... args) {
   return Copy<T, SyncProto, CopyPolicy>::launch(queue, std::forward<Args>(args)...);
@@ -432,10 +439,11 @@ int main(int argc, char *argv[]) {
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
-  auto unroll =  parsed_opts["unroll"].as<uint32_t>();
   auto local = parsed_opts["local"].as<size_t>();
   auto max_groups = parsed_opts["groups"].as<size_t>();
-  auto sync = parsed_opts["sync_mode"].as<int>();
+  auto sync_mode = parsed_opts["sync_mode"].as<int>();
+
+  zeCheck(zeInit(0));
 
   // init section
   auto ret = MPI_Init(&argc, &argv);
@@ -444,14 +452,19 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
+  int rank, world;
+  MPI_Comm_size(MPI_COMM_WORLD, &world);
+  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
   auto nelems = parse_nelems(nelems_string);
   using test_type = sycl::half;
   size_t data_size = nelems * sizeof(test_type);
   size_t gpu_pagesz = 2 * 1024 * 1024ull;
   size_t sync_grain = 256 * 1024ull;
 
-  auto sync_size = (alloc_size + sync_grain -1) / sync_grain;
-  auto alloc_size = (data_size + sync_size + gpu_pagesz -1) / gpu_pagesz * gpu_pagesz;
+  auto sync_size = (data_size + sync_grain -1) / sync_grain * sizeof(uint32_t);
+  auto alloc_size = (data_size + sync_size + gpu_pagesz -1)
+                  / gpu_pagesz * gpu_pagesz;
 
   auto queue = currentQueue(rank >> 1, rank & 1);
 
@@ -464,8 +477,8 @@ int main(int argc, char *argv[]) {
   auto* b_check = sycl::malloc_host(alloc_size, queue);
 
   size_t sync_off = (data_size + 128 -1) / 128 * 128;
-  auto* s_host = b_host + sync_off;
-  auto* sync = dst + sync_off;
+  auto* s_host = (uint32_t *)b_host + sync_off;
+  auto* sync = (uint32_t *)dst + sync_off;
 
   release_guard __guard([&]{
     sycl::free(src, queue);
@@ -475,12 +488,6 @@ int main(int argc, char *argv[]) {
   });
 
   release_guard __mpifinalize([&] {MPI_Finalize();});
-
-  zeCheck(zeInit(0));
-  int rank, world;
-
-  MPI_Comm_size(MPI_COMM_WORLD, &world);
-  MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
   fill_sequential<test_type>(b_host, 0, data_size);
   memset(s_host, 0, sync_size);
@@ -493,25 +500,34 @@ int main(int argc, char *argv[]) {
   size_t offsets[world];
   auto ipc_handle = open_peer_ipc_mems(dst, rank, world, peer_bases, offsets);
 
+  release_guard __close_ipc_handles([&] {
+      auto l0_ctx = sycl::get_native<
+          sycl::backend::ext_oneapi_level_zero>(queue.get_context());
+      for (void *peer_base : peer_bases)
+        zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_base));
+      // put ipc_handle
+      (void) ipc_handle;
+  });
+
   void *peer_ptrs[world];
   std::transform(peer_bases, peer_bases + world, offsets, peer_ptrs,
       [](void *p, size_t off) {return (char *)p + off;});
 
   sycl::event e;
-  auto *remote = peer_ptrs[rank ^ 1] + sync_off;
+  auto *remote = (uint32_t *)peer_ptrs[rank ^ 1] + sync_off;
 
-  switch(sync) {
+  switch(sync_mode) {
   case 0:
     e = launch<copy_persist, test_type, dummy_sync, chunk_copy>(
-        queue, dst, src, sync, remote, nelems, max_groups, local);
+        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems, max_groups, local);
     break;
   case 1:
     e = launch<copy_persist, test_type, flat_sync, chunk_copy>(
-        queue, dst, src, sync, remote, nelems, max_groups, local);
+        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems, max_groups, local);
     break;
   case 2:
     e = launch<copy_persist, test_type, hierarchy_sync, chunk_copy>(
-        queue, dst, src, sync, remote, nelems, max_groups, local);
+        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems, max_groups, local);
     break;
   default:
     throw std::logic_error("Unsupported synchronous mode.");

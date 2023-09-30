@@ -17,7 +17,7 @@ CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES)
 
 all : copy_atomicctl
 
-copy_atomicctl : copy_atomicctl.cpp ipc_exchange.cpp
+copy_atomicctl : copy_atomicctl.cpp ipc_exchange.cpp sycl_misc.cpp
 
 clean:
 	rm -f fill_remote atomic_2020 linearize allreduce list_device copy_atomicctl
