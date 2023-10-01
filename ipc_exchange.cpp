@@ -17,8 +17,6 @@
 #include "sycl_misc.hpp"
 #include "ipc_exchange.h"
 
-static constexpr int msg_len = 2048;
-
 struct exchange_contents {
   // first 4-byte is file descriptor for drmbuf or gem object
   union {
