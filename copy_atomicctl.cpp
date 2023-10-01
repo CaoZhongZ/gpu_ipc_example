@@ -238,9 +238,25 @@ struct chunk_copy {
     while (off < bound) {
 #     pragma unroll
       for (int n = 0; n < n_loop; ++ n) {
-        if (off < bound)
+        if (off < bound) {
           v_dst[off] = v_src[off];
-        off += pos.get_global_range(0);
+          off += pos.get_global_range(0);
+        }
+      }
+    }
+  }
+
+  static inline void run(
+      T* dst, const T* src, size_t off, size_t step, size_t nelems
+  ) {
+    auto* v_dst = reinterpret_cast<v_T *>(dst);
+    auto* v_src = reinterpret_cast<const v_T *>(src);
+    auto bound = nelems / v_T::size();
+#   pragma unroll
+    for (int n = 0; n < n_loop; ++ n) {
+      if (off < bound) {
+        v_dst[off] = v_src[off];
+        off += step;
       }
     }
   }
@@ -276,6 +292,8 @@ struct copy_persist {
   using copy_type = CopyPolicy<T, slice>;
   using v_T = typename copy_type::v_T;
 
+  static constexpr size_t n_loop = copy_type::n_loop;
+
   copy_persist(T* dst, const T* src, uint32_t *sync, uint32_t* remote, size_t nelems)
     : src(src), dst(dst), sync(sync), remote(remote), nelems(nelems) {}
 
@@ -284,10 +302,11 @@ struct copy_persist {
     auto local_wait = __shared__<uint32_t[sync_size]>(pos.get_group());
     SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
 
-    uint32_t progress = 0;
-    uint32_t start = 0;
+    auto step = pos.get_global_range(0);
 
-    copy_type::run(pos, dst, src, nelems);
+    for (size_t off = pos.get_global_id(0);
+        off < nelems/v_T::size(); off += step * n_loop)
+      copy_type::run(dst, src, off, step, nelems);
 
     /*
     while (start < nelems) {
