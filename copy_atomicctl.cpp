@@ -218,7 +218,7 @@ struct chunk_copy {
   static constexpr size_t n_loop = NElems / v_T::size();
 
   static inline size_t chunk_size(sycl::nd_item<1> pos) {
-    return NElems * pos.get_global_range(0) * n_loop;
+    return n_loop * pos.get_global_range(0);
   }
 
   static inline size_t item_size() {
@@ -356,7 +356,7 @@ void fill_sequential(void *p, int rank, size_t nelems) {
   auto *p_t = reinterpret_cast<T *>(p);
 
   for (size_t i = 0; i < nelems; ++ i) {
-    p_t[i] = i + rank;
+    p_t[i] = (float)(i + rank) / 1000.;
   }
 }
 
@@ -492,6 +492,9 @@ int main(int argc, char *argv[]) {
   queue.memcpy(b_check, dst, alloc_size);
   queue.wait();
 
-  if (memcmp(b_check, b_host, data_size) == 0)
+  int pos = memcmp(b_check, b_host, data_size);
+  if ( pos == 0)
     printf("Verified\n");
+  else
+    printf("Error at %d\n", pos);
 }
