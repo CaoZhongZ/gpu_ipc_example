@@ -399,11 +399,10 @@ size_t parse_nelems(const std::string& nelems_string) {
 }
 
 template <typename T>
-void fill_sequential(void *p, int rank, size_t size) {
-  auto typed_sz = size / sizeof(T);
+void fill_sequential(void *p, int rank, size_t nelems) {
   auto *p_t = reinterpret_cast<T *>(p);
 
-  for (size_t i = 0; i < typed_sz; ++ i) {
+  for (size_t i = 0; i < nelems; ++ i) {
     p_t[i] = i + rank;
   }
 }
@@ -452,6 +451,8 @@ int main(int argc, char *argv[]) {
     return -1;
   }
 
+  release_guard __mpifinalize([&] {MPI_Finalize();});
+
   int rank, world;
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -460,9 +461,11 @@ int main(int argc, char *argv[]) {
   using test_type = sycl::half;
   size_t data_size = nelems * sizeof(test_type);
   size_t gpu_pagesz = 2 * 1024 * 1024ull;
+
+  // sync every 256K elems
   size_t sync_grain = 256 * 1024ull;
 
-  auto sync_size = (data_size + sync_grain -1) / sync_grain * sizeof(uint32_t);
+  auto sync_size = (nelems + sync_grain -1) / sync_grain * sizeof(uint32_t);
   auto alloc_size = (data_size + sync_size + gpu_pagesz -1)
                   / gpu_pagesz * gpu_pagesz;
 
@@ -470,15 +473,8 @@ int main(int argc, char *argv[]) {
 
   auto* src = (test_type *)sycl::malloc_device(data_size, queue);
   auto* dst = (test_type *)sycl::malloc_device(alloc_size, queue);
-
-  // initialize data + sync (init)
   auto* b_host = sycl::malloc_host(alloc_size, queue);
-  // check data + sync (write)
   auto* b_check = sycl::malloc_host(alloc_size, queue);
-
-  size_t sync_off = (data_size + 128 -1) / 128 * 128;
-  auto* s_host = (uint32_t *)b_host + sync_off;
-  auto* sync = (uint32_t *)dst + sync_off;
 
   release_guard __guard([&]{
     sycl::free(src, queue);
@@ -487,9 +483,11 @@ int main(int argc, char *argv[]) {
     sycl::free(b_check, queue);
   });
 
-  release_guard __mpifinalize([&] {MPI_Finalize();});
+  size_t sync_off = (data_size + 128 -1) / 128 * 128;
+  auto* s_host = (uint32_t *)((char *)b_host + sync_off);
+  auto* sync = (uint32_t *)((char *)dst + sync_off);
 
-  fill_sequential<test_type>(b_host, 0, data_size);
+  fill_sequential<test_type>(b_host, 0, nelems);
   memset(s_host, 0, sync_size);
 
   queue.memcpy(src, b_host, data_size);
@@ -498,14 +496,15 @@ int main(int argc, char *argv[]) {
 
   void* peer_bases[world];
   size_t offsets[world];
-  auto ipc_handle = open_peer_ipc_mems(dst, rank, world, peer_bases, offsets);
 
+  auto ipc_handle = open_peer_ipc_mems(dst, rank, world, peer_bases, offsets);
   release_guard __close_ipc_handles([&] {
       auto l0_ctx = sycl::get_native<
           sycl::backend::ext_oneapi_level_zero>(queue.get_context());
-      for (void *peer_base : peer_bases)
-        zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_base));
-      // put ipc_handle
+      for (int i = 0; i < world; ++ i)
+        if (i != rank)
+          zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
+      // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle));
       (void) ipc_handle;
   });
 
@@ -513,9 +512,9 @@ int main(int argc, char *argv[]) {
   std::transform(peer_bases, peer_bases + world, offsets, peer_ptrs,
       [](void *p, size_t off) {return (char *)p + off;});
 
-  sycl::event e;
-  auto *remote = (uint32_t *)peer_ptrs[rank ^ 1] + sync_off;
+  auto *remote = (uint32_t *)((char *)peer_ptrs[rank ^ 1] + sync_off);
 
+  sycl::event e;
   switch(sync_mode) {
   case 0:
     e = launch<copy_persist, test_type, dummy_sync, chunk_copy>(
@@ -541,6 +540,6 @@ int main(int argc, char *argv[]) {
   queue.memcpy(b_check, dst, alloc_size);
   queue.wait();
 
-  if (memcmp(b_check, b_host, alloc_size) == 0)
+  if (memcmp(b_check, b_host, data_size) == 0)
     printf("Verified\n");
 }
