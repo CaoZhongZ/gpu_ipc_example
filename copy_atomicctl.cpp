@@ -303,10 +303,23 @@ struct copy_persist {
     SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
 
     auto step = pos.get_global_range(0);
+    size_t progress = 0;
 
     for (size_t off = pos.get_global_id(0);
-        off < nelems/v_T::size(); off += step * n_loop)
+        off < nelems/v_T::size(); off += step * n_loop) {
+      SyncProto::wait_on(
+          pos, sync + progress, 0,
+          local_sync + progress % sync_size, local_wait + progress % sync_size);
+
       copy_type::run(dst, src, off, step, nelems);
+
+      SyncProto::finish(
+          pos, SyncProto::get_target(pos),
+          sync + progress, remote + progress,
+          local_sync + progress % sync_size, local_wait + progress % sync_size);
+
+      ++ progress;
+    }
 
     /*
     while (start < nelems) {
