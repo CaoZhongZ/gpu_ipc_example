@@ -300,7 +300,7 @@ struct copy_persist {
     size_t actual_groups = std::min(required_groups, max_group);
     auto global_size = actual_groups * local_size;
 
-    printf("Launch copy_persist (%zu, %zu)", actual_groups, local_size);
+    printf("Launch copy_persist (%zu, %zu)\n", actual_groups, local_size);
 
     auto e = queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
@@ -383,9 +383,8 @@ int main(int argc, char *argv[]) {
   opts.allow_unrecognised_options();
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
-    ("u,unroll", "Unroll request", cxxopts::value<uint32_t>()->default_value("1"))
     ("g,groups", "Max Group Size", cxxopts::value<size_t>()->default_value("64"))
-    ("l,local", "Local size", cxxopts::value<size_t>()->default_value("512"))
+    ("l,local", "Local size", cxxopts::value<size_t>()->default_value("1024"))
     ("s,sync_mode", "Synchronous mode", cxxopts::value<int>()->default_value("0"))
     ;
 
