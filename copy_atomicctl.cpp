@@ -90,7 +90,9 @@ public:
       sycl::local_ptr<uint32_t>,
       sycl::local_ptr<uint32_t>,
       size_t
-  ) {}
+  ) {
+    // sycl::group_barrier(pos.get_group());
+  }
 
   static inline void wait_on(
       sycl::nd_item<1>, uint32_t*, uint32_t,
