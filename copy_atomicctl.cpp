@@ -233,13 +233,14 @@ struct chunk_copy {
     auto* v_src = reinterpret_cast<const v_T *>(src);
     auto bound = nelems / v_T::size();
 
-    for (size_t off = pos.get_global_id(0);
-        off < bound; off += pos.get_global_range(0) * n_loop) {
+    size_t off = pos.get_global_id(0);
+
+    while (off < bound) {
 #     pragma unroll
       for (int n = 0; n < n_loop; ++ n) {
-        auto i_off = off + pos.get_global_range(0) * n;
-        if (i_off < bound)
-          v_dst[i_off] = v_src[i_off];
+        if (off < bound)
+          v_dst[off] = v_src[off];
+        off += pos.get_global_range(0);
       }
     }
   }
