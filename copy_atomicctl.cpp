@@ -227,6 +227,25 @@ struct chunk_copy {
 
   static inline void run(
       sycl::nd_item<1> pos,
+      T* dst, const T* src, size_t nelems
+  ) {
+    auto* v_dst = reinterpret_cast<v_T *>(dst);
+    auto* v_src = reinterpret_cast<const v_T *>(src);
+    auto bound = nelems / v_T::size();
+
+    for (size_t off = pos.get_global_id(0);
+        off < bound; off += pos.get_global_range(0) * n_loop) {
+#     pragma unroll
+      for (int n = 0; n < n_loop; ++ n) {
+        auto i_off = off + pos.get_global_range(0) * n;
+        if (i_off < bound)
+          v_dst[i_off] = v_src[i_off];
+      }
+    }
+  }
+
+  static inline void run(
+      sycl::nd_item<1> pos,
       T* dst, const T* src,
       size_t start, size_t nelems
   ) {
@@ -267,6 +286,9 @@ struct copy_persist {
     uint32_t progress = 0;
     uint32_t start = 0;
 
+    copy_type::run(pos, dst, src, nelems);
+
+    /*
     while (start < nelems) {
       SyncProto::wait_on(
           pos, sync + progress, 0,
@@ -282,6 +304,7 @@ struct copy_persist {
       ++ progress;
       start += copy_type::chunk_size(pos);
     }
+    */
   }
 
   static sycl::event launch(

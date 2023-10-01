@@ -12,7 +12,8 @@ struct seq_copy {
 #     pragma unroll
       for (int i = 0; i < Unroll; ++ i) {
         auto i_off = Unroll * off + i;
-        dst[i_off] = src[i_off];
+        if (i_off < elems)
+          dst[i_off] = src[i_off];
       }
     }
   }
@@ -26,7 +27,8 @@ struct jump_copy {
 #     pragma unroll
       for (int i = 0; i < Unroll; ++ i) {
         auto i_off = off + pos.get_global_range(0) * i;
-        dst[i_off] = src[i_off];
+        if (i_off < elems)
+          dst[i_off] = src[i_off];
       }
     }
   }
