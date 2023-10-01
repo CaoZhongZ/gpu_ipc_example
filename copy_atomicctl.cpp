@@ -7,55 +7,6 @@
 #include "ze_exception.hpp"
 #include "ipc_exchange.h"
 
-template <typename T, int Unroll>
-struct seq_copy {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    for (size_t off = pos.get_global_id(0);
-        off < elems; off += pos.get_global_range(0)) {
-#     pragma unroll
-      for (int i = 0; i < Unroll; ++ i) {
-        auto i_off = Unroll * off + i;
-        dst[i_off] = src[i_off];
-      }
-    }
-  }
-};
-
-template <typename T, int Unroll>
-struct jump_copy {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    for (size_t off = pos.get_global_id(0);
-        off  < elems * Unroll; off += pos.get_global_range(0)* Unroll) {
-#     pragma unroll
-      for (int i = 0; i < Unroll; ++ i) {
-        auto i_off = off + pos.get_global_range(0) * i;
-        dst[i_off] = src[i_off];
-      }
-    }
-  }
-};
-
-template <typename T, int Unroll>
-struct group_copy {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    auto grp = pos.get_group();
-    auto n_grps = grp.get_group_linear_range();
-    auto grp_sz = grp.get_local_linear_range();
-
-    auto grp_id = grp.get_group_id(0);
-    auto loc_id = grp.get_local_id(0);
-    auto slice = elems * Unroll / n_grps;
-    auto base_off = grp_id * slice;
-
-    for (auto off = base_off + loc_id; off < base_off + slice; off += grp_sz * Unroll) {
-#     pragma unroll
-      for (int i = 0; i < Unroll; ++ i) {
-        dst[off + i * grp_sz] = src[off + i * grp_sz];
-      }
-    }
-  }
-};
-
 template <typename T>
 class atomic_ref: public sycl::atomic_ref<T,
                       sycl::memory_order::relaxed,
