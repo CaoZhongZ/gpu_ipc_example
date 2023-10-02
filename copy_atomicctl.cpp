@@ -45,6 +45,13 @@ public:
     // sycl::group_barrier(pos.get_group());
   }
 
+  static inline void init_slm_flags(
+      size_t,
+      sycl::local_ptr<uint32_t>,
+      sycl::local_ptr<uint32_t>,
+      size_t
+  ) {}
+
   static inline void wait_on(
       sycl::nd_item<1>, uint32_t*, uint32_t,
       sycl::local_ptr<uint32_t>,
@@ -68,14 +75,22 @@ class flat_sync {
 public:
   // do nothing
   static inline void init_slm_flags(
-      sycl::nd_item<1> pos,
-      sycl::local_ptr<uint32_t> counter_array,
-      sycl::local_ptr<uint32_t> wait_array,
-      size_t n_slot
+      sycl::nd_item<1>,
+      sycl::local_ptr<uint32_t>,
+      sycl::local_ptr<uint32_t>,
+      size_t
+  ) {}
+
+  static inline void init_slm_flags(
+      size_t,
+      sycl::local_ptr<uint32_t>,
+      sycl::local_ptr<uint32_t>,
+      size_t
   ) {}
 
   static inline void wait_on(
-      sycl::nd_item<1> pos, uint32_t* flag, uint32_t value,
+      sycl::nd_item<1> pos,
+      uint32_t* flag, uint32_t value,
       sycl::local_ptr<uint32_t>,
       sycl::local_ptr<uint32_t>
   ) {
@@ -90,7 +105,8 @@ public:
   }
 
   static inline void finish(
-      sycl::nd_item<1> pos, uint32_t target, uint32_t* flag, uint32_t *remote,
+      sycl::nd_item<1> pos, uint32_t target,
+      uint32_t* flag, uint32_t *remote,
       sycl::local_ptr<uint32_t> local_counter,
       sycl::local_ptr<uint32_t> local_wait
   ) {
@@ -101,7 +117,7 @@ public:
       uint32_t count = g_flag++;
 
       if (count == target - 1 || count == 2*target -1)
-        r_flag += g_flag.load();
+        r_flag += target;
     }
     // remove it if not needed
     sycl::group_barrier(pos.get_sub_group());
@@ -116,7 +132,6 @@ public:
 
 class hierarchy_sync {
   static inline bool group_leader(
-      sycl::nd_item<1> pos,
       sycl::local_ptr<uint32_t> local_counter
   ) {
     slm_atomic_ref l_c(*local_counter);
@@ -128,7 +143,15 @@ class hierarchy_sync {
       sycl::local_ptr<uint32_t> local_counter
   ) {
     slm_atomic_ref l_c(*local_counter);
-    return (l_c ++ == 2*pos.get_sub_group().get_group_range()[0] -1);
+    return (l_c ++ == 2*pos.get_sub_group().get_local_range()[0] -1);
+  }
+
+  static inline bool group_tail(
+      size_t local_size,
+      sycl::local_ptr<uint32_t> local_counter
+  ) {
+    sml_atomic_ref l_c(*local_counter);
+    return (l_c ++ == 2 * local_size -1);
   }
 
 public:
@@ -148,6 +171,19 @@ public:
     sycl::group_barrier(pos.get_group());
   }
 
+  // put group barrier outside!
+  static inline void init_slm_flags(
+      size_t off,
+      sycl::local_ptr<uint32_t> counter_array,
+      sycl::local_ptr<uint32_t> wait_array,
+      size_t n_slot
+  ) {
+    if (off < n_slot) {
+      counter_array[off] = 0;
+      wait_array[off] = true;
+    }
+  }
+
   static inline void wait_on(
       sycl::nd_item<1> pos,
       uint32_t* flag, uint32_t value,
@@ -160,7 +196,7 @@ public:
     atomic_ref g_flag(*flag);
 
     if (pos.get_sub_group().leader()) {
-      if (group_leader(pos, local_counter)) {
+      if (group_leader(local_counter)) {
         while(g_flag.load() != value);
         l_wait.store(false);
       } else {
@@ -188,7 +224,7 @@ public:
         uint32_t count = g_flag++;
 
         if (count == target - 1 || count == 2*target -1)
-          r_flag += g_flag.load();
+          r_flag += target;
 
         l_c.store(0);
         l_w.store(true);
@@ -300,7 +336,7 @@ struct copy_persist {
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
     auto local_sync = __shared__<uint32_t[sync_size]>(pos.get_group());
     auto local_wait = __shared__<uint32_t[sync_size]>(pos.get_group());
-    SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
+    SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
 
     auto step = pos.get_global_range(0);
     size_t progress = 0;
@@ -320,24 +356,6 @@ struct copy_persist {
 
       ++ progress;
     }
-
-    /*
-    while (start < nelems) {
-      SyncProto::wait_on(
-          pos, sync + progress, 0,
-          local_sync + progress % sync_size, local_wait + progress % sync_size);
-
-      copy_type::run(pos, dst, src, start, nelems);
-
-      SyncProto::finish(
-          pos, SyncProto::get_target(pos),
-          sync + progress, remote + progress,
-          local_sync + progress % sync_size, local_wait + progress % sync_size);
-
-      ++ progress;
-      start += copy_type::chunk_size(pos);
-    }
-    */
   }
 
   static sycl::event launch(
