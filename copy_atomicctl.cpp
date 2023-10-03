@@ -150,7 +150,7 @@ class hierarchy_sync {
       size_t local_size,
       sycl::local_ptr<uint32_t> local_counter
   ) {
-    sml_atomic_ref l_c(*local_counter);
+    slm_atomic_ref l_c(*local_counter);
     return (l_c ++ == 2 * local_size -1);
   }
 
