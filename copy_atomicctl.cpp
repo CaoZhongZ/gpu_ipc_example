@@ -146,7 +146,7 @@ class hierarchy_sync {
       sycl::local_ptr<uint32_t> local_counter
   ) {
     slm_atomic_ref l_c(*local_counter);
-    return (l_c ++ == 2*pos.get_sub_group().get_local_range()[0] -1);
+    return (l_c ++ == 2*pos.get_sub_group().get_group_range()[0] -1);
   }
 
   static inline bool group_tail(
