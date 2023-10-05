@@ -103,7 +103,6 @@ public:
       while((g_flag.load() & 0xffff) == target);
     }
 
-    // remove it if not needed
     sycl::group_barrier(pos.get_sub_group());
   }
 
@@ -117,12 +116,12 @@ public:
     atomic_ref r_flag(*remote);
 
     if (pos.get_sub_group().leader()) {
-      uint32_t count = g_flag++ & 0xffff;
+      uint32_t count = g_flag++;
 
-      if (count == target - 1)
+      if ((count & 0xffff) == target - 1)
         r_flag |= (target << 16);
     }
-    // remove it if not needed
+
     sycl::group_barrier(pos.get_sub_group());
   };
 
@@ -207,7 +206,6 @@ public:
       }
     }
 
-    // remove it if not needed
     sycl::group_barrier(pos.get_sub_group());
   }
 
@@ -233,7 +231,7 @@ public:
         l_w.store(true);
       }
     }
-    // remove it if not needed
+
     sycl::group_barrier(pos.get_sub_group());
   };
 
@@ -526,7 +524,12 @@ int main(int argc, char *argv[]) {
   void* peer_bases[world];
   size_t offsets[world];
 
-  auto ipc_handle = open_peer_ipc_mems(dst, rank, world, peer_bases, offsets);
+  union ipc_handle_t {
+    ze_ipc_mem_handle_t ipc_handle;
+    int fd;
+  } handle_fd;
+
+  handle_fd.ipc_handle = open_peer_ipc_mems(dst, rank, world, peer_bases, offsets);
   release_guard __close_ipc_handles([&] {
       auto l0_ctx = sycl::get_native<
           sycl::backend::ext_oneapi_level_zero>(queue.get_context());
@@ -534,7 +537,6 @@ int main(int argc, char *argv[]) {
         if (i != rank)
           zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
       // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle));
-      (void) ipc_handle;
   });
 
   void *peer_ptrs[world];
@@ -542,6 +544,12 @@ int main(int argc, char *argv[]) {
       [](void *p, size_t off) {return (char *)p + off;});
 
   auto *remote = (uint32_t *)((char *)peer_ptrs[rank ^ 1] + sync_off);
+
+  // for debugger purpose
+  auto *monitor = mmap_host(alloc_size, handle_fd.fd);
+  auto *mon_sync = (char *)monitor + sync_off;
+  (void)monitor;
+  (void)mon_sync;
 
   sycl::event e;
   switch(sync_mode) {
