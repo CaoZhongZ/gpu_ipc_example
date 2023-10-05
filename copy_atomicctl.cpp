@@ -128,7 +128,8 @@ public:
   static inline size_t get_target(
       sycl::nd_item<1> pos
   ) {
-    return pos.get_sub_group().get_group_range()[0];
+    return pos.get_sub_group().get_group_range()[0]
+      * pos.get_group_range()[0];
   }
 };
 
