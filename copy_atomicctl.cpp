@@ -507,7 +507,8 @@ int main(int argc, char *argv[]) {
   // sync every 256K elems
   size_t sync_grain = 256 * 1024ull;
 
-  auto sync_size = (nelems + sync_grain -1) / sync_grain * sizeof(uint32_t);
+  auto sync_elems = (nelems + sync_grain -1) / sync_grain;
+  auto sync_size = sync_elems * sizeof(uint32_t);
   auto alloc_size = (data_size + sync_size + gpu_pagesz -1)
                   / gpu_pagesz * gpu_pagesz;
 
@@ -562,7 +563,7 @@ int main(int argc, char *argv[]) {
 
   // for debugger purpose
   auto *monitor = mmap_host(alloc_size, handle_fd.fd);
-  auto *mon_sync = (char *)monitor + sync_off;
+  uint32_t *mon_sync = (uint32_t *)((char *)monitor + sync_off);
   (void)monitor;
   (void)mon_sync;
 
@@ -597,4 +598,7 @@ int main(int argc, char *argv[]) {
     printf("Verified\n");
   else
     printf("Error at %d\n", pos);
+
+  printf("Sync elems %#x, %#x, ..., %#x\n",
+      mon_sync[0], mon_sync[1], mon_sync[sync_elems -1]);
 }
