@@ -324,7 +324,7 @@ struct chunk_copy {
 //
 template <typename T, class SyncProto, template <typename, size_t> class CopyPolicy>
 struct copy_persist {
-  static constexpr int sync_size = 16;
+  static constexpr int sync_size = 128;
   static constexpr int slice = 32; // 2M granularity
 
   using copy_type = CopyPolicy<T, slice>;
