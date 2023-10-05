@@ -71,6 +71,9 @@ public:
   }
 };
 
+//
+// Global sync protocol, up half of 32-bit is for remote
+//
 class flat_sync {
 public:
   // do nothing
@@ -90,14 +93,14 @@ public:
 
   static inline void wait_on(
       sycl::nd_item<1> pos,
-      uint32_t* flag, uint32_t value,
+      uint32_t* flag, uint32_t target,
       sycl::local_ptr<uint32_t>,
       sycl::local_ptr<uint32_t>
   ) {
     atomic_ref g_flag(*flag);
 
     if (pos.get_sub_group().leader()) {
-      while(g_flag.load() != value);
+      while((g_flag.load() & 0xffff) == target);
     }
 
     // remove it if not needed
@@ -114,10 +117,10 @@ public:
     atomic_ref r_flag(*remote);
 
     if (pos.get_sub_group().leader()) {
-      uint32_t count = g_flag++;
+      uint32_t count = g_flag++ & 0xffff;
 
-      if (count == target - 1 || count == 2*target -1)
-        r_flag += target;
+      if (count == target - 1)
+        r_flag |= (target << 16);
     }
     // remove it if not needed
     sycl::group_barrier(pos.get_sub_group());
@@ -197,7 +200,7 @@ public:
 
     if (pos.get_sub_group().leader()) {
       if (group_leader(local_counter)) {
-        while(g_flag.load() != value);
+        while((g_flag.load() & 0xffff) == value);
         l_wait.store(false);
       } else {
         while(l_wait.load());
@@ -223,8 +226,8 @@ public:
       if (group_tail(pos, local_counter)) {
         uint32_t count = g_flag++;
 
-        if (count == target - 1 || count == 2*target -1)
-          r_flag += target;
+        if ((count & 0xffff) == target - 1)
+          r_flag |= target << 16;
 
         l_c.store(0);
         l_w.store(true);
@@ -344,7 +347,7 @@ struct copy_persist {
     for (size_t off = pos.get_global_id(0);
         off < nelems/v_T::size(); off += step * n_loop) {
       SyncProto::wait_on(
-          pos, sync + progress, 0,
+          pos, sync + progress, SyncProto::get_target(pos),
           local_sync + progress % sync_size, local_wait + progress % sync_size);
 
       copy_type::run(dst, src, off, step, nelems);
