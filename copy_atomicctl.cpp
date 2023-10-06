@@ -339,22 +339,20 @@ struct copy_persist {
   copy_persist(T* dst, const T* src, uint32_t *sync, uint32_t* remote, size_t nelems)
     : src(src), dst(dst), sync(sync), remote(remote), nelems(nelems) {}
 
-  void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    uint32_t *local_sync = nullptr;
-    uint32_t *local_wait = nullptr;
-
-    if constexpr (sync_size != 0) {
-      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
-      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
-      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
-    }
-
-    auto step = pos.get_global_range(0);
+  static void group_copy(
+      sycl::nd_item<1> pos, size_t start, size_t num_items,
+      T* dst, const T* src, uint32_t *sync, uint32_t* remote,
+      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait,
+      size_t nelems
+  ) {
+    auto step = num_items;
     size_t progress = 0;
 
-    for (size_t off = pos.get_global_id(0);
-        off < nelems/v_T::size(); off += step * n_loop) {
+    auto g_id = pos.get_global_id(0);
+    if (g_id < start || g_id >= start + num_items)
+      return;
 
+    for (auto off = g_id - start; off < nelems/v_T::size(); off += step * n_loop) {
       size_t local_off = 0;
       if constexpr (sync_size != 0)
         local_off = progress % sync_size;
@@ -372,6 +370,20 @@ struct copy_persist {
 
       ++ progress;
     }
+  }
+
+  void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
+    uint32_t *local_sync = nullptr;
+    uint32_t *local_wait = nullptr;
+
+    if constexpr (sync_size != 0) {
+      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
+      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
+      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+    }
+
+    group_copy(pos, 0, pos.get_global_range(0),
+        dst, src, sync, remote, local_sync, local_wait, nelems);
   }
 
   static sycl::event launch(
