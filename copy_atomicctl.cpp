@@ -339,20 +339,52 @@ struct copy_persist {
   copy_persist(T* dst, const T* src, uint32_t *sync, uint32_t* remote, size_t nelems)
     : src(src), dst(dst), sync(sync), remote(remote), nelems(nelems) {}
 
+  static void original_copy(
+      sycl::nd_item<1> pos, T* dst, const T* src, uint32_t *sync, uint32_t* remote,
+      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait,
+      size_t nelems
+  ) {
+    size_t progress = 0;
+    auto step = pos.get_global_range(0);
+
+    for (auto off = pos.get_global_id()[0];
+        off < nelems/v_T::size(); off += step * n_loop) {
+      size_t local_off = 0;
+      if constexpr (sync_size != 0)
+        local_off = progress % sync_size;
+
+      SyncProto::wait_on(
+          pos, sync + progress, SyncProto::get_target(pos),
+          local_sync + local_off, local_wait + local_off);
+
+      copy_type::run(dst, src, off, step, nelems);
+
+      SyncProto::finish(
+          pos, SyncProto::get_target(pos),
+          sync + progress, remote + progress,
+          local_sync + local_off, local_wait + local_off);
+
+      ++ progress;
+    }
+  }
+
   static void group_copy(
-      sycl::nd_item<1> pos, size_t start, size_t num_items,
+      sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
       T* dst, const T* src, uint32_t *sync, uint32_t* remote,
       sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait,
       size_t nelems
   ) {
-    auto step = num_items;
-    size_t progress = 0;
-
-    auto g_id = pos.get_global_id(0);
-    if (g_id < start || g_id >= start + num_items)
+    auto group_id = pos.get_group(0);
+    if (group_id < start_group
+        || group_id >= start_group + group_sz)
       return;
 
-    for (auto off = g_id - start; off < nelems/v_T::size(); off += step * n_loop) {
+    auto start = start_group * pos.get_local_range(0);
+    auto step = group_sz * pos.get_local_range(0);
+    size_t progress = 0;
+
+    for (auto off = pos.get_global_id(0) - start;
+        off < nelems/v_T::size(); off += step * n_loop) {
       size_t local_off = 0;
       if constexpr (sync_size != 0)
         local_off = progress % sync_size;
@@ -382,7 +414,7 @@ struct copy_persist {
       SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
     }
 
-    group_copy(pos, 0, pos.get_global_range(0),
+    group_copy(pos, 0, pos.get_group_range(0),
         dst, src, sync, remote, local_sync, local_wait, nelems);
   }
 
