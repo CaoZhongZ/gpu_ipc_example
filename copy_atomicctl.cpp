@@ -336,8 +336,12 @@ struct copy_persist {
   static constexpr size_t n_loop = copy_type::n_loop;
   static constexpr int sync_size = SyncProto::local_count;
 
-  copy_persist(T* dst, const T* src, uint32_t *sync, uint32_t* remote, size_t nelems)
-    : src(src), dst(dst), sync(sync), remote(remote), nelems(nelems) {}
+  copy_persist(
+      T* dst, const T* src, uint32_t *sync, uint32_t* remote, size_t nelems,
+      size_t group_limit_start, size_t group_limit_size
+  )
+    : src(src), dst(dst), sync(sync), remote(remote), nelems(nelems),
+    group_limit_start(group_limit_start), group_limit_size(group_limit_size) {}
 
   static void original_copy(
       sycl::nd_item<1> pos, T* dst, const T* src, uint32_t *sync, uint32_t* remote,
@@ -390,13 +394,13 @@ struct copy_persist {
         local_off = progress % sync_size;
 
       SyncProto::wait_on(
-          pos, sync + progress, SyncProto::get_target(pos),
+          pos, sync + progress, group_sz, // Caution: only mode 2
           local_sync + local_off, local_wait + local_off);
 
       copy_type::run(dst, src, off, step, nelems);
 
       SyncProto::finish(
-          pos, SyncProto::get_target(pos),
+          pos, group_sz,
           sync + progress, remote + progress,
           local_sync + local_off, local_wait + local_off);
 
@@ -414,17 +418,20 @@ struct copy_persist {
       SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
     }
 
-    group_copy(pos, 0, pos.get_group_range(0),
+    group_copy(pos, group_limit_start, group_limit_size,
         dst, src, sync, remote, local_sync, local_wait, nelems);
   }
 
   static sycl::event launch(
       sycl::queue queue, T* dst, const T* src,
       uint32_t *sync, uint32_t* remote, size_t nelems,
-      size_t max_group =64, size_t local_size = 1024, uint32_t repeat = 1
+      size_t limit_start, size_t limit_size, uint32_t repeat = 1
   ) {
     if (nelems < v_T::size() || nelems % v_T::size() != 0)
       throw std::logic_error("Vectorize can't be satisfied");
+
+    size_t local_size = 1024;
+    size_t max_group = 64;
 
     size_t required_items = (nelems + copy_type::item_size() -1)
                                     / copy_type::item_size();
@@ -438,14 +445,14 @@ struct copy_persist {
 
     auto e = queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-              copy_persist(dst, src, sync, remote, nelems));
+              copy_persist(dst, src, sync, remote, nelems, limit_start, limit_size));
     });
 
     // for performance evaluation
     for (int i = 1; i < repeat; ++ i) {
       e = queue.submit([&](sycl::handler &cgh) {
           cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-                copy_persist(dst, src, sync, remote, nelems));
+                copy_persist(dst, src, sync, remote, nelems, limit_start, limit_size));
       });
     }
     return e;
@@ -457,6 +464,8 @@ private:
   uint32_t *sync;
   uint32_t *remote;
   size_t nelems;
+  size_t group_limit_start;
+  size_t group_limit_size;
 };
 
 template <template <typename, class, template <typename, size_t> class> class Copy,
@@ -517,16 +526,19 @@ int main(int argc, char *argv[]) {
   opts.allow_unrecognised_options();
   opts.add_options()
     ("n,nelems", "Number of elements", cxxopts::value<std::string>()->default_value("16MB"))
-    ("g,groups", "Max Group Size", cxxopts::value<size_t>()->default_value("64"))
-    ("l,local", "Local size", cxxopts::value<size_t>()->default_value("1024"))
     ("s,sync_mode", "Synchronous mode", cxxopts::value<int>()->default_value("0"))
+    ("b,begin", "Group Begin", cxxopts::value<size_t>()->default_value("0"))
+    ("e,end", "Group End", cxxopts::value<size_t>()->default_value("64"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems_string = parsed_opts["nelems"].as<std::string>();
-  auto local = parsed_opts["local"].as<size_t>();
-  auto max_groups = parsed_opts["groups"].as<size_t>();
   auto sync_mode = parsed_opts["sync_mode"].as<int>();
+  auto begin = parsed_opts["begin"].as<size_t>();
+  auto end = parsed_opts["end"].as<size_t>();
+
+  auto group_limit_start = begin;
+  auto group_limit_size = end - begin;
 
   zeCheck(zeInit(0));
 
@@ -615,15 +627,18 @@ int main(int argc, char *argv[]) {
   switch(sync_mode) {
   case 0:
     e = launch<copy_persist, test_type, dummy_sync, chunk_copy>(
-        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems, max_groups, local);
+        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems,
+        group_limit_start, group_limit_size);
     break;
   case 1:
     e = launch<copy_persist, test_type, flat_sync, chunk_copy>(
-        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems, max_groups, local);
+        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems,
+        group_limit_start, group_limit_size);
     break;
   case 2:
     e = launch<copy_persist, test_type, hierarchy_sync, chunk_copy>(
-        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems, max_groups, local);
+        queue, (test_type *)dst, (test_type *)src, sync, remote, nelems,
+        group_limit_start, group_limit_size);
     break;
   default:
     throw std::logic_error("Unsupported synchronous mode.");
