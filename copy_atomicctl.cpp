@@ -256,7 +256,13 @@ struct copy_persist {
       SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
     }
 
-    copy_test(pos, local_sync, local_wait);
+    auto* dst = interns[rank & 1][rank >> 1];
+    auto* src = input;
+    auto* sync = semaphores[rank & 1][rank >> 1];
+    auto* remote = semaphores[rank ^ 1][rank >> 1];
+
+    group_copy(pos, group_limit_start, group_limit_size,
+        dst, src, sync, remote, local_sync, local_wait, nelems);
   }
 
   static sycl::event launch(
