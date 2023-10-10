@@ -92,14 +92,14 @@ struct chunk_copy {
     auto bound = nelems / v_T::size();
 #   pragma unroll
     for (int n = 0; n < n_loop; ++ n) {
-      T intermediate {};
+      v_T intermediate {};
       if (src_off < bound) {
         intermediate = v_src0[src_off] + v_src1[src_off];
         src_off += stride;
       }
 
       if (dst_off < bound) {
-        v_dst = intermediate;
+        v_dst[dst_off] = intermediate;
         dst_off += stride;
       }
     }

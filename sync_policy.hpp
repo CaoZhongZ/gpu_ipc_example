@@ -54,6 +54,13 @@ public:
       sycl::local_ptr<uint32_t>
   ) {}
 
+  static inline void block_if_not(
+      sycl::nd_item<1> pos,
+      uint32_t* flag, uint32_t target,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {}
+
   static inline void finish(
       sycl::nd_item<1>, uint32_t, uint32_t*, uint32_t*,
       sycl::local_ptr<uint32_t> local_counter,
