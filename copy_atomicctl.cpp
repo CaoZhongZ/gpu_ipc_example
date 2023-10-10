@@ -45,12 +45,6 @@ struct copy_persist {
     return (group_id < start_group || group_id >= start_group + group_sz);
   }
 
-  /* inline bool inactive(sycl::nd_item<1> pos) const {
-    auto group_id = pos.get_group(0);
-    return (group_id < group_limit_start
-        || group_id >= group_limit_start + group_limit_size);
-  }*/
-
   static inline void original_copy(
       sycl::nd_item<1> pos,
       T* dst, const T* src, uint32_t *sync, uint32_t* remote,
@@ -80,39 +74,6 @@ struct copy_persist {
       ++ progress;
     }
   }
-
-  // test member
-  /* inline void original_copy(
-      sycl::nd_item<1> pos,
-      sycl::local_ptr<uint32_t> local_sync,
-      sycl::local_ptr<uint32_t> local_wait
-  ) const {
-    size_t progress = 0;
-    auto step = pos.get_global_range(0);
-    auto sync = semaphores[rank & 1][rank >> 1];
-    auto dst = interns[rank & 1][rank >> 1];
-    auto remote = semaphores[rank ^ 1][rank >> 1];
-
-    for (auto off = pos.get_global_id()[0];
-        off < nelems/v_T::size(); off += step * n_loop) {
-      size_t local_off = 0;
-      if constexpr (sync_size != 0)
-        local_off = progress % sync_size;
-
-      SyncProto::block_if_eq(
-          pos, sync + progress, SyncProto::get_target(pos),
-          local_sync + local_off, local_wait + local_off);
-
-      copy_type::run(dst, input, off, step, nelems);
-
-      SyncProto::finish(
-          pos, SyncProto::get_target(pos),
-          sync + progress, remote + progress,
-          local_sync + local_off, local_wait + local_off);
-
-      ++ progress;
-    }
-  } */
 
   static inline void group_copy(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
@@ -148,61 +109,26 @@ struct copy_persist {
     }
   }
 
-  /* inline void group_copy (
-      sycl::nd_item<1> pos,
-      sycl::local_ptr<uint32_t> local_sync,
-      sycl::local_ptr<uint32_t> local_wait
-  ) const {
-    if (inactive(pos))
-      return;
-
-    auto start = group_limit_start * pos.get_local_range(0);
-    auto stride = group_limit_size * pos.get_local_range(0);
-    size_t progress = 0;
-    auto sync = semaphores[rank & 1][rank >> 1];
-    auto dst = interns[rank & 1][rank >> 1];
-    auto remote = semaphores[rank ^ 1][rank >> 1];
-
-    for (auto off = pos.get_global_id(0) - start;
-        off < nelems/v_T::size(); off += stride * n_loop) {
-      size_t local_off = 0;
-      if constexpr (sync_size != 0)
-        local_off = progress % sync_size;
-
-      SyncProto::block_if_eq(
-          pos, sync + progress, group_limit_size, // Caution: only mode 2
-          local_sync + local_off, local_wait + local_off);
-
-      copy_type::run(dst, input, off, stride, nelems);
-
-      SyncProto::finish(
-          pos, group_limit_size,
-          sync + progress, remote + progress,
-          local_sync + local_off, local_wait + local_off);
-
-      ++ progress;
-    }
-  }*/
-
   // target 150GB/s for 4-peers
-  /* inline void group_reduce_scatter(
-      sycl::nd_item<1> pos, uint32_t signal,
+  static inline void group_reduce_scatter(
+      sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
+      uint32_t signal, T* dsts[], const T* src0, const T* src1,
+      uint32_t* semaphores[], int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync,
       sycl::local_ptr<uint32_t> local_wait
-  ) const {
-    if (inactive(pos))
+  ) {
+    if (inactive(pos, start_group, group_sz))
       return;
 
-    auto start = group_limit_start * pos.get_local_range(0);
-    auto stride = group_limit_size * pos.get_local_range(0);
+    auto start = start_group * pos.get_local_range(0);
+    auto stride = group_sz * pos.get_local_range(0);
     size_t progress = 0;
 
-    auto group_id = pos.get_group(0) - group_limit_start;
-    auto src0 = interns[rank & 1][rank >> 1];
-    auto src1 = interns[rank ^ 1][rank >> 1];
-    auto dst = interns[group_id % N_Peers];
-    auto sync = semaphores[rank & 1][rank >> 1];
-    auto event = semaphores[group_id % N_Peers];
+    auto group_id = pos.get_group(0) - start_group;
+
+    auto* dst = dsts[group_id % N_Peers];
+    auto* sync = semaphores[rank >> 1];
+    auto* event = semaphores[group_id % N_Peers];
 
     size_t rank_off = rank * pos.get_local_range(0);
     size_t quad_size = N_Peers * pos.get_local_range(0);
@@ -222,13 +148,13 @@ struct copy_persist {
       copy_type::reduce(dst, src0, src1, dst_off, off, stride, nelems);
 
       SyncProto::finish(
-          pos, group_limit_size / 4,
+          pos, group_sz / 4,
           sync + progress, event + progress,
           local_sync + local_off, local_wait + local_off);
 
       ++ progress;
     }
-  } */
+  }
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
     uint32_t *local_sync = nullptr;
@@ -413,33 +339,34 @@ int main(int argc, char *argv[]) {
   size_t sync_grain = 256 * 1024ull;
 
   auto sync_elems = (nelems + sync_grain -1) / sync_grain;
-  auto sync_size = sync_elems * sizeof(uint32_t);
-  auto alloc_size = (data_size + sync_size + gpu_pagesz -1)
+  auto sync_size = (sync_elems * sizeof(uint32_t) + gpu_pagesz -1)
                   / gpu_pagesz * gpu_pagesz;
 
   auto queue = currentQueue(rank >> 1, rank & 1);
 
   auto* src = (test_type *)sycl::malloc_device(data_size, queue);
-  auto* dst = (test_type *)sycl::malloc_device(alloc_size, queue);
-  auto* b_host = sycl::malloc_host(alloc_size, queue);
-  auto* b_check = sycl::malloc_host(alloc_size, queue);
+  auto* dst = (test_type *)sycl::malloc_device(data_size, queue);
+
+  auto* semaphore = sycl::malloc_device(sync_size, queue);
+
+  auto* b_host = sycl::malloc_host(data_size, queue);
+  auto* b_check = sycl::malloc_host(data_size, queue);
+  auto* b_sync = sycl::malloc_host(sync_size, queue);
 
   release_guard __guard([&]{
     sycl::free(src, queue);
     sycl::free(dst, queue);
+    sycl::free(semaphore, queue);
     sycl::free(b_host, queue);
     sycl::free(b_check, queue);
+    sycl::free(b_sync, queue);
   });
 
-  size_t sync_off = (data_size + 128 -1) / 128 * 128;
-  auto* s_host = (uint32_t *)((char *)b_host + sync_off);
-  auto* sync = (uint32_t *)((char *)dst + sync_off);
-
   fill_sequential<test_type>(b_host, 0, nelems);
-  memset(s_host, 0, sync_size);
+  memset(b_sync, 0, sync_size);
 
   queue.memcpy(src, b_host, data_size);
-  queue.memcpy(sync, s_host, sync_size);
+  queue.memcpy(semaphore, b_sync, sync_size);
   queue.wait();
 
   void* peer_bases[world];
@@ -448,7 +375,7 @@ int main(int argc, char *argv[]) {
   union ipc_handle_t {
     ze_ipc_mem_handle_t ipc_handle;
     int fd;
-  } handle_fd;
+  } handle_fd, sync_fd;
 
   handle_fd.ipc_handle = open_peer_ipc_mems(dst, rank, world, peer_bases, offsets);
   release_guard __close_ipc_handles([&] {
@@ -457,22 +384,33 @@ int main(int argc, char *argv[]) {
       for (int i = 0; i < world; ++ i)
         if (i != rank)
           zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
-      // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle));
+      // zeCheck(zeMemPutIpcHandle(l0_ctx, handle_fd.ipc_handle));
   });
-
   void *peer_ptrs[world];
-  void *semaphores[world];
 
   std::transform(peer_bases, peer_bases + world, offsets, peer_ptrs,
       [](void *p, size_t off) {return (char *)p + off;});
-  std::transform(peer_ptrs, peer_ptrs + world, semaphores,
-      [&](void *p) {return (char *)p + sync_off;});
+
+  void* sema_bases[world];
+
+  sync_fd.ipc_handle = open_peer_ipc_mems(semaphore, rank, world, sema_bases, offsets);
+  release_guard __close_ipc_handles_1([&] {
+      auto l0_ctx = sycl::get_native<
+          sycl::backend::ext_oneapi_level_zero>(queue.get_context());
+      for (int i = 0; i < world; ++ i)
+        if (i != rank)
+          zeCheck(zeMemCloseIpcHandle(l0_ctx, sema_bases[i]));
+      // zeCheck(zeMemPutIpcHandle(l0_ctx, sync_fd.ipc_handle));
+  });
+
+  void* semaphores[world];
+  std::transform(sema_bases, sema_bases + world, offsets, semaphores,
+      [](void *p, size_t off) {return (char *)p + off;});
 
   // for debugger purpose
-  auto *monitor = mmap_host(alloc_size, handle_fd.fd);
-  uint32_t *mon_sync = (uint32_t *)((char *)monitor + sync_off);
+  auto *monitor = mmap_host(data_size, handle_fd.fd);
+  uint32_t *mon_sync = (uint32_t *)mmap_host(sync_size, sync_fd.fd);
   (void)monitor;
-  (void)mon_sync;
 
   sycl::event e;
   switch(sync_mode) {
@@ -497,7 +435,7 @@ int main(int argc, char *argv[]) {
   auto time = time_from_event(e);
   printf("Copy %zu half in %fns, bandwidth: %fGB/s\n", data_size, time, bandwidth);
 
-  queue.memcpy(b_check, dst, alloc_size);
+  queue.memcpy(b_check, dst, data_size);
   queue.wait();
 
   int pos = memcmp(b_check, b_host, data_size);
