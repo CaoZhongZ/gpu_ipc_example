@@ -45,11 +45,11 @@ struct copy_persist {
     return (group_id < start_group || group_id >= start_group + group_sz);
   }
 
-  inline bool inactive(sycl::nd_item<1> pos) const {
+  /* inline bool inactive(sycl::nd_item<1> pos) const {
     auto group_id = pos.get_group(0);
     return (group_id < group_limit_start
         || group_id >= group_limit_start + group_limit_size);
-  }
+  }*/
 
   static inline void original_copy(
       sycl::nd_item<1> pos,
@@ -82,7 +82,7 @@ struct copy_persist {
   }
 
   // test member
-  inline void original_copy(
+  /* inline void original_copy(
       sycl::nd_item<1> pos,
       sycl::local_ptr<uint32_t> local_sync,
       sycl::local_ptr<uint32_t> local_wait
@@ -112,7 +112,7 @@ struct copy_persist {
 
       ++ progress;
     }
-  }
+  } */
 
   static inline void group_copy(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
@@ -148,7 +148,7 @@ struct copy_persist {
     }
   }
 
-  inline void group_copy (
+  /* inline void group_copy (
       sycl::nd_item<1> pos,
       sycl::local_ptr<uint32_t> local_sync,
       sycl::local_ptr<uint32_t> local_wait
@@ -182,10 +182,10 @@ struct copy_persist {
 
       ++ progress;
     }
-  }
+  }*/
 
   // target 150GB/s for 4-peers
-  inline void group_reduce_scatter(
+  /* inline void group_reduce_scatter(
       sycl::nd_item<1> pos, uint32_t signal,
       sycl::local_ptr<uint32_t> local_sync,
       sycl::local_ptr<uint32_t> local_wait
@@ -228,23 +228,7 @@ struct copy_persist {
 
       ++ progress;
     }
-  }
-
-  void copy_test(
-      sycl::nd_item<1> pos,
-      sycl::local_ptr<uint32_t> local_sync,
-      sycl::local_ptr<uint32_t> local_wait
-  ) const {
-    original_copy(pos, local_sync, local_wait);
-  }
-
-  void copy_to_scratch_test(
-      sycl::nd_item<1> pos,
-      sycl::local_ptr<uint32_t> local_sync,
-      sycl::local_ptr<uint32_t> local_wait
-  ) const {
-    group_copy(pos, local_sync, local_wait);
-  }
+  } */
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
     uint32_t *local_sync = nullptr;
