@@ -401,7 +401,7 @@ int main(int argc, char *argv[]) {
   memset(b_sync, 0, sync_size);
 
   queue.memcpy(src, b_host, data_size);
-  queue.memset(dst, 0, data_size);
+  queue.memcpy(dst, b_host, data_size);
   queue.memset(scratch, 0, data_size);
   queue.memcpy(semaphore, b_sync, sync_size);
   queue.wait();
