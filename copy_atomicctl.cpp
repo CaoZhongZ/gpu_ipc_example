@@ -135,6 +135,8 @@ struct copy_persist {
     size_t rank_off = rank * pos.get_local_range(0);
     size_t quad_size = N_Peers * pos.get_local_range(0);
 
+    constexpr int comm_set = 2;
+
     for (auto off = pos.get_global_id(0) - start + start_off;
         off < nelems/v_T::size(); off += stride * n_loop * comm_set) {
       size_t local_off = 0;
