@@ -457,7 +457,7 @@ struct route_bcast_in_thread {
 
 #   pragma unroll (fanout)
     for (int f = 0; f < fanout; ++ f) {
-      (local + stride_in_type * f)[off] = peers[f][off];
+      (source + stride_in_type * f)[off] = peers[f][off];
     }
   }
 };
@@ -487,7 +487,7 @@ public:
   void operator() (sycl::nd_item<1> pos) const {
     for (size_t off = pos.get_global_id(0);
         off < nelems/v_T::size(); off += pos.get_global_range(0)) {
-      fan_policy<v_T, n_peers>::run(pos, source, local, peers, buf_sz, off);
+      route_policy<v_T, n_peers>::run(pos, source, local, peers, buf_sz, off);
     }
   }
 
