@@ -27,16 +27,14 @@ struct copy_persist {
       const T* input, T* peer_ptrs[], T* scratch_ptrs[], uint32_t* semaphores[],
       size_t nelems, int rank,
       size_t group_limit_start, size_t group_limit_size
-  ) : input(input), nelems(nelems), rank(rank),
-    group_limit_start(group_limit_start), group_limit_size(group_limit_size) {
+  ) : input(input), bank(peer_ptrs[rank]), lock_self(semaphores[rank]),
+  far_bank(peer_ptrs[rank ^ 1]), lock_remote(semaphores[rank ^ 1]),
+  nelems(nelems), rank(rank), group_limit_start(group_limit_start),
+  group_limit_size(group_limit_size) {
 
     for (int i = 0; i < N_Peers; ++ i) {
-      this->interns[0][i] = peer_ptrs[2 * i];
-      this->interns[1][i] = peer_ptrs[2 * i + 1];
-      this->scratches[0][i] = scratch_ptrs[2 * i];
-      this->scratches[1][i] = scratch_ptrs[2 * i + 1];
-      this->semaphores[0][i] = semaphores[2 * i];
-      this->semaphores[1][i] = semaphores[2 * i + 1];
+      this->scratches[i] = scratch_ptrs[2*i + (rank & 1)];
+      this->semaphores[i] = semaphores[2*i + (rank & 1)];
     }
   }
 
@@ -115,7 +113,7 @@ struct copy_persist {
   static inline void group_reduce_scatter(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
       uint32_t signal, T* const dsts[], const T* src0, const T* src1,
-      uint32_t* const semaphores[], int rank, size_t nelems,
+      uint32_t *sync, uint32_t* const semaphores[], int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync,
       sycl::local_ptr<uint32_t> local_wait
   ) {
@@ -125,19 +123,13 @@ struct copy_persist {
     // jump over next block
     auto start = start_group * pos.get_local_range(0);
     auto stride = group_sz * pos.get_local_range(0);
-    size_t start_off;
-
-    if (rank & 1)
-      start_off = stride * n_loop;
-    else
-      start_off = 0;
+    auto start_off = (rank & 1) * (stride * n_loop);
 
     size_t progress = 0;
 
     auto group_id = pos.get_group(0) - start_group;
 
     auto* dst = dsts[group_id % N_Peers];
-    auto* sync = semaphores[rank >> 1];
     auto* event = semaphores[group_id % N_Peers];
 
     size_t rank_off = rank * pos.get_local_range(0);
@@ -176,10 +168,10 @@ struct copy_persist {
       SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
     }
 
-    auto* dst = interns[rank & 1][rank >> 1];
     auto* src = input;
-    auto* sync = semaphores[rank & 1][rank >> 1];
-    auto* remote = semaphores[rank ^ 1][rank >> 1];
+    auto* dst = bank;
+    auto* sync = lock_self;
+    auto* remote = lock_remote;
 
     group_copy(pos, group_limit_start, group_limit_size,
         dst, src, sync, remote, local_sync, local_wait, nelems);
@@ -195,13 +187,11 @@ struct copy_persist {
       SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
     }
 
-    auto* src0 = interns[rank & 1][rank >> 1];
-    auto* src1 = interns[rank ^ 1][rank >> 1];
-    auto* dsts = scratches[rank & 1];
-    auto* syncs = semaphores[rank & 1];
+    auto* src0 = bank;
+    auto* src1 = far_bank;
 
     group_reduce_scatter(pos, group_limit_start, group_limit_size, signal,
-        dsts, src0, src1, syncs, rank, nelems, local_sync, local_wait);
+        scratches, src0, src1, lock_self, semaphores, rank, nelems, local_sync, local_wait);
   }
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
@@ -246,20 +236,24 @@ struct copy_persist {
   }
 
 private:
-  constexpr static size_t comm_set = 2;
-
   const T* input;
 
-  T* interns[comm_set][N_Peers];
-  T* scratches[comm_set][N_Peers];
-  uint32_t* semaphores[comm_set][N_Peers];
+  // for cross tile
+  T* bank;
+  uint32_t* lock_self;
+
+  T* far_bank;
+  uint32_t* lock_remote;
+
+  // for cross device
+  T* scratches[N_Peers];
+  uint32_t* semaphores[N_Peers];
 
   size_t nelems;
   int rank;
 
   size_t group_limit_start;
   size_t group_limit_size;
-
 };
 
 template <template <typename, int, class,
