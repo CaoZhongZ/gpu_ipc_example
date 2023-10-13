@@ -308,6 +308,15 @@ void fill_sequential(void *p, int rank, size_t nelems) {
 }
 
 template <typename T>
+void fill_constant(void *p, T c, size_t nelems) {
+  auto *p_t = reinterpret_cast<T *>(p);
+
+  for (size_t i = 0; i < nelems; ++ i) {
+    p_t[i] = c;
+  }
+}
+
+template <typename T>
 double bandwidth_from_event(sycl::event e, size_t nelems) {
   e.wait();
   auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
@@ -393,7 +402,7 @@ int main(int argc, char *argv[]) {
     sycl::free(b_sync, queue);
   });
 
-  fill_sequential<test_type>(b_host, 0, nelems);
+  fill_constant<int>(b_host, rank, nelems/2);
   memset(b_sync, 0, sync_size);
 
   queue.memcpy(src, b_host, data_size);
