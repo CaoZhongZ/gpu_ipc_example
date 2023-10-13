@@ -133,7 +133,7 @@ struct copy_persist {
     auto* event = semaphores[group_id % N_Peers];
 
     int rank_off = (group_id % N_Peers) + rank/2 < N_Peers
-                        ? rank/2 : (N_Peers - rank/2);
+                        ? rank/2 : (rank/2 - N_Peers);
 
     constexpr int comm_set = 2;
 
