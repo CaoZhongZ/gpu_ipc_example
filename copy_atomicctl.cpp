@@ -24,11 +24,12 @@ struct copy_persist {
   static constexpr int sync_size = SyncProto::local_count;
 
   copy_persist(
-      const T* input, T* peer_ptrs[], T* scratch_ptrs[], uint32_t* semaphores[],
-      size_t nelems, int rank,
-      size_t group_limit_start, size_t group_limit_size
-  ) : input(input), bank(peer_ptrs[rank]), lock_self(semaphores[rank]),
-  far_bank(peer_ptrs[rank ^ 1]), lock_remote(semaphores[rank ^ 1]),
+      const T* input,
+      T* peer_ptrs[], uint32_t* peer_syncs[],
+      T* scratch_ptrs[], uint32_t* semaphores[],
+      size_t nelems, int rank, size_t group_limit_start, size_t group_limit_size
+  ) : input(input), bank(peer_ptrs[rank]), lock_self(peer_syncs[rank]),
+  far_bank(peer_ptrs[rank ^ 1]), lock_remote(peer_syncs[rank ^ 1]),
   nelems(nelems), rank(rank), group_limit_start(group_limit_start),
   group_limit_size(group_limit_size) {
 
@@ -151,9 +152,8 @@ struct copy_persist {
 
       copy_type::reduce(dst, src0, src1, dst_off, off, stride, nelems);
 
-      SyncProto::finish(
-          pos, group_sz / 4,
-          sync + progress, event + progress,
+      SyncProto::signal(
+          pos, event + progress, 1,
           local_sync + local_off, local_wait + local_off);
 
       progress += comm_set;
@@ -240,14 +240,14 @@ struct copy_persist {
 private:
   const T* input;
 
-  // for cross tile
+  // for cross MDFI
   T* bank;
   uint32_t* lock_self;
 
   T* far_bank;
   uint32_t* lock_remote;
 
-  // for cross device
+  // for cross XeLink
   T* scratches[N_Peers];
   uint32_t* semaphores[N_Peers];
 
@@ -383,9 +383,11 @@ int main(int argc, char *argv[]) {
   auto queue = currentQueue(rank >> 1, rank & 1);
 
   auto* src = (test_type *)sycl::malloc_device(data_size, queue);
-  auto* dst = (test_type *)sycl::malloc_device(data_size, queue);
-  auto* scratch = (test_type *)sycl::malloc_device(data_size, queue);
 
+  auto* dst = (test_type *)sycl::malloc_device(data_size, queue);
+  auto* dst_sync = sycl::malloc_device(sync_size, queue);
+
+  auto* scratch = (test_type *)sycl::malloc_device(data_size, queue);
   auto* semaphore = sycl::malloc_device(sync_size, queue);
 
   auto* b_host = sycl::malloc_host(data_size, queue);
@@ -395,6 +397,7 @@ int main(int argc, char *argv[]) {
   release_guard __guard([&]{
     sycl::free(src, queue);
     sycl::free(dst, queue);
+    sycl::free(dst_sync, queue);
     sycl::free(scratch, queue);
     sycl::free(semaphore, queue);
     sycl::free(b_host, queue);
@@ -407,6 +410,7 @@ int main(int argc, char *argv[]) {
 
   queue.memcpy(src, b_host, data_size);
   queue.memcpy(dst, b_host, data_size);
+  queue.memcpy(dst_sync, b_sync, sync_size);
   queue.memset(scratch, 0, data_size);
   queue.memcpy(semaphore, b_sync, sync_size);
   queue.wait();
@@ -417,73 +421,58 @@ int main(int argc, char *argv[]) {
   union ipc_handle_t {
     ze_ipc_mem_handle_t ipc_handle;
     int fd;
-  } handle_fd,  scratch_fd, sync_fd;
+  } handle_fd, lock_fd, scratch_fd, sync_fd;
 
-  handle_fd.ipc_handle = open_peer_ipc_mems(dst, rank, world, peer_bases, offsets);
-  release_guard __close_ipc_handles([&] {
-      auto l0_ctx = sycl::get_native<
-          sycl::backend::ext_oneapi_level_zero>(queue.get_context());
-      for (int i = 0; i < world; ++ i)
-        if (i != rank)
-          zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
-      // zeCheck(zeMemPutIpcHandle(l0_ctx, handle_fd.ipc_handle));
-  });
-  void *peer_ptrs[world];
-
-  std::transform(peer_bases, peer_bases + world, offsets, peer_ptrs,
+#define exchange_buffers(handle, ptr, bases, offs, ptrs) \
+  handle.ipc_handle = open_peer_ipc_mems(ptr, rank, world, bases, offs); \
+  release_guard __close_ipc_handles_ ## handle ([&] { \
+      auto l0_ctx = sycl::get_native< \
+          sycl::backend::ext_oneapi_level_zero>(queue.get_context()); \
+      for (int i = 0; i < world; ++ i) \
+        if (i != rank) \
+          zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i])); \
+      /* zeCheck(zeMemPutIpcHandle(l0_ctx, handle.ipc_handle)); */ \
+  }); \
+  std::transform(bases, bases + world, offs, ptrs, \
       [](void *p, size_t off) {return (char *)p + off;});
+
+  void* peer_ptrs[world];
+  exchange_buffers(handle_fd, dst, peer_bases, offsets, peer_ptrs);
+
+  void* sync_bases[world];
+  void* sync_ptrs[world];
+  exchange_buffers(lock_fd, dst_sync, sync_bases, offsets, sync_ptrs);
 
   void* scratch_bases[world];
-
-  scratch_fd.ipc_handle = open_peer_ipc_mems(scratch, rank, world, scratch_bases, offsets);
-  release_guard __close_ipc_handles_0([&] {
-      auto l0_ctx = sycl::get_native<
-          sycl::backend::ext_oneapi_level_zero>(queue.get_context());
-      for (int i = 0; i < world; ++ i)
-        if (i != rank)
-          zeCheck(zeMemCloseIpcHandle(l0_ctx, scratch_bases[i]));
-      // zeCheck(zeMemPutIpcHandle(l0_ctx, scratch_fd.ipc_handle));
-  });
-  void *scratches[world];
-
-  std::transform(scratch_bases, scratch_bases + world, offsets, scratches,
-      [](void *p, size_t off) {return (char *)p + off;});
+  void* scratches[world];
+  exchange_buffers(scratch_fd, scratch, scratch_bases, offsets, scratches);
 
   void* sema_bases[world];
-
-  sync_fd.ipc_handle = open_peer_ipc_mems(semaphore, rank, world, sema_bases, offsets);
-  release_guard __close_ipc_handles_1([&] {
-      auto l0_ctx = sycl::get_native<
-          sycl::backend::ext_oneapi_level_zero>(queue.get_context());
-      for (int i = 0; i < world; ++ i)
-        if (i != rank)
-          zeCheck(zeMemCloseIpcHandle(l0_ctx, sema_bases[i]));
-      // zeCheck(zeMemPutIpcHandle(l0_ctx, sync_fd.ipc_handle));
-  });
-
   void* semaphores[world];
-  std::transform(sema_bases, sema_bases + world, offsets, semaphores,
-      [](void *p, size_t off) {return (char *)p + off;});
+  exchange_buffers(sync_fd, semaphore, sema_bases, offsets, semaphores);
 
   // for debugger purpose
   auto* monitor = mmap_host(data_size, handle_fd.fd);
   auto* mon_scratch = mmap_host(data_size, scratch_fd.fd);
+  uint32_t* mon_lock = (uint32_t *)mmap_host(sync_size, lock_fd.fd);
   uint32_t* mon_sync = (uint32_t *)mmap_host(sync_size, sync_fd.fd);
-  (void)monitor; (void)mon_scratch;
+  (void)monitor; (void)mon_scratch; (void)mon_lock;
 
   sycl::event e;
   switch(sync_mode) {
   case 0:
     e = launch<copy_persist, test_type, dummy_sync, chunk_copy>(
-        queue, world, (test_type *)src, (test_type **)peer_ptrs,
-        (test_type **)scratches, (uint32_t **)semaphores, nelems,
-        rank, group_limit_start, group_limit_size);
+        queue, world, (test_type *)src,
+        (test_type **)peer_ptrs, (uint32_t **)sync_ptrs,
+        (test_type **)scratches, (uint32_t **)semaphores,
+        nelems, rank, group_limit_start, group_limit_size);
     break;
   case 1:
     e = launch<copy_persist, test_type, hierarchy_sync, chunk_copy>(
-        queue, world, (test_type *)src, (test_type **)peer_ptrs,
-        (test_type **)scratches, (uint32_t **)semaphores, nelems,
-        rank, group_limit_start, group_limit_size);
+        queue, world, (test_type *)src,
+        (test_type **)peer_ptrs, (uint32_t **)sync_ptrs,
+        (test_type **)scratches, (uint32_t **)semaphores,
+        nelems, rank, group_limit_start, group_limit_size);
     break;
   default:
     throw std::logic_error("Unsupported synchronous mode.");

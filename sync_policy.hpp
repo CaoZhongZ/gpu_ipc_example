@@ -110,6 +110,16 @@ public:
     sycl::group_barrier(pos.get_sub_group());
   }
 
+  static inline void signal(
+      sycl::nd_item<1> pos, uint32_t* flag, uint32_t value,
+      sycl::local_ptr<uint32_t>, sycl::local_ptr<uint32_t>) {
+    atomic_ref g_flag(*flag);
+    if (pos.get_sub_group().leader())
+      g_flag ++;
+
+    sycl::group_barrier(pos.get_sub_group());
+  }
+
   static inline void finish(
       sycl::nd_item<1> pos, uint32_t target,
       uint32_t* flag, uint32_t *remote,
@@ -264,6 +274,26 @@ public:
 
     sycl::group_barrier(pos.get_sub_group());
   };
+
+  static inline void signal(
+      sycl::nd_item<1> pos,
+      uint32_t* flag, uint32_t value,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {
+    atomic_ref g_flag(*flag);
+    slm_atomic_ref l_c(*local_counter);
+    slm_atomic_ref l_w(*local_wait);
+    if (pos.get_sub_group().leader()) {
+      if (group_tail(pos, local_counter)) {
+        g_flag += value;
+
+        l_c.store(0);
+        l_w.store(true);
+      }
+    }
+    sycl::group_barrier(pos.get_sub_group());
+  }
 
   static inline size_t get_target(
       sycl::nd_item<1> pos
