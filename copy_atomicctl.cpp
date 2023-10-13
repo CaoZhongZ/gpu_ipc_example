@@ -132,8 +132,8 @@ struct copy_persist {
     auto* dst = dsts[group_id % N_Peers];
     auto* event = semaphores[group_id % N_Peers];
 
-    size_t rank_off = rank * pos.get_local_range(0);
-    size_t quad_size = N_Peers * pos.get_local_range(0);
+    ssize_t rank_off = (group_id % N_Peers) + rank/2 < N_Peers
+                        ? rank/2 : (N_Peers - rank/2);
 
     constexpr int comm_set = 2;
 
@@ -147,7 +147,7 @@ struct copy_persist {
           pos, sync + progress, signal,
           local_sync + local_off, local_wait + local_off);
 
-      auto dst_off = (off + rank_off) % quad_size;
+      auto dst_off = off + rank_off * pos.get_local_range(0);
 
       copy_type::reduce(dst, src0, src1, dst_off, off, stride, nelems);
 
