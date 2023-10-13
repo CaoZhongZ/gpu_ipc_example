@@ -132,7 +132,7 @@ struct copy_persist {
     auto* dst = dsts[group_id % N_Peers];
     auto* event = semaphores[group_id % N_Peers];
 
-    ssize_t rank_off = (group_id % N_Peers) + rank/2 < N_Peers
+    int rank_off = (group_id % N_Peers) + rank/2 < N_Peers
                         ? rank/2 : (N_Peers - rank/2);
 
     constexpr int comm_set = 2;
@@ -481,7 +481,7 @@ int main(int argc, char *argv[]) {
   }
 
   // auto e = queue.memcpy(dst, src, alloc_size);
-  auto bandwidth = bandwidth_from_event<test_type>(e, nelems);
+  auto bandwidth = bandwidth_from_event<test_type>(e, nelems/2);
   auto time = time_from_event(e);
   printf("[%d]Copy %zu half in %fns, bandwidth: %fGB/s\n",
       rank, data_size, time, bandwidth);
