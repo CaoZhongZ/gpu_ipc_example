@@ -402,7 +402,7 @@ int main(int argc, char *argv[]) {
     sycl::free(b_sync, queue);
   });
 
-  fill_constant<int>(b_host, rank, nelems/2);
+  fill_constant<test_type>(b_host, rank, nelems);
   memset(b_sync, 0, sync_size);
 
   queue.memcpy(src, b_host, data_size);
