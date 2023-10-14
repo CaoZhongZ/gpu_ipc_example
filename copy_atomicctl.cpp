@@ -46,36 +46,7 @@ struct copy_persist {
     return (group_id < start_group || group_id >= start_group + group_sz);
   }
 
-  static inline void original_copy(
-      sycl::nd_item<1> pos,
-      T* dst, const T* src, uint32_t *sync, uint32_t* remote,
-      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait,
-      size_t nelems
-  ) {
-    size_t progress = 0;
-    auto step = pos.get_global_range(0);
-
-    for (auto off = pos.get_global_id()[0];
-        off < nelems/v_T::size(); off += step * n_loop) {
-      size_t local_off = 0;
-      if constexpr (sync_size != 0)
-        local_off = progress % sync_size;
-
-      SyncProto::block_if_eq(
-          pos, sync + progress, SyncProto::get_target(pos),
-          local_sync + local_off, local_wait + local_off);
-
-      copy_type::run(dst, src, off, step, nelems);
-
-      SyncProto::finish(
-          pos, SyncProto::get_target(pos),
-          sync + progress, remote + progress,
-          local_sync + local_off, local_wait + local_off);
-
-      ++ progress;
-    }
-  }
-
+  // target peak bandwidth
   static inline void group_copy(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
       T* dst, const T* src, uint32_t *sync, uint32_t* remote,
@@ -121,10 +92,10 @@ struct copy_persist {
     if (inactive(pos, start_group, group_sz))
       return;
 
-    // jump over next block
     auto start = start_group * pos.get_local_range(0);
     auto stride = group_sz * pos.get_local_range(0);
-    auto start_off = (rank & 1) * (stride * n_loop);
+    auto src_start = (rank & 1) * (stride * n_loop);
+    auto dst_start = (1 - (rank & 1)) * (stride * n_loop);
 
     size_t progress = 0;
 
@@ -138,7 +109,7 @@ struct copy_persist {
 
     constexpr int comm_set = 2;
 
-    for (auto off = pos.get_global_id(0) - start + start_off;
+    for (auto off = pos.get_global_id(0) - start;
         off < nelems/v_T::size(); off += stride * n_loop * comm_set) {
       size_t local_off = 0;
       if constexpr (sync_size != 0)
@@ -148,15 +119,108 @@ struct copy_persist {
           pos, sync + progress, signal,
           local_sync + local_off, local_wait + local_off);
 
-      auto dst_off = off + rank_off * pos.get_local_range(0);
+      auto src_off = off + src_start;
+      auto dst_off = off + dst_start + rank_off * pos.get_local_range(0);
 
-      copy_type::reduce(dst, src0, src1, dst_off, off, stride, nelems);
+      copy_type::reduce(dst, src0, src1, dst_off, src_off, stride, nelems);
 
       SyncProto::signal(
           pos, event + progress, 1,
           local_sync + local_off, local_wait + local_off);
 
       progress += comm_set;
+    }
+  }
+
+  static inline void group_reduce_gather(
+      sycl::nd_item<1> pos,
+      size_t start_group, size_t group_sz, uint32_t signal,
+      T* const scratches[], uint32_t* const semaphores[],
+      uint32_t* const remote_semaphores[], int rank, size_t nelems,
+      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait
+  ) {
+    if (inactive(pos, start_group, group_sz))
+      return;
+
+    auto start = start_group * pos.get_local_range(0);
+    auto stride = group_sz * pos.get_local_range(0);
+
+    auto src_start = (1 - (rank & 1)) * (stride * N_Peers);
+    auto dst_start = (rank & 1) * (stride * N_Peers);
+    auto rank_off = rank * pos.get_local_range(0);
+
+    auto* src = scratches[rank/2];
+    auto* sync = semaphores[rank/2];
+    auto* remote = remote_semaphores[rank/2];
+
+    size_t progress = 0;
+
+    for (auto off = pos.get_global_id(0) - start;
+        off < nelems/v_T::size(); off += stride * 2 * N_Peers) {
+      size_t local_off = 0;
+      if constexpr (sync_size != 0)
+        local_off = progress % sync_size;
+
+      SyncProto::block_if_not(
+          pos, sync + progress, signal,
+          local_sync + local_off, local_wait + local_off);
+
+      auto src_off = off + src_start;
+      auto dst_off = off + dst_start + rank_off;
+
+      copy_type::reduce_gather<N_Peers>(scratches, src, dst_off, src_off, stride, nelems);
+
+      SyncProto::finish(
+          pos, group_sz, sync + progress, remote + progress,
+          local_sync + local_off, local_wait + local_off);
+
+      progress += 2;
+    }
+  }
+
+  // target 200GB/s
+  static inline void copy_back(
+      sycl::nd_item<1> pos,
+      size_t start_group, size_t group_sz, uint32_t signal,
+      T* dst_left, T* dst_right, const T* src_left, uint32_t* sync_left,
+      const T* src_right, uint32_t* sync_right, int rank, size_t nelems,
+      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait
+  ) {
+    if (inactive(pos, start_group, group_sz))
+      return;
+
+    auto start = start_group * pos.get_local_range(0);
+    auto stride = group_sz * pos.get_local_range(0);
+
+    size_t progress = 0;
+
+    for (auto off = pos.get_global_id(0) - start;
+        off < nelems/v_T::size(); off += stride * n_loop * 2) {
+      size_t local_off = 0;
+      if constexpr (sync_size != 0)
+        local_off = progress % sync_size;
+
+      SyncProto::block_if_not(
+          pos, sync_left + progress, signal,
+          local_sync + local_off, local_wait + local_off);
+
+      copy_type::run(dst_left, src_left, off, stride, nelems);
+
+      SyncProto::block_if_not(
+          pos, sync_right + progress + 1, signal,
+          local_sync + local_off + 1, local_wait + local_off + 1);
+
+      copy_type::run(dst_right, src_right, off + stride * n_loop, stride, nelems);
+
+      SyncProto::reset(
+          pos, sync_left + progress,
+          local_sync + local_off, local_wait + local_off);
+
+      SyncProto::reset(
+          pos, sync_right + progress + 1,
+          local_sync + local_off + 1, local_wait + local_off + 1);
+
+      progress += 2;
     }
   }
 
@@ -202,7 +266,8 @@ struct copy_persist {
 
   static sycl::event launch(
       sycl::queue queue,
-      const T* input, T* interns[], T* scratches[], uint32_t* semaphores[],
+      const T* input, T* interns[], uint32_t* peer_syncs[],
+      T* scratches[], uint32_t* semaphores[],
       size_t nelems, int rank, size_t limit_start, size_t limit_size, uint32_t repeat = 1
   ) {
     if (nelems < v_T::size() || nelems % v_T::size() != 0)
@@ -222,7 +287,8 @@ struct copy_persist {
     printf("Launch copy_persist (%zu, %zu)\n", actual_groups, local_size);
 
     copy_persist offload(
-        input, interns, scratches, semaphores, nelems, rank, limit_start, limit_size);
+        input, interns, peer_syncs, scratches,
+        semaphores, nelems, rank, limit_start, limit_size);
 
     auto e = queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}), offload);
@@ -430,7 +496,7 @@ int main(int argc, char *argv[]) {
           sycl::backend::ext_oneapi_level_zero>(queue.get_context()); \
       for (int i = 0; i < world; ++ i) \
         if (i != rank) \
-          zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i])); \
+          zeCheck(zeMemCloseIpcHandle(l0_ctx, bases[i])); \
       /* zeCheck(zeMemPutIpcHandle(l0_ctx, handle.ipc_handle)); */ \
   }); \
   std::transform(bases, bases + world, offs, ptrs, \

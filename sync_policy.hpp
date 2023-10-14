@@ -61,11 +61,25 @@ public:
       sycl::local_ptr<uint32_t> local_wait
   ) {}
 
+  static inline void signal(
+      sycl::nd_item<1> pos,
+      uint32_t* flag, uint32_t value,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {}
+
   static inline void finish(
       sycl::nd_item<1>, uint32_t, uint32_t*, uint32_t*,
       sycl::local_ptr<uint32_t> local_counter,
       sycl::local_ptr<uint32_t> local_wait
   ) {};
+
+  static inline void reset(
+      sycl::nd_item<1> pos,
+      uint32_t* flag,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {}
 
   static inline size_t get_target(
       sycl::nd_item<1>
@@ -138,6 +152,14 @@ public:
 
     sycl::group_barrier(pos.get_sub_group());
   };
+
+  static inline void reset(
+      sycl::nd_item<1> pos,
+      uint32_t* flag,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {
+  }
 
   static inline size_t get_target(
       sycl::nd_item<1> pos
@@ -293,6 +315,14 @@ public:
       }
     }
     sycl::group_barrier(pos.get_sub_group());
+  }
+
+  static inline void reset(
+      sycl::nd_item<1> pos,
+      uint32_t* flag,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {
   }
 
   static inline size_t get_target(

@@ -104,4 +104,61 @@ struct chunk_copy {
       }
     }
   }
+
+  // Make sure use 1/4 group size for this case
+  template <int Series, typename std::enable_if<Series != n_loop>>
+  static inline void reduce_gather(
+      T* dsts[], const T* src,
+      size_t dst_off, size_t src_off, size_t stride, size_t nelems
+  ) {
+    auto bound = nelems / v_T::size();
+    auto* v_src = reinterpret_cast<const v_T *>(src);
+
+#   pragma unroll
+    for (int n = 0; n < n_loop; ++ n) {
+      v_T intermediate {};
+#     pragma unroll
+      for (int s = 0; s < Series; ++ s) {
+        if (src_off + stride * s < bound) {
+          intermediate += v_src[src_off + stride * s];
+          src_off += stride * s;
+        }
+      }
+
+      if (dst_off < bound) {
+#       pragma unroll
+        for (int s = 0; s < Series; ++ s) {
+          auto* v_dst = reinterpret_cast<v_T *>(dsts[s]);
+          v_dst[dst_off] = intermediate;
+        }
+      }
+    }
+  }
+
+  // Use same group size
+  template <int Series, typename std::enable_if<Series == n_loop>>
+  static inline void reduce_gather(
+      T* dsts[], const T* src,
+      size_t dst_off, size_t src_off, size_t stride, size_t nelems
+  ) {
+    auto bound = nelems / v_T::size();
+    auto* v_src = reinterpret_cast<const v_T *>(src);
+
+    v_T intermediate {};
+#   pragma unroll
+    for (int s = 0; s < Series; ++ s) {
+      if (src_off + stride * s < bound) {
+        intermediate += v_src[src_off + stride * s];
+        src_off += stride * s;
+      }
+    }
+
+    if (dst_off < bound) {
+#     pragma unroll
+      for (int s = 0; s < Series; ++ s) {
+        auto* v_dst = reinterpret_cast<v_T *>(dsts[s]);
+        v_dst[dst_off] = intermediate;
+      }
+    }
+  }
 };
