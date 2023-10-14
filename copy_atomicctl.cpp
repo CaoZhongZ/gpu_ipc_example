@@ -81,7 +81,6 @@ struct copy_persist {
     }
   }
 
-  // target 150GB/s for 4-peers
   static inline void group_reduce_scatter(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
       uint32_t signal, T* const dsts[], const T* src0, const T* src1,
@@ -96,6 +95,7 @@ struct copy_persist {
     auto stride = group_sz * pos.get_local_range(0);
     auto src_start = (rank & 1) * (stride * n_loop);
     auto dst_start = (1 - (rank & 1)) * (stride * n_loop);
+    auto sync_start = (1 - (rank & 1));
 
     size_t progress = 0;
 
@@ -113,7 +113,7 @@ struct copy_persist {
         off < nelems/v_T::size(); off += stride * n_loop * comm_set) {
       size_t local_off = 0;
       if constexpr (sync_size != 0)
-        local_off = progress % sync_size;
+        local_off = (progress + sync_start) % sync_size;
 
       SyncProto::block_if_not(
           pos, sync + progress, signal,
@@ -147,6 +147,7 @@ struct copy_persist {
 
     auto src_start = (1 - (rank & 1)) * (stride * N_Peers);
     auto dst_start = (rank & 1) * (stride * N_Peers);
+    auto sync_off = (rank & 1);
     auto rank_off = rank * pos.get_local_range(0);
 
     auto* src = scratches[rank/2];
@@ -159,16 +160,17 @@ struct copy_persist {
         off < nelems/v_T::size(); off += stride * 2 * N_Peers) {
       size_t local_off = 0;
       if constexpr (sync_size != 0)
-        local_off = progress % sync_size;
+        local_off = (progress + sync_off) % sync_size;
 
       SyncProto::block_if_not(
           pos, sync + progress, signal,
           local_sync + local_off, local_wait + local_off);
 
-      auto src_off = off + src_start;
-      auto dst_off = off + dst_start + rank_off;
+      auto src_off = N_Peers * off + src_start;
+      auto dst_off = N_Peers * off + dst_start + rank_off;
 
-      copy_type::reduce_gather<N_Peers>(scratches, src, dst_off, src_off, stride, nelems);
+      copy_type::template reduce_gather<N_Peers>(
+          scratches, src, dst_off, src_off, stride, nelems);
 
       SyncProto::finish(
           pos, group_sz, sync + progress, remote + progress,
@@ -260,8 +262,22 @@ struct copy_persist {
         scratches, src0, src1, lock_self, semaphores, rank, nelems, local_sync, local_wait);
   }
 
+  inline void test_reduce_gather(sycl::nd_item<1> pos, uint32_t signal) const {
+    uint32_t *local_sync = nullptr;
+    uint32_t *local_wait = nullptr;
+
+    if constexpr (sync_size != 0) {
+      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
+      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
+      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+    }
+
+    group_reduce_gather(pos, group_limit_start, group_limit_size, signal,
+        scratches, semaphores, peer_semas, rank, nelems, local_sync, local_wait);
+  }
+
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    test_reduce_scatter(pos, 0);
+    test_reduce_gather(pos, 0);
   }
 
   static sycl::event launch(
@@ -316,6 +332,7 @@ private:
   // for cross XeLink
   T* scratches[N_Peers];
   uint32_t* semaphores[N_Peers];
+  uint32_t* peer_semas[N_Peers];
 
   size_t nelems;
   int rank;
@@ -476,8 +493,9 @@ int main(int argc, char *argv[]) {
 
   queue.memcpy(src, b_host, data_size);
   queue.memcpy(dst, b_host, data_size);
+  queue.memcpy(scratch, b_host, data_size);
+
   queue.memcpy(dst_sync, b_sync, sync_size);
-  queue.memset(scratch, 0, data_size);
   queue.memcpy(semaphore, b_sync, sync_size);
   queue.wait();
 
