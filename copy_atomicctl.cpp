@@ -415,7 +415,7 @@ double bandwidth_from_event(sycl::event e, size_t nelems) {
   auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
 
   // since timestamp is in the unit of ns, then the bandwidth is GB/s in unit
-  return (double)(nelems * sizeof(T) * 2) / (double)(end - start);
+  return (double)(nelems * sizeof(T)) / (double)(end - start);
 }
 
 double time_from_event(sycl::event e) {
