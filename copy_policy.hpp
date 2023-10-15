@@ -108,7 +108,9 @@ struct chunk_copy {
   template <int Series>
   static inline void reduce_gather(
       T* const dsts[], const T* src,
-      size_t dst_off, size_t src_off, size_t stride, size_t nelems
+      size_t dst_off, size_t src_off,
+      size_t stride, size_t nelems,
+      int scramble
   ) {
     auto bound = nelems / v_T::size();
     auto* v_src = reinterpret_cast<const v_T *>(src);
@@ -123,7 +125,8 @@ struct chunk_copy {
     if (dst_off < bound) {
 #     pragma unroll
       for (int i = 0; i < Series; ++ i) {
-        auto* v_dst = reinterpret_cast<v_T *>(dsts[i]);
+        auto* v_dst = reinterpret_cast<v_T *>(
+            dsts[(i + scramble) % Series]);
         v_dst[dst_off] = intermediate;
       }
     }

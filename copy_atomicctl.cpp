@@ -158,6 +158,9 @@ struct copy_persist {
     auto bound = (nelems/v_T::size() + N_Peers * pos.get_local_range(0) - 1)
                   / (N_Peers * pos.get_local_range(0));
 
+    auto scramble = pos.get_sub_group().get_group_id()[0]
+                  / (pos.get_sub_group().get_group_range()[0] / N_Peers);
+
     for (auto gid = pos.get_group(0) - start_group;
         gid < bound; gid += group_sz * 2) {
       size_t local_off = 0;
@@ -174,7 +177,8 @@ struct copy_persist {
       auto dst_off = dst_start + rank_off + g_off;
 
       copy_type::template reduce_gather<N_Peers>(
-          scratches, src, dst_off, src_off, pos.get_local_range(0), nelems);
+          scratches, src, dst_off, src_off,
+          pos.get_local_range(0), nelems, scramble);
 
       SyncProto::finish(
           pos, group_sz, sync + progress, remote + progress,
