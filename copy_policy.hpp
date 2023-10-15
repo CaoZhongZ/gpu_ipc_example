@@ -105,7 +105,6 @@ struct chunk_copy {
     }
   }
 
-  // Use same group size
   template <int Series>
   static inline void reduce_gather(
       T* const dsts[], const T* src,
@@ -116,17 +115,15 @@ struct chunk_copy {
 
     v_T intermediate {};
 #   pragma unroll
-    for (int s = 0; s < Series; ++ s) {
-      if (src_off + stride * s < bound) {
-        intermediate += v_src[src_off + stride * s];
-        src_off += stride * s;
-      }
+    for (int i = 0; i < Series; ++ i) {
+      if (src_off + stride * i < bound)
+        intermediate += v_src[src_off + stride * i];
     }
 
     if (dst_off < bound) {
 #     pragma unroll
-      for (int s = 0; s < Series; ++ s) {
-        auto* v_dst = reinterpret_cast<v_T *>(dsts[s]);
+      for (int i = 0; i < Series; ++ i) {
+        auto* v_dst = reinterpret_cast<v_T *>(dsts[i]);
         v_dst[dst_off] = intermediate;
       }
     }

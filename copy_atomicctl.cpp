@@ -27,11 +27,12 @@ struct copy_persist {
       const T* input,
       T* peer_ptrs[], uint32_t* peer_syncs[],
       T* scratch_ptrs[], uint32_t* semaphores[],
-      size_t nelems, int rank, size_t group_limit_start, size_t group_limit_size
+      size_t nelems, int rank, size_t group_limit_start, size_t group_limit_size,
+      sycl::stream cout
   ) : input(input), bank(peer_ptrs[rank]), lock_self(peer_syncs[rank]),
   far_bank(peer_ptrs[rank ^ 1]), lock_remote(peer_syncs[rank ^ 1]),
   nelems(nelems), rank(rank), group_limit_start(group_limit_start),
-  group_limit_size(group_limit_size) {
+  group_limit_size(group_limit_size), cout(cout) {
 
     for (int i = 0; i < N_Peers; ++ i) {
       this->scratches[i] = scratch_ptrs[2*i + (rank & 1)];
@@ -138,26 +139,27 @@ struct copy_persist {
       T* const scratches[], uint32_t* const semaphores[],
       uint32_t* const remote_semaphores[], int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait
+      /*, sycl::stream cout*/
   ) {
     if (inactive(pos, start_group, group_sz))
       return;
 
-    auto start = start_group * pos.get_local_range(0);
-    auto stride = group_sz * pos.get_local_range(0);
+    auto src_start = (1 - (rank & 1)) * N_Peers * group_sz * pos.get_local_range(0);
+    auto dst_start = (rank & 1) * N_Peers * group_sz * pos.get_local_range(0);
 
-    auto src_start = (1 - (rank & 1)) * (stride * N_Peers);
-    auto dst_start = (rank & 1) * (stride * N_Peers);
     auto sync_off = (rank & 1);
-    auto rank_off = rank * pos.get_local_range(0);
+    auto rank_off = rank/2 * pos.get_local_range(0);
 
     auto* src = scratches[rank/2];
     auto* sync = semaphores[rank/2];
     auto* remote = remote_semaphores[rank/2];
 
     size_t progress = 0;
+    auto bound = (nelems/v_T::size() + N_Peers * pos.get_local_range(0) - 1)
+                  / (N_Peers * pos.get_local_range(0));
 
-    for (auto off = pos.get_global_id(0) - start;
-        off < nelems/v_T::size(); off += stride * 2 * N_Peers) {
+    for (auto gid = pos.get_group(0) - start_group;
+        gid < bound; gid += group_sz * 2) {
       size_t local_off = 0;
       if constexpr (sync_size != 0)
         local_off = (progress + sync_off) % sync_size;
@@ -166,11 +168,13 @@ struct copy_persist {
           pos, sync + progress, signal,
           local_sync + local_off, local_wait + local_off);
 
-      auto src_off = N_Peers * off + src_start;
-      auto dst_off = N_Peers * off + dst_start + rank_off;
+      auto g_off = N_Peers * gid * pos.get_local_range(0) + pos.get_local_id(0);
+
+      auto src_off = src_start + g_off;
+      auto dst_off = dst_start + rank_off + g_off;
 
       copy_type::template reduce_gather<N_Peers>(
-          scratches, src, dst_off, src_off, stride, nelems);
+          scratches, src, dst_off, src_off, pos.get_local_range(0), nelems);
 
       SyncProto::finish(
           pos, group_sz, sync + progress, remote + progress,
@@ -273,7 +277,7 @@ struct copy_persist {
     }
 
     group_reduce_gather(pos, group_limit_start, group_limit_size, signal,
-        scratches, semaphores, peer_semas, rank, nelems, local_sync, local_wait);
+        scratches, semaphores, peer_semas, rank, nelems, local_sync, local_wait/*, cout*/);
   }
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
@@ -302,20 +306,19 @@ struct copy_persist {
 
     printf("Launch copy_persist (%zu, %zu)\n", actual_groups, local_size);
 
-    copy_persist offload(
-        input, interns, peer_syncs, scratches,
-        semaphores, nelems, rank, limit_start, limit_size);
-
     auto e = queue.submit([&](sycl::handler &cgh) {
-        cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}), offload);
+        sycl::stream out(1024 * 1024, 1024, cgh);
+        cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
+            copy_persist(input, interns, peer_syncs, scratches,
+              semaphores, nelems, rank, limit_start, limit_size, out));
     });
 
     // for performance evaluation
-    for (int i = 1; i < repeat; ++ i) {
-      e = queue.submit([&](sycl::handler &cgh) {
-          cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}), offload);
-      });
-    }
+    // for (int i = 1; i < repeat; ++ i) {
+    //   e = queue.submit([&](sycl::handler &cgh) {
+    //       cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}), offload);
+    //   });
+    // }
     return e;
   }
 
@@ -339,6 +342,8 @@ private:
 
   size_t group_limit_start;
   size_t group_limit_size;
+
+  sycl::stream cout;
 };
 
 template <template <typename, int, class,
