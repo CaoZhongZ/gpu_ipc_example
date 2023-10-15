@@ -285,13 +285,11 @@ struct copy_persist {
           pos, sync_left + progress, signal,
           local_sync + local_off, local_wait + local_off);
 
-      copy_type::run(dst, src_left, off, stride, nelems);
-
       SyncProto::block_if_not(
           pos, sync_right + progress + 1, signal,
           local_sync + local_off + 1, local_wait + local_off + 1);
 
-      copy_type::run(dst, src_right, off + stride * n_loop, stride, nelems);
+      copy_type::run(dst, src_left, src_right, off, off + stride * n_loop, stride, nelems);
 
       SyncProto::reset(
           pos, sync_left + progress,

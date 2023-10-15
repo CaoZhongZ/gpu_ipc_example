@@ -63,21 +63,23 @@ struct chunk_copy {
   }
 
   static inline void run(
-      sycl::nd_item<1> pos,
-      T* dst, const T* src,
-      size_t start, size_t nelems
+      T* dst, const T* src0, const T* src1,
+      size_t off0, size_t off1, size_t step, size_t nelems
   ) {
     auto* v_dst = reinterpret_cast<v_T *>(dst);
-    auto* v_src = reinterpret_cast<const v_T *>(src);
+    auto* v_src0 = reinterpret_cast<const v_T *>(src0);
+    auto* v_src1 = reinterpret_cast<const v_T *>(src1);
     auto bound = nelems / v_T::size();
-    auto off = pos.get_global_id(0) + start;
-    auto step = pos.get_global_range(0);
-
 #   pragma unroll
     for (int n = 0; n < n_loop; ++ n) {
-      if (off < bound)
-        v_dst[off] = v_src[off];
-      off += step;
+      if (off0 < bound) {
+        v_dst[off0] = v_src0[off0];
+        off0 += step;
+      }
+      if (off1 < bound) {
+        v_dst[off1] = v_src1[off1];
+        off1 += step;
+      }
     }
   }
 
