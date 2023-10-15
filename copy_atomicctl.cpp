@@ -24,7 +24,7 @@ struct copy_persist {
   static constexpr int sync_size = SyncProto::local_count;
 
   copy_persist(
-      const T* input,
+      T* input,
       T* peer_ptrs[], uint32_t* peer_syncs[],
       T* scratch_ptrs[], uint32_t* semaphores[],
       size_t nelems, int rank, size_t group_limit_start, size_t group_limit_size,
@@ -45,6 +45,25 @@ struct copy_persist {
   ) {
     auto group_id = pos.get_group(0);
     return (group_id < start_group || group_id >= start_group + group_sz);
+  }
+
+  inline void test_group_copy(sycl::nd_item<1> pos) const {
+    uint32_t *local_sync = nullptr;
+    uint32_t *local_wait = nullptr;
+
+    if constexpr (sync_size != 0) {
+      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
+      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
+      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+    }
+
+    auto* src = input;
+    auto* dst = bank;
+    auto* sync = lock_self;
+    auto* remote = lock_remote;
+
+    group_copy(pos, group_limit_start, group_limit_size,
+        dst, src, sync, remote, local_sync, local_wait, nelems);
   }
 
   // target peak bandwidth
@@ -80,6 +99,23 @@ struct copy_persist {
 
       ++ progress;
     }
+  }
+
+  inline void test_reduce_scatter(sycl::nd_item<1> pos, uint32_t signal) const {
+    uint32_t *local_sync = nullptr;
+    uint32_t *local_wait = nullptr;
+
+    if constexpr (sync_size != 0) {
+      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
+      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
+      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+    }
+
+    auto* src0 = bank;
+    auto* src1 = far_bank;
+
+    group_reduce_scatter(pos, group_limit_start, group_limit_size, signal,
+        scratches, src0, src1, lock_self, semaphores, rank, nelems, local_sync, local_wait);
   }
 
   static inline void group_reduce_scatter(
@@ -131,6 +167,20 @@ struct copy_persist {
 
       progress += comm_set;
     }
+  }
+
+  inline void test_reduce_gather(sycl::nd_item<1> pos, uint32_t signal) const {
+    uint32_t *local_sync = nullptr;
+    uint32_t *local_wait = nullptr;
+
+    if constexpr (sync_size != 0) {
+      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
+      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
+      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+    }
+
+    group_reduce_gather(pos, group_limit_start, group_limit_size, signal,
+        scratches, semaphores, peer_semas, rank, nelems, local_sync, local_wait/*, cout*/);
   }
 
   static inline void group_reduce_gather(
@@ -188,13 +238,34 @@ struct copy_persist {
     }
   }
 
-  // target 200GB/s
+  inline void test_copy_back (sycl::nd_item<1> pos, uint32_t signal) const {
+    uint32_t *local_sync = nullptr;
+    uint32_t *local_wait = nullptr;
+
+    if constexpr (sync_size != 0) {
+      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
+      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
+      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+    }
+
+    if (rank & 1)
+      copy_back(pos, group_limit_start, group_limit_size, signal,
+          input, far_bank, lock_remote, bank, lock_self, rank, nelems,
+          local_sync, local_wait, cout);
+    else
+      copy_back(pos, group_limit_start, group_limit_size, signal,
+          input, bank, lock_self, far_bank, lock_remote, rank, nelems,
+          local_sync, local_wait, cout);
+  }
+
   static inline void copy_back(
       sycl::nd_item<1> pos,
       size_t start_group, size_t group_sz, uint32_t signal,
-      T* dst_left, T* dst_right, const T* src_left, uint32_t* sync_left,
+      T* dst, const T* src_left, uint32_t* sync_left,
       const T* src_right, uint32_t* sync_right, int rank, size_t nelems,
-      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait
+      sycl::local_ptr<uint32_t> local_sync,
+      sycl::local_ptr<uint32_t> local_wait,
+      sycl::stream cout
   ) {
     if (inactive(pos, start_group, group_sz))
       return;
@@ -214,13 +285,13 @@ struct copy_persist {
           pos, sync_left + progress, signal,
           local_sync + local_off, local_wait + local_off);
 
-      copy_type::run(dst_left, src_left, off, stride, nelems);
+      copy_type::run(dst, src_left, off, stride, nelems);
 
       SyncProto::block_if_not(
           pos, sync_right + progress + 1, signal,
           local_sync + local_off + 1, local_wait + local_off + 1);
 
-      copy_type::run(dst_right, src_right, off + stride * n_loop, stride, nelems);
+      copy_type::run(dst, src_right, off + stride * n_loop, stride, nelems);
 
       SyncProto::reset(
           pos, sync_left + progress,
@@ -234,63 +305,13 @@ struct copy_persist {
     }
   }
 
-  inline void test_group_copy(sycl::nd_item<1> pos) const {
-    uint32_t *local_sync = nullptr;
-    uint32_t *local_wait = nullptr;
-
-    if constexpr (sync_size != 0) {
-      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
-      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
-      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
-    }
-
-    auto* src = input;
-    auto* dst = bank;
-    auto* sync = lock_self;
-    auto* remote = lock_remote;
-
-    group_copy(pos, group_limit_start, group_limit_size,
-        dst, src, sync, remote, local_sync, local_wait, nelems);
-  }
-
-  inline void test_reduce_scatter(sycl::nd_item<1> pos, uint32_t signal) const {
-    uint32_t *local_sync = nullptr;
-    uint32_t *local_wait = nullptr;
-
-    if constexpr (sync_size != 0) {
-      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
-      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
-      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
-    }
-
-    auto* src0 = bank;
-    auto* src1 = far_bank;
-
-    group_reduce_scatter(pos, group_limit_start, group_limit_size, signal,
-        scratches, src0, src1, lock_self, semaphores, rank, nelems, local_sync, local_wait);
-  }
-
-  inline void test_reduce_gather(sycl::nd_item<1> pos, uint32_t signal) const {
-    uint32_t *local_sync = nullptr;
-    uint32_t *local_wait = nullptr;
-
-    if constexpr (sync_size != 0) {
-      local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
-      local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
-      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
-    }
-
-    group_reduce_gather(pos, group_limit_start, group_limit_size, signal,
-        scratches, semaphores, peer_semas, rank, nelems, local_sync, local_wait/*, cout*/);
-  }
-
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    test_reduce_gather(pos, 0);
+    test_copy_back(pos, 0);
   }
 
   static sycl::event launch(
       sycl::queue queue,
-      const T* input, T* interns[], uint32_t* peer_syncs[],
+      T* input, T* interns[], uint32_t* peer_syncs[],
       T* scratches[], uint32_t* semaphores[],
       size_t nelems, int rank, size_t limit_start, size_t limit_size, uint32_t repeat = 1
   ) {
@@ -327,7 +348,7 @@ struct copy_persist {
   }
 
 private:
-  const T* input;
+  T* input;
 
   // for cross MDFI
   T* bank;
@@ -500,7 +521,7 @@ int main(int argc, char *argv[]) {
   fill_constant<test_type>(b_host, rank, nelems);
   memset(b_sync, 0, sync_size);
 
-  queue.memcpy(src, b_host, data_size);
+  queue.memset(src, 0, data_size);
   queue.memcpy(dst, b_host, data_size);
   queue.memcpy(scratch, b_host, data_size);
 
@@ -577,7 +598,7 @@ int main(int argc, char *argv[]) {
   printf("[%d]Copy %zu half in %fns, bandwidth: %fGB/s\n",
       rank, data_size, time, bandwidth);
 
-  queue.memcpy(b_check, dst, data_size);
+  queue.memcpy(b_check, src, data_size);
   queue.wait();
 
   int pos = memcmp(b_check, b_host, data_size);
