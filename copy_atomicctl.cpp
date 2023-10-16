@@ -26,17 +26,21 @@ struct copy_persist {
   copy_persist(
       T* input,
       T* peer_ptrs[], uint32_t* peer_syncs[],
-      T* scratch_ptrs[], uint32_t* semaphores[],
+      T* temp_ptrs[], uint32_t* temp_syncs[],
       size_t nelems, int rank, size_t group_limit_start, size_t group_limit_size,
       sycl::stream cout
   ) : input(input), bank(peer_ptrs[rank]), lock_self(peer_syncs[rank]),
   far_bank(peer_ptrs[rank ^ 1]), lock_remote(peer_syncs[rank ^ 1]),
   nelems(nelems), rank(rank), group_limit_start(group_limit_start),
   group_limit_size(group_limit_size), cout(cout) {
-
     for (int i = 0; i < N_Peers; ++ i) {
-      this->scratches[i] = scratch_ptrs[2*i + (rank & 1)];
-      this->semaphores[i] = semaphores[2*i + (rank & 1)];
+      this->peer_ptrs[i] = peer_ptrs[2*i + (rank & 1)];
+      this->peer_syncs[i] = peer_syncs[2*i + (rank & 1)];
+      this->r_peer_syncs[i] = peer_syncs[2*i + 1 - (rank & 1)];
+
+      this->temp_ptrs[i] = temp_ptrs[2*i + (rank & 1)];
+      this->temp_syncs[i] = temp_syncs[2*i + (rank & 1)];
+      this->r_temp_syncs[i] = temp_syncs[2*i + 1 - (rank & 1)];
     }
   }
 
@@ -47,7 +51,7 @@ struct copy_persist {
     return (group_id < start_group || group_id >= start_group + group_sz);
   }
 
-  inline void test_group_copy(sycl::nd_item<1> pos) const {
+  inline void test_group_copy(sycl::nd_item<1> pos, uint32_t) const {
     uint32_t *local_sync = nullptr;
     uint32_t *local_wait = nullptr;
 
@@ -63,15 +67,14 @@ struct copy_persist {
     auto* remote = lock_remote;
 
     group_copy(pos, group_limit_start, group_limit_size,
-        dst, src, sync, remote, local_sync, local_wait, nelems);
+        dst, src, sync, remote, nelems, local_sync, local_wait);
   }
 
   // target peak bandwidth
   static inline void group_copy(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
-      T* dst, const T* src, uint32_t *sync, uint32_t* remote,
-      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait,
-      size_t nelems
+      T* dst, const T* src, uint32_t *sync, uint32_t* r_sync, size_t nelems,
+      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait
   ) {
     if (inactive(pos, start_group, group_sz))
       return;
@@ -94,7 +97,7 @@ struct copy_persist {
 
       SyncProto::finish(
           pos, group_sz,
-          sync + progress, remote + progress,
+          sync + progress, r_sync + progress,
           local_sync + local_off, local_wait + local_off);
 
       ++ progress;
@@ -115,13 +118,13 @@ struct copy_persist {
     auto* src1 = far_bank;
 
     group_reduce_scatter(pos, group_limit_start, group_limit_size, signal,
-        scratches, src0, src1, lock_self, semaphores, rank, nelems, local_sync, local_wait);
+        temp_ptrs, src0, src1, lock_self, temp_syncs, rank, nelems, local_sync, local_wait);
   }
 
   static inline void group_reduce_scatter(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
       uint32_t signal, T* const dsts[], const T* src0, const T* src1,
-      uint32_t *sync, uint32_t* const semaphores[], int rank, size_t nelems,
+      uint32_t *sync, uint32_t* const temp_syncs[], int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync,
       sycl::local_ptr<uint32_t> local_wait
   ) {
@@ -139,7 +142,7 @@ struct copy_persist {
     auto group_id = pos.get_group(0) - start_group;
 
     auto* dst = dsts[group_id % N_Peers];
-    auto* event = semaphores[group_id % N_Peers];
+    auto* event = temp_syncs[group_id % N_Peers];
 
     int rank_off = (group_id % N_Peers) + rank/2 < N_Peers
                         ? rank/2 : (rank/2 - N_Peers);
@@ -180,14 +183,14 @@ struct copy_persist {
     }
 
     group_reduce_gather(pos, group_limit_start, group_limit_size, signal,
-        scratches, semaphores, peer_semas, rank, nelems, local_sync, local_wait/*, cout*/);
+        temp_ptrs, temp_syncs, peer_syncs, rank, nelems, local_sync, local_wait/*, cout*/);
   }
 
   static inline void group_reduce_gather(
       sycl::nd_item<1> pos,
       size_t start_group, size_t group_sz, uint32_t signal,
-      T* const scratches[], uint32_t* const semaphores[],
-      uint32_t* const remote_semaphores[], int rank, size_t nelems,
+      T* const temp_ptrs[], uint32_t* const temp_syncs[],
+      uint32_t* const remote_temp_syncs[], int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait
       /*, sycl::stream cout*/
   ) {
@@ -200,9 +203,9 @@ struct copy_persist {
     auto sync_off = (rank & 1);
     auto rank_off = rank/2 * pos.get_local_range(0);
 
-    auto* src = scratches[rank/2];
-    auto* sync = semaphores[rank/2];
-    auto* remote = remote_semaphores[rank/2];
+    auto* src = temp_ptrs[rank/2];
+    auto* sync = temp_syncs[rank/2];
+    auto* remote = remote_temp_syncs[rank/2];
 
     size_t progress = 0;
     auto bound = (nelems/v_T::size() + N_Peers * pos.get_local_range(0) - 1)
@@ -227,7 +230,7 @@ struct copy_persist {
       auto dst_off = dst_start + rank_off + g_off;
 
       copy_type::template reduce_gather<N_Peers>(
-          scratches, src, dst_off, src_off,
+          temp_ptrs, src, dst_off, src_off,
           pos.get_local_range(0), nelems, scramble);
 
       SyncProto::finish(
@@ -304,13 +307,13 @@ struct copy_persist {
   }
 
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    test_copy_back(pos, 0);
+    test_group_copy(pos, 0);
   }
 
   static sycl::event launch(
       sycl::queue queue,
       T* input, T* interns[], uint32_t* peer_syncs[],
-      T* scratches[], uint32_t* semaphores[],
+      T* temp_ptrs[], uint32_t* temp_syncs[],
       size_t nelems, int rank, size_t limit_start, size_t limit_size, uint32_t repeat = 1
   ) {
     if (nelems < v_T::size() || nelems % v_T::size() != 0)
@@ -332,8 +335,8 @@ struct copy_persist {
     auto e = queue.submit([&](sycl::handler &cgh) {
         sycl::stream out(1024 * 1024, 1024, cgh);
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-            copy_persist(input, interns, peer_syncs, scratches,
-              semaphores, nelems, rank, limit_start, limit_size, out));
+            copy_persist(input, interns, peer_syncs, temp_ptrs,
+              temp_syncs, nelems, rank, limit_start, limit_size, out));
     });
 
     // for performance evaluation
@@ -355,10 +358,14 @@ private:
   T* far_bank;
   uint32_t* lock_remote;
 
+  T* peer_ptrs[N_Peers];
+  uint32_t* peer_syncs[N_Peers];
+  uint32_t* r_peer_syncs[N_Peers];
+
   // for cross XeLink
-  T* scratches[N_Peers];
-  uint32_t* semaphores[N_Peers];
-  uint32_t* peer_semas[N_Peers];
+  T* temp_ptrs[N_Peers];
+  uint32_t* temp_syncs[N_Peers];
+  uint32_t* r_temp_syncs[N_Peers];
 
   size_t nelems;
   int rank;
@@ -453,6 +460,7 @@ int main(int argc, char *argv[]) {
     ("s,sync_mode", "Synchronous mode", cxxopts::value<int>()->default_value("0"))
     ("b,begin", "Group Begin", cxxopts::value<size_t>()->default_value("0"))
     ("e,end", "Group End", cxxopts::value<size_t>()->default_value("64"))
+    ("i,init", "Sync contents init", cxxopts::value<uint32_t>()->default_value("0"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -460,6 +468,7 @@ int main(int argc, char *argv[]) {
   auto sync_mode = parsed_opts["sync_mode"].as<int>();
   auto begin = parsed_opts["begin"].as<size_t>();
   auto end = parsed_opts["end"].as<size_t>();
+  auto sync_init = parsed_opts["init"].as<uint32_t>();
 
   auto group_limit_start = begin;
   auto group_limit_size = end - begin;
@@ -499,32 +508,32 @@ int main(int argc, char *argv[]) {
   auto* dst_sync = sycl::malloc_device(sync_size, queue);
 
   auto* scratch = (test_type *)sycl::malloc_device(data_size, queue);
-  auto* semaphore = sycl::malloc_device(sync_size, queue);
+  auto* temp_sync = sycl::malloc_device(sync_size, queue);
 
   auto* b_host = sycl::malloc_host(data_size, queue);
   auto* b_check = sycl::malloc_host(data_size, queue);
-  auto* b_sync = sycl::malloc_host(sync_size, queue);
+  auto* b_sync = (uint32_t *)sycl::malloc_host(sync_size, queue);
 
   release_guard __guard([&]{
     sycl::free(src, queue);
     sycl::free(dst, queue);
     sycl::free(dst_sync, queue);
     sycl::free(scratch, queue);
-    sycl::free(semaphore, queue);
+    sycl::free(temp_sync, queue);
     sycl::free(b_host, queue);
     sycl::free(b_check, queue);
     sycl::free(b_sync, queue);
   });
 
   fill_constant<test_type>(b_host, rank, nelems);
-  memset(b_sync, 0, sync_size);
+  std::fill(b_sync, b_sync + sync_elems, sync_init);
 
   queue.memset(src, 0, data_size);
   queue.memcpy(dst, b_host, data_size);
   queue.memcpy(scratch, b_host, data_size);
 
   queue.memcpy(dst_sync, b_sync, sync_size);
-  queue.memcpy(semaphore, b_sync, sync_size);
+  queue.memcpy(temp_sync, b_sync, sync_size);
   queue.wait();
 
   void* peer_bases[world];
@@ -556,12 +565,12 @@ int main(int argc, char *argv[]) {
   exchange_buffers(lock_fd, dst_sync, sync_bases, offsets, sync_ptrs);
 
   void* scratch_bases[world];
-  void* scratches[world];
-  exchange_buffers(scratch_fd, scratch, scratch_bases, offsets, scratches);
+  void* temp_ptrs[world];
+  exchange_buffers(scratch_fd, scratch, scratch_bases, offsets, temp_ptrs);
 
   void* sema_bases[world];
-  void* semaphores[world];
-  exchange_buffers(sync_fd, semaphore, sema_bases, offsets, semaphores);
+  void* temp_syncs[world];
+  exchange_buffers(sync_fd, temp_sync, sema_bases, offsets, temp_syncs);
 
   // for debugger purpose
   auto* monitor = mmap_host(data_size, handle_fd.fd);
@@ -576,14 +585,14 @@ int main(int argc, char *argv[]) {
     e = launch<copy_persist, test_type, dummy_sync, chunk_copy>(
         queue, world, (test_type *)src,
         (test_type **)peer_ptrs, (uint32_t **)sync_ptrs,
-        (test_type **)scratches, (uint32_t **)semaphores,
+        (test_type **)temp_ptrs, (uint32_t **)temp_syncs,
         nelems, rank, group_limit_start, group_limit_size);
     break;
   case 1:
     e = launch<copy_persist, test_type, hierarchy_sync, chunk_copy>(
         queue, world, (test_type *)src,
         (test_type **)peer_ptrs, (uint32_t **)sync_ptrs,
-        (test_type **)scratches, (uint32_t **)semaphores,
+        (test_type **)temp_ptrs, (uint32_t **)temp_syncs,
         nelems, rank, group_limit_start, group_limit_size);
     break;
   default:
