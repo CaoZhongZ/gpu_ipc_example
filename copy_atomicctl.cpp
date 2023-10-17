@@ -27,12 +27,11 @@ struct copy_persist {
       T* input,
       T* peer_ptrs[], uint32_t* peer_syncs[],
       T* temp_ptrs[], uint32_t* temp_syncs[],
-      size_t nelems, int rank, size_t group_limit_start, size_t group_limit_size,
-      sycl::stream cout
+      size_t nelems, int rank, size_t group_limit_start, size_t group_limit_size
   ) : input(input), bank(peer_ptrs[rank]), lock_self(peer_syncs[rank]),
   far_bank(peer_ptrs[rank ^ 1]), lock_remote(peer_syncs[rank ^ 1]),
   nelems(nelems), rank(rank), group_limit_start(group_limit_start),
-  group_limit_size(group_limit_size), cout(cout) {
+  group_limit_size(group_limit_size) {
     for (int i = 0; i < N_Peers; ++ i) {
       this->peer_ptrs[i] = peer_ptrs[2*i + (rank & 1)];
       this->peer_syncs[i] = peer_syncs[2*i + (rank & 1)];
@@ -51,7 +50,7 @@ struct copy_persist {
     return (group_id < start_group || group_id >= start_group + group_sz);
   }
 
-  inline void test_group_copy(sycl::nd_item<1> pos, uint32_t) const {
+  inline void test_group_copy(sycl::nd_item<1> pos, sycl::stream cout) const {
     uint32_t *local_sync = nullptr;
     uint32_t *local_wait = nullptr;
 
@@ -254,11 +253,11 @@ struct copy_persist {
     if (rank & 1)
       copy_back(pos, group_limit_start, group_limit_size, signal,
           input, far_bank, lock_remote, bank, lock_self, rank, nelems,
-          local_sync, local_wait, cout);
+          local_sync, local_wait);
     else
       copy_back(pos, group_limit_start, group_limit_size, signal,
           input, bank, lock_self, far_bank, lock_remote, rank, nelems,
-          local_sync, local_wait, cout);
+          local_sync, local_wait);
   }
 
   static inline void copy_back(
@@ -267,8 +266,7 @@ struct copy_persist {
       T* dst, const T* src_left, uint32_t* sync_left,
       const T* src_right, uint32_t* sync_right, int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync,
-      sycl::local_ptr<uint32_t> local_wait,
-      sycl::stream cout
+      sycl::local_ptr<uint32_t> local_wait
   ) {
     if (inactive(pos, start_group, group_sz))
       return;
@@ -306,8 +304,9 @@ struct copy_persist {
     }
   }
 
-  void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    test_group_copy(pos, 0);
+  void operator() [[sycl::reqd_sub_group_size(16)]] (
+      sycl::nd_item<1> pos, sycl::stream cout) const {
+    test_group_copy(pos, cout);
   }
 
   static sycl::event launch(
@@ -332,11 +331,22 @@ struct copy_persist {
 
     printf("Launch copy_persist (%zu, %zu)\n", actual_groups, local_size);
 
+    copy_persist captured(input, interns, peer_syncs, temp_ptrs,
+              temp_syncs, nelems, rank, limit_start, limit_size);
+
+    sycl::buffer params(
+        const_cast<const decltype(captured) *>(&captured),
+        sycl::range<1>(1));
+
     auto e = queue.submit([&](sycl::handler &cgh) {
         sycl::stream out(1024 * 1024, 1024, cgh);
+        auto d_params = params.template get_access<
+          sycl::access_mode::read, sycl::target::constant_buffer>(cgh);
+
         cgh.parallel_for(sycl::nd_range<1>({global_size}, {local_size}),
-            copy_persist(input, interns, peer_syncs, temp_ptrs,
-              temp_syncs, nelems, rank, limit_start, limit_size, out));
+            [=] [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) {
+              d_params[0](pos, out);
+            });
     });
 
     // for performance evaluation
@@ -372,8 +382,6 @@ private:
 
   size_t group_limit_start;
   size_t group_limit_size;
-
-  sycl::stream cout;
 };
 
 template <template <typename, int, class,
@@ -605,7 +613,7 @@ int main(int argc, char *argv[]) {
   printf("[%d]Copy %zu half in %fns, bandwidth: %fGB/s\n",
       rank, data_size, time, bandwidth);
 
-  queue.memcpy(b_check, src, data_size);
+  queue.memcpy(b_check, dst, data_size);
   queue.wait();
 
   int pos = memcmp(b_check, b_host, data_size);
