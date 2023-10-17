@@ -605,7 +605,7 @@ int main(int argc, char *argv[]) {
   printf("[%d]Copy %zu half in %fns, bandwidth: %fGB/s\n",
       rank, data_size, time, bandwidth);
 
-  queue.memcpy(b_check, src, data_size);
+  queue.memcpy(b_check, dst, data_size);
   queue.wait();
 
   int pos = memcmp(b_check, b_host, data_size);
@@ -614,6 +614,9 @@ int main(int argc, char *argv[]) {
   else
     printf("Error at %d\n", pos);
 
-  printf("Sync elems %#x, %#x, ..., %#x\n",
+  printf("[%d] Lock elems %#x, %#x, ..., %#x\n", rank,
+      mon_lock[0], mon_lock[1], mon_lock[sync_elems -1]);
+
+  printf("[%d] Sync elems %#x, %#x, ..., %#x\n", rank,
       mon_sync[0], mon_sync[1], mon_sync[sync_elems -1]);
 }
