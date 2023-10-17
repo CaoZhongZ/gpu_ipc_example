@@ -59,6 +59,7 @@ struct copy_persist {
       local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
       local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
       SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+      sycl::group_barrier(pos.get_group());
     }
 
     auto* src = input;
@@ -111,7 +112,7 @@ struct copy_persist {
     if constexpr (sync_size != 0) {
       local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
       local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
-      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+      SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
     }
 
     auto* src0 = bank;
@@ -179,7 +180,7 @@ struct copy_persist {
     if constexpr (sync_size != 0) {
       local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
       local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
-      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+      SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
     }
 
     group_reduce_gather(pos, group_limit_start, group_limit_size, signal,
@@ -248,7 +249,7 @@ struct copy_persist {
     if constexpr (sync_size != 0) {
       local_sync = __shared__<uint32_t [sync_size]>(pos.get_group());
       local_wait = __shared__<uint32_t [sync_size]>(pos.get_group());
-      SyncProto::init_slm_flags(pos.get_local_id(0), local_sync, local_wait, sync_size);
+      SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
     }
 
     if (rank & 1)
@@ -528,8 +529,8 @@ int main(int argc, char *argv[]) {
   fill_constant<test_type>(b_host, rank, nelems);
   std::fill(b_sync, b_sync + sync_elems, sync_init);
 
-  queue.memset(src, 0, data_size);
-  queue.memcpy(dst, b_host, data_size);
+  queue.memcpy(src, b_host, data_size);
+  queue.memset(dst, 0, data_size);
   queue.memcpy(scratch, b_host, data_size);
 
   queue.memcpy(dst_sync, b_sync, sync_size);
@@ -602,10 +603,10 @@ int main(int argc, char *argv[]) {
   // auto e = queue.memcpy(dst, src, alloc_size);
   auto bandwidth = bandwidth_from_event<test_type>(e, nelems/2);
   auto time = time_from_event(e);
-  printf("[%d]Copy %zu half in %fns, bandwidth: %fGB/s\n",
+  printf("[%d]Copy %zu half in %fns, nominal bandwidth: %fGB/s\n",
       rank, data_size, time, bandwidth);
 
-  queue.memcpy(b_check, src, data_size);
+  queue.memcpy(b_check, dst, data_size);
   queue.wait();
 
   int pos = memcmp(b_check, b_host, data_size);
@@ -614,6 +615,9 @@ int main(int argc, char *argv[]) {
   else
     printf("Error at %d\n", pos);
 
-  printf("Sync elems %#x, %#x, ..., %#x\n",
+  printf("[%d] Lock elems %#x, %#x, ..., %#x\n", rank,
+      mon_lock[0], mon_lock[1], mon_lock[sync_elems -1]);
+
+  printf("[%d] Sync elems %#x, %#x, ..., %#x\n", rank,
       mon_sync[0], mon_sync[1], mon_sync[sync_elems -1]);
 }

@@ -195,7 +195,7 @@ class hierarchy_sync {
 
 public:
   // safe if larger than sub-group number in this group
-  static constexpr int local_count = 128;
+  static constexpr int local_count = 256;
   // slow, group barrier inside
   static inline void init_slm_flags(
       sycl::nd_item<1> pos,
