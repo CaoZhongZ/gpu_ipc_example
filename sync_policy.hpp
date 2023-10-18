@@ -238,10 +238,14 @@ public:
 
     if (pos.get_sub_group().leader()) {
       if (group_leader(local_counter)) {
+
         while(g_flag.load() == target);
+
         l_wait.store(false);
       } else {
+
         while(l_wait.load());
+
       }
     }
 
@@ -261,10 +265,14 @@ public:
 
     if (pos.get_sub_group().leader()) {
       if (group_leader(local_counter)) {
+
         while(g_flag.load() != target);
+
         l_wait.store(false);
       } else {
+
         while(l_wait.load());
+
       }
     }
 
@@ -284,10 +292,8 @@ public:
 
     if (pos.get_sub_group().leader()) {
       if (group_tail(pos, local_counter)) {
-        uint32_t count = g_flag++;
-
-        if ((count & 0xffff) == target - 1)
-          r_flag |= target << 16;
+        if (g_flag++ == target - 1)
+          r_flag.store(target);
 
         l_c.store(0);
         l_w.store(true);
