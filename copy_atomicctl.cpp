@@ -123,7 +123,7 @@ struct copy_persist {
 
     group_reduce_scatter(pos, group_limit_start, group_limit_size, signal,
         temp_ptrs, src0, src1, lock_self, temp_syncs,
-        rank, nelems, local_sync, local_wait, cout);
+        rank, nelems, local_sync, local_wait);
   }
 
   static inline void group_reduce_scatter(
@@ -131,17 +131,14 @@ struct copy_persist {
       uint32_t signal, T* const dsts[], const T* src0, const T* src1,
       uint32_t *sync, uint32_t* const temp_syncs[], int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync,
-      sycl::local_ptr<uint32_t> local_wait,
-      sycl::stream cout
+      sycl::local_ptr<uint32_t> local_wait
   ) {
     if (inactive(pos, start_group, group_sz))
       return;
 
-    auto start = start_group * pos.get_local_range(0);
+    auto start = start_group  * pos.get_local_range(0);
     auto stride = group_sz * pos.get_local_range(0);
-    auto src_start = (rank & 1) * (stride * n_loop);
-    auto dst_start = (1 - (rank & 1)) * (stride * n_loop);
-    auto sync_start = (1 - (rank & 1));
+    auto bisect_off = (rank & 1) * pos.get_local_range(0);
 
     size_t progress = 0;
 
@@ -154,25 +151,18 @@ struct copy_persist {
                         ? rank/2 * pos.get_local_range(0)
                         : (rank/2 - N_Peers) * pos.get_local_range(0);
 
-    if (rank == 4 && pos.get_global_id(0) == 3072)
-      cout<<"rank_off: "<<rank_off<<", src_start: "<<src_start
-        <<", dst_start: "<<dst_start<<", addr: "<<dst<<sycl::endl;
-
     for (auto off = pos.get_global_id(0) - start;
         off < nelems/v_T::size(); off += stride * n_loop * 2) {
       size_t local_off = 0;
       if constexpr (sync_size != 0)
-        local_off = (progress + sync_start) % sync_size;
+        local_off = progress % sync_size;
 
       SyncProto::block_if_not(
           pos, sync + progress, signal,
           local_sync + local_off, local_wait + local_off);
 
-      auto src_off = off + src_start;
-      auto dst_off = off + dst_start + rank_off;
-
-      if (rank == 4 && pos.get_global_id(0) == 3072)
-        cout<<"off: "<<off<<", ";
+      auto src_off = off + bisect_off;
+      auto dst_off = off + rank_off;
 
       copy_type::reduce(dst, src0, src1, dst_off, src_off, stride, nelems);
 
@@ -182,9 +172,6 @@ struct copy_persist {
 
       progress += 2;
     }
-
-    if (rank == 4 && pos.get_global_id(0) == 3072)
-      cout<<sycl::endl;
   }
 
   inline void test_reduce_gather(sycl::nd_item<1> pos, uint32_t signal) const {
@@ -449,30 +436,47 @@ void fill_constant(void *p, T c, size_t nelems) {
   }
 }
 
-template <typename T, int N_Target>
-bool compare(T* input, T* targets[], int rank,
-    size_t jump, size_t strip, size_t nelems) {
+template <typename T>
+bool verify_reduce_scatter(T* input, T* targets[], int rank, int world,
+    size_t bisect_size, size_t stripe, size_t nelems) {
+
+  auto n_peers = world / 2;
 
   for (size_t i = 0; i < nelems; ++ i) {
-    auto target = targets[(i / strip)% N_Target];
-    int rank_off = 0;
+    auto bisect_no = i / bisect_size;
+    auto stripe_no = i / stripe;
 
-    if ( ((i / strip) % N_Target) + rank/2 < N_Target )
-      rank_off = rank / 2;
-    else
-      rank_off = rank / 2 - N_Target;
+    if ( bisect_no % 2 == 0 ) {
+      auto src0 = targets[2 * ((stripe_no + rank/2) % n_peers)];
+      auto src1 = targets[2 * ((stripe_no + rank/2) % n_peers) + 1];
 
-    if ( (i / jump) % 2 == (rank & 1))
-      continue;
+      int rank_off = 0;
 
-    if (input[i] != target[i + rank_off * strip] + target[i + rank_off * strip]) {
-      std::cout<<"Error occurred @"<<i<<"; expect "
-        <<target[i]<<" vs. "<<input[i]<<std::endl;
-      return false;
+      if ( (stripe_no % n_peers) + rank/2 < n_peers )
+        rank_off = rank / 2;
+      else
+        rank_off = rank / 2 - n_peers;
+
+      auto bisect_off = (rank & 1) ? bisect_size : 0;
+      auto reduce = src0[i + rank_off * stripe + bisect_off]
+                  + src1[i + rank_off * stripe + bisect_off];
+
+      if (input[i] != reduce) {
+        std::cout<<"Error occurred @"<<i<<"; expect "
+          <<reduce<<" vs. "<<input[i]<<std::endl;
+        return false;
+      }
     }
   }
 
   return true;
+}
+
+template <typename T>
+bool check_group_reduce_scatter(T* result, T* targets[],
+    int rank, int world, size_t nelems) {
+  return verify_reduce_scatter<T>(
+      result, targets, rank, world, 512 * 1024, 8 * 1024, nelems);
 }
 
 template <typename T>
@@ -493,11 +497,6 @@ double time_from_event(sycl::event e) {
   return (double)(end -start);
 }
 
-template <typename T>
-bool check_group_reduce_scatter(T* result, T* targets[], int rank, size_t nelems) {
-  return compare<T, 4>(result, targets, rank, 512 * 1024, 8 * 1024, nelems);
-}
-
 int main(int argc, char *argv[]) {
   cxxopts::Options opts("Copy", "Copy baseline for performance");
   opts.allow_unrecognised_options();
@@ -507,6 +506,7 @@ int main(int argc, char *argv[]) {
     ("b,begin", "Group Begin", cxxopts::value<size_t>()->default_value("0"))
     ("e,end", "Group End", cxxopts::value<size_t>()->default_value("64"))
     ("i,init", "Sync contents init", cxxopts::value<uint32_t>()->default_value("0"))
+    ("t,temp", "Temp sync init", cxxopts::value<uint32_t>()->default_value("0"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -515,6 +515,7 @@ int main(int argc, char *argv[]) {
   auto begin = parsed_opts["begin"].as<size_t>();
   auto end = parsed_opts["end"].as<size_t>();
   auto sync_init = parsed_opts["init"].as<uint32_t>();
+  auto sync2_init = parsed_opts["temp"].as<uint32_t>();
 
   auto group_limit_start = begin;
   auto group_limit_size = end - begin;
@@ -557,11 +558,12 @@ int main(int argc, char *argv[]) {
   auto* temp_sync = sycl::malloc_device(sync_size, queue);
 
   auto* h_sync = (uint32_t *)sycl::malloc_host(sync_size, queue);
+  auto* h_temp = (uint32_t *)sycl::malloc_host(sync_size, queue);
 
   test_type* h_check = (test_type *)sycl::malloc_host(data_size, queue);
-  test_type* h_check_peers[4];
+  test_type* h_check_peers[world];
 
-  for (int i = 0; i < 4; ++ i) {
+  for (int i = 0; i < world; ++ i) {
     h_check_peers[i] = (test_type *)sycl::malloc_host(data_size, queue);
   }
   test_type* h_src = h_check_peers[rank/2];
@@ -573,29 +575,31 @@ int main(int argc, char *argv[]) {
     sycl::free(scratch, queue);
     sycl::free(temp_sync, queue);
     sycl::free(h_sync, queue);
+    sycl::free(h_temp, queue);
     sycl::free(h_check, queue);
 
-    for (int i = 0; i < 4; ++ i) {
+    for (int i = 0; i < world; ++ i) {
       sycl::free(h_check_peers[i], queue);
     }
   });
 
-  fill_sequential<test_type>(h_src, rank/2 + 1, nelems);
+  fill_constant<test_type>(h_src, rank, nelems);
 
-  for (int i = 0; i < 4; ++ i) {
-    fill_sequential<test_type>(h_check_peers[i], i/2, nelems);
+  for (int i = 0; i < world; ++ i) {
+    fill_constant<test_type>(h_check_peers[i], world, nelems);
   }
 
   memset(h_check, 0, data_size);
 
   std::fill(h_sync, h_sync + sync_elems, sync_init);
+  std::fill(h_temp, h_temp + sync_elems, sync2_init);
 
   queue.memcpy(src, h_src, data_size);
   queue.memcpy(dst, h_src, data_size);
   queue.memset(scratch, 0, data_size);
 
   queue.memcpy(dst_sync, h_sync, sync_size);
-  queue.memcpy(temp_sync, h_sync, sync_size);
+  queue.memcpy(temp_sync, h_temp, sync_size);
   queue.wait();
 
   void* peer_bases[world];
@@ -670,7 +674,8 @@ int main(int argc, char *argv[]) {
   queue.memcpy(h_check, scratch, data_size);
   queue.wait();
 
-  bool pos = check_group_reduce_scatter(h_check, h_check_peers, rank, nelems);
+  bool pos = check_group_reduce_scatter(
+      h_check, h_check_peers, rank, world, nelems);
 
   if ( pos )
     printf("Verified\n");
