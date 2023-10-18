@@ -54,6 +54,14 @@ public:
       sycl::local_ptr<uint32_t>
   ) {}
 
+  static inline void block_if_eq(
+      sycl::nd_item<1> pos,
+      uint32_t*, uint32_t,
+      uint32_t*, uint32_t*,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {}
+
   static inline void block_if_not(
       sycl::nd_item<1> pos,
       uint32_t* flag, uint32_t target,
@@ -61,9 +69,26 @@ public:
       sycl::local_ptr<uint32_t> local_wait
   ) {}
 
+  static inline void block_if_not(
+      sycl::nd_item<1> pos,
+      uint32_t* flag, uint32_t target,
+      uint32_t* team_sync, uint32_t* team_wait,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {}
+
   static inline void signal(
       sycl::nd_item<1> pos,
       uint32_t* flag, uint32_t value,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {}
+
+  template <int N_Peers>
+  static inline void signal(
+      sycl::nd_item<1> pos, uint32_t *sync,
+      uint32_t* const flags[], uint32_t* const r_flags[],
+      size_t off, uint32_t target,
       sycl::local_ptr<uint32_t> local_counter,
       sycl::local_ptr<uint32_t> local_wait
   ) {}
@@ -170,11 +195,12 @@ public:
 };
 
 class hierarchy_sync {
+  // sub-group level orgnization
   static inline bool group_leader(
       sycl::local_ptr<uint32_t> local_counter
   ) {
     slm_atomic_ref l_c(*local_counter);
-    return (l_c ++ == 0);
+    return l_c ++ == 0;
   }
 
   static inline bool group_tail(
@@ -182,15 +208,22 @@ class hierarchy_sync {
       sycl::local_ptr<uint32_t> local_counter
   ) {
     slm_atomic_ref l_c(*local_counter);
-    return (l_c ++ == 2*pos.get_sub_group().get_group_range()[0] -1);
+    return l_c ++ == 2*pos.get_sub_group().get_group_range()[0] -1;
   }
 
-  static inline bool group_tail(
-      size_t local_size,
-      sycl::local_ptr<uint32_t> local_counter
+  // group level orgnization
+  static inline bool team_leader(
+      uint32_t& sync
   ) {
-    slm_atomic_ref l_c(*local_counter);
-    return (l_c ++ == 2 * local_size -1);
+    atomic_ref t_sync(sync);
+    return t_sync ++ == 0;
+  }
+
+  static inline bool team_tail(
+      uint32_t& sync, size_t group_sz
+  ) {
+    atomic_ref t_sync(sync);
+    return t_sync ++ == 2 * group_sz -1;
   }
 
 public:
@@ -252,6 +285,59 @@ public:
     sycl::group_barrier(pos.get_sub_group());
   }
 
+  static inline void team_block_eq(
+      uint32_t* flag, uint32_t target,
+      uint32_t* team_sync, uint32_t* team_wait
+  ) {
+    atomic_ref t_wait(*team_wait);
+    atomic_ref g_flag(*flag);
+
+    if (team_leader(*team_sync)) {
+      while(g_flag.load() == target);
+      t_wait.store(1);
+    } else
+      while(t_wait.load() == 0);
+  }
+
+  static inline void team_block_neq(
+      uint32_t* flag, uint32_t target,
+      uint32_t* team_sync, uint32_t* team_wait
+  ) {
+    atomic_ref t_wait(*team_wait);
+    atomic_ref g_flag(*flag);
+
+    if (team_leader(*team_sync)) {
+      while(g_flag.load() != target);
+      t_wait.store(1);
+    } else
+      while(t_wait.load() == 0);
+  }
+
+  static inline void block_if_eq(
+      sycl::nd_item<1> pos,
+      uint32_t* flag, uint32_t target,
+      uint32_t* team_sync, uint32_t* team_wait,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {
+    slm_atomic_ref l_wait(*local_wait);
+    slm_atomic_ref l_c(*local_counter);
+
+    atomic_ref g_flag(*flag);
+    atomic_ref t_wait(*team_wait);
+
+    if (pos.get_sub_group().leader()) {
+      if (group_leader(local_counter)) {
+        // team wait
+        team_block_eq(flag, target, team_sync, team_wait);
+        l_wait.store(false);
+
+      } else {
+        while(l_wait.load());
+      }
+    }
+  }
+
   static inline void block_if_not(
       sycl::nd_item<1> pos,
       uint32_t* flag, uint32_t target,
@@ -276,6 +362,29 @@ public:
       }
     }
 
+    sycl::group_barrier(pos.get_sub_group());
+  }
+
+  static inline void block_if_not(
+      sycl::nd_item<1> pos,
+      uint32_t* flag, uint32_t target,
+      uint32_t* team_sync, uint32_t* team_wait,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {
+    slm_atomic_ref l_wait(*local_wait);
+    slm_atomic_ref l_c(*local_counter);
+
+    atomic_ref g_flag(*flag);
+
+    if (pos.get_sub_group().leader()) {
+      if (group_leader(local_counter)) {
+        team_block_neq(flag, target, team_sync, team_wait);
+        l_wait.store(false);
+      } else {
+        while(l_wait.load());
+      }
+    }
     sycl::group_barrier(pos.get_sub_group());
   }
 
@@ -316,6 +425,37 @@ public:
       if (group_tail(pos, local_counter)) {
         g_flag += value;
 
+        l_c.store(0);
+        l_w.store(true);
+      }
+    }
+    sycl::group_barrier(pos.get_sub_group());
+  }
+
+  template <int N_Peers>
+  static inline void signal(
+      sycl::nd_item<1> pos, uint32_t *sync,
+      uint32_t* const flags[], uint32_t* const r_flags[],
+      size_t off, uint32_t target,
+      sycl::local_ptr<uint32_t> local_counter,
+      sycl::local_ptr<uint32_t> local_wait
+  ) {
+    slm_atomic_ref l_c(*local_counter);
+    slm_atomic_ref l_w(*local_wait);
+    atomic_ref g_flags(*sync);
+
+    if (pos.get_sub_group().leader()) {
+      if (group_tail(pos, local_counter)) {
+        if ((g_flags ++ & 0xffff) == target -1) {
+          // Last group to update remote
+#         pragma unroll
+          for (int i = 0; i < N_Peers; ++ i) {
+            atomic_ref flag(flags[i][off]);
+            atomic_ref r_flag(r_flags[i][off]);
+            flag += 1 << 24;
+            r_flag += 1 << 16;
+          }
+        }
         l_c.store(0);
         l_w.store(true);
       }
