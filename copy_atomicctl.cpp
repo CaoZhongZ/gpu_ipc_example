@@ -517,6 +517,37 @@ bool check_group_reduce_gather(T* result, T* targets[],
 }
 
 template <typename T>
+bool verify_merge(T* input, T* targets[], int rank, int world,
+    size_t bisect_size, size_t nelems) {
+
+  for (size_t i = 0; i < nelems; ++ i) {
+    auto bisect_no = i / bisect_size;
+    auto* src0 = (rank & 1) ? targets[rank ^ 1] : targets[rank];
+    auto* src1 = (rank & 1) ? targets[rank] : targets[rank ^ 1];
+    if (bisect_no % 2 == 1) {
+      if (input[i] != src1[i]) {
+        std::cout<<"Error occurred @"<<i<<"; expect "
+          <<src1[i]<<" vs. "<<input[i]<<std::endl;
+        return false;
+      }
+    } else {
+      if (input[i] != src0[i]) {
+        std::cout<<"Error occurred @"<<i<<"; expect "
+          <<src0[i]<<" vs. "<<input[i]<<std::endl;
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+template <typename T>
+bool check_copy_back(T* src, T* targets[], int rank, int world, size_t nelems) {
+  return verify_merge(src, targets, rank, world, 512 * 1024, nelems);
+}
+
+template <typename T>
 double bandwidth_from_event(sycl::event e, size_t nelems) {
   e.wait();
   auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
@@ -638,7 +669,7 @@ int main(int argc, char *argv[]) {
 
   queue.memset(team_sync, 0, t_sync_sz);
 
-  queue.memcpy(src, h_src, data_size);
+  queue.memset(src, 0, data_size);
   queue.memcpy(dst, h_src, data_size);
   queue.memcpy(scratch, h_src, data_size);
 
@@ -715,14 +746,14 @@ int main(int argc, char *argv[]) {
   printf("[%d]Copy %zu half in %fns, nominal bandwidth: %fGB/s\n",
       rank, data_size, time, bandwidth);
 
-  queue.memcpy(h_check, scratch, data_size);
+  queue.memcpy(h_check, src, data_size);
   queue.wait();
 
   /*
   bool pos = check_group_reduce_scatter(
       h_check, h_check_peers, rank, world, nelems);
   */
-  bool pos = check_group_reduce_gather (
+  bool pos = check_copy_back (
       h_check, h_check_peers, rank, world, nelems);
 
   if ( pos )
