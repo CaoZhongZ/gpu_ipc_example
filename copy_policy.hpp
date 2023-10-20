@@ -30,10 +30,9 @@ struct chunk_copy {
     auto bound = nelems / v_T::size();
 #   pragma unroll
     for (int n = 0; n < n_loop; ++ n) {
-      if (off < bound) {
-        v_dst[off] = v_src[off];
-        off += global_range;
-      }
+      auto v_off = off + n * global_range;
+      if (v_off < bound)
+        v_dst[v_off] = v_src[v_off];
     }
   }
 

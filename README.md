@@ -7,4 +7,9 @@ Build:
   make
 
 Run:
-  ```mpirun -np <N> fill_remote -g 4096 -l 32 -i 256```
+  bash run.sh -n 32M -s 1 -e 16
+
+Options:
+-n test size
+-s sync mode (0, no sync, 1, atomic)
+-e group number (only support 16)

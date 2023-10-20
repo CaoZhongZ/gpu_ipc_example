@@ -71,24 +71,23 @@ struct copy_persist {
     auto* remote = lock_remote;
 
     fill_temp(pos, group_limit_start, group_limit_size,
-        dst, src, sync, remote, nelems, rank, local_sync, local_wait);
+        dst, src, sync, remote, nelems, rank, local_sync, local_wait, cout);
   }
 
   // target peak bandwidth
   static inline void fill_temp(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
       T* dst, const T* src, uint32_t *sync, uint32_t* r_sync, size_t nelems, int rank,
-      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait
+      sycl::local_ptr<uint32_t> local_sync, sycl::local_ptr<uint32_t> local_wait,
+      sycl::stream cout
   ) {
     if (inactive(pos, start_group, group_sz))
       return;
 
     auto start = start_group * pos.get_local_range(0);
     auto g_range = group_sz * pos.get_local_range(0);
-
     auto src_start = (1 - (rank & 1)) * copy_type::cover(g_range);
-
-    size_t progress = (rank & 1);
+    size_t progress = (1 - (rank & 1));
 
     for (auto off = pos.get_global_id(0) - start + src_start;
         off < nelems/v_T::size(); off += copy_type::cover(g_range) * 2) {
@@ -102,6 +101,12 @@ struct copy_persist {
 
       copy_type::run(dst, src, off, g_range, nelems);
 
+      sycl::atomic_fence(sycl::memory_order::release, sycl::memory_scope::device);
+
+      if (rank == 1 && pos.get_global_id(0) == 0) {
+        cout<<rank<<", "<<dst<<"["<<off<<"]:"<<dst[off * 8]<<sycl::endl;
+      }
+
       SyncProto::finish(
           pos, group_sz,
           sync + progress, r_sync + progress,
@@ -111,7 +116,7 @@ struct copy_persist {
     }
   }
 
-  inline void test_reduce_scatter(sycl::nd_item<1> pos, uint32_t signal) const {
+  inline void test_reduce_scatter(sycl::nd_item<1> pos) const {
     uint32_t *local_sync = nullptr;
     uint32_t *local_wait = nullptr;
 
@@ -124,17 +129,17 @@ struct copy_persist {
     auto* src0 = input;
     auto* src1 = far_bank;
 
-    group_reduce_scatter(pos, group_limit_start, group_limit_size, signal,
+    group_reduce_scatter(pos, group_limit_start, group_limit_size,
         temp_ptrs, src0, src1, lock_self, temp_syncs,
-        rank, nelems, local_sync, local_wait);
+        rank, nelems, local_sync, local_wait, cout);
   }
 
   static inline void group_reduce_scatter(
       sycl::nd_item<1> pos, size_t start_group, size_t group_sz,
-      uint32_t signal, T* const dsts[], const T* src0, const T* src1,
+      T* const dsts[], const T* src0, const T* src1,
       uint32_t *sync, uint32_t* const temp_syncs[], int rank, size_t nelems,
       sycl::local_ptr<uint32_t> local_sync,
-      sycl::local_ptr<uint32_t> local_wait
+      sycl::local_ptr<uint32_t> local_wait, sycl::stream cout
   ) {
     if (inactive(pos, start_group, group_sz))
       return;
@@ -142,6 +147,7 @@ struct copy_persist {
     auto start = start_group  * pos.get_local_range(0);
     auto stride = group_sz * pos.get_local_range(0);
     auto bisect_off = (rank & 1) * pos.get_local_range(0);
+    auto sync_start = (rank & 1);
 
     size_t progress = 0;
 
@@ -161,11 +167,16 @@ struct copy_persist {
         local_off = progress % sync_size;
 
       SyncProto::block_if_not(
-          pos, sync + progress, signal,
+          pos, sync + progress + sync_start, group_sz,
           local_sync + local_off, local_wait + local_off);
 
       auto src_off = off + bisect_off;
       auto dst_off = off + rank_off;
+
+      sycl::atomic_fence(sycl::memory_order::acquire, sycl::memory_scope::device);
+
+      if (rank == 0 && pos.get_local_id(0) == 0 && pos.get_group(0) == 16)
+        cout<<rank<<", "<<src1<<"["<<src_off<<"]:"<<src1[src_off * 8]<<sycl::endl;
 
       copy_type::reduce(dst, src0, src1, dst_off, src_off, stride, nelems);
 
@@ -302,9 +313,26 @@ struct copy_persist {
     }
   }
 
+  inline void integration_test(sycl::nd_item<1> pos) const {
+    uint32_t *local_sync = nullptr;
+    uint32_t *local_wait = nullptr;
+
+    if constexpr (sync_size != 0) {
+      local_sync = __shared__<uint32_t [sync_size * 4]>(pos.get_group());
+      local_wait = __shared__<uint32_t [sync_size * 4]>(pos.get_group());
+      SyncProto::init_slm_flags(pos, local_sync, local_wait, sync_size);
+    }
+
+    fill_temp(pos, 0, 16, bank, input, lock_self, lock_remote,
+        nelems, rank, local_sync, local_wait, cout);
+
+    group_reduce_scatter(pos, 16, 16,
+        temp_ptrs, input, far_bank, lock_self, temp_syncs,
+        rank, nelems, local_sync + sync_size, local_wait + sync_size, cout);
+  }
+
   void operator() [[sycl::reqd_sub_group_size(16)]] (sycl::nd_item<1> pos) const {
-    // test_reduce_scatter(pos, 0x10);
-    test_copy_back(pos, 0x10);
+    integration_test(pos);
   }
 
   static sycl::event launch(
@@ -460,7 +488,7 @@ bool verify_reduce_scatter(T* input, T* targets[], int rank, int world,
                   + src1[i + rank_off * stripe + bisect_off];
 
       if (input[i] != reduce) {
-        std::cout<<"Error occurred @"<<i<<"; expect "
+        std::cout<<"["<<rank<<"] Error occurred @"<<i<<"; expect "
           <<reduce<<" vs. "<<input[i]<<std::endl;
         return false;
       }
@@ -545,6 +573,42 @@ bool verify_merge(T* input, T* targets[], int rank, int world,
 template <typename T>
 bool check_copy_back(T* src, T* targets[], int rank, int world, size_t nelems) {
   return verify_merge(src, targets, rank, world, 512 * 1024, nelems);
+}
+
+template <typename T>
+bool verify_stage_1(T* input, T* targets[], int rank, int world,
+    size_t bisect_size, size_t stripe, size_t nelems) {
+
+  auto n_peers = world / 2;
+
+  for (size_t i = 0; i < nelems; ++ i) {
+    auto bisect_no = i / bisect_size;
+    auto stripe_no = i / stripe;
+
+    if ( bisect_no % 2 == 0 ) {
+      auto src0 = targets[2 * ((stripe_no + rank/2) % n_peers)];
+      auto src1 = targets[2 * ((stripe_no + rank/2) % n_peers) + 1];
+
+      int rank_off = 0;
+
+      if ( (stripe_no % n_peers) + rank/2 < n_peers )
+        rank_off = rank / 2;
+      else
+        rank_off = rank / 2 - n_peers;
+
+      auto bisect_off = (rank & 1) ? bisect_size : 0;
+      auto reduce = src0[i + rank_off * stripe + bisect_off]
+                  + src1[i + rank_off * stripe + bisect_off];
+
+      if (input[i] != reduce) {
+        std::cout<<"Error occurred @"<<i<<"; expect "
+          <<reduce<<" vs. "<<input[i]<<std::endl;
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 template <typename T>
@@ -669,9 +733,9 @@ int main(int argc, char *argv[]) {
 
   queue.memset(team_sync, 0, t_sync_sz);
 
-  queue.memset(src, 0, data_size);
-  queue.memcpy(dst, h_src, data_size);
-  queue.memcpy(scratch, h_src, data_size);
+  queue.memcpy(src, h_src, data_size);
+  queue.memset(dst, 0, data_size);
+  queue.memset(scratch, 0, data_size);
 
   queue.memcpy(dst_sync, h_sync, sync_size);
   queue.memcpy(temp_sync, h_temp, sync_size);
@@ -746,20 +810,16 @@ int main(int argc, char *argv[]) {
   printf("[%d]Copy %zu half in %fns, nominal bandwidth: %fGB/s\n",
       rank, data_size, time, bandwidth);
 
-  queue.memcpy(h_check, src, data_size);
+  queue.memcpy(h_check, scratch, data_size);
   queue.wait();
 
-  /*
-  bool pos = check_group_reduce_scatter(
+  check_group_reduce_scatter(
       h_check, h_check_peers, rank, world, nelems);
-  */
+  /*
   bool pos = check_copy_back (
       h_check, h_check_peers, rank, world, nelems);
 
-  if ( pos )
-    printf("Verified\n");
-  else
-    printf("Error at %d\n", pos);
+  */
 
   printf("[%d] Lock elems %#x, %#x, %#x, %#x, ..., %#x\n", rank,
       mon_lock[0], mon_lock[1], mon_lock[2], mon_lock[3], mon_lock[sync_elems -1]);
