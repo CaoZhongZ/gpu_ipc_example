@@ -35,6 +35,38 @@ struct jump_copy {
 };
 
 template <typename T, int Unroll>
+struct jump_copy_release {
+  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
+    for (size_t off = pos.get_global_id(0);
+        off  < elems * Unroll; off += pos.get_global_range(0)* Unroll) {
+#     pragma unroll
+      for (int i = 0; i < Unroll; ++ i) {
+        auto i_off = off + pos.get_global_range(0) * i;
+        if (i_off < elems)
+          dst[i_off] = src[i_off];
+      }
+      sycl::atomic_fence(sycl::memory_order::release, sycl::memory_scope::device);
+    }
+  }
+};
+
+template <typename T, int Unroll>
+struct jump_copy_acquire {
+  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
+    for (size_t off = pos.get_global_id(0);
+        off  < elems * Unroll; off += pos.get_global_range(0)* Unroll) {
+#     pragma unroll
+      for (int i = 0; i < Unroll; ++ i) {
+        auto i_off = off + pos.get_global_range(0) * i;
+        if (i_off < elems)
+          dst[i_off] = src[i_off];
+      }
+      sycl::atomic_fence(sycl::memory_order::acquire, sycl::memory_scope::device);
+    }
+  }
+};
+
+template <typename T, int Unroll>
 struct group_copy {
   static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
     auto grp = pos.get_group();
@@ -51,6 +83,50 @@ struct group_copy {
       for (int i = 0; i < Unroll; ++ i) {
         dst[off + i * grp_sz] = src[off + i * grp_sz];
       }
+    }
+  }
+};
+
+template <typename T, int Unroll>
+struct group_copy_acquire {
+  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
+    auto grp = pos.get_group();
+    auto n_grps = grp.get_group_linear_range();
+    auto grp_sz = grp.get_local_linear_range();
+
+    auto grp_id = grp.get_group_id(0);
+    auto loc_id = grp.get_local_id(0);
+    auto slice = elems * Unroll / n_grps;
+    auto base_off = grp_id * slice;
+
+    for (auto off = base_off + loc_id; off < base_off + slice; off += grp_sz * Unroll) {
+#     pragma unroll
+      for (int i = 0; i < Unroll; ++ i) {
+        dst[off + i * grp_sz] = src[off + i * grp_sz];
+      }
+      sycl::atomic_fence(sycl::memory_order::acquire, sycl::memory_scope::device);
+    }
+  }
+};
+
+template <typename T, int Unroll>
+struct group_copy_release {
+  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
+    auto grp = pos.get_group();
+    auto n_grps = grp.get_group_linear_range();
+    auto grp_sz = grp.get_local_linear_range();
+
+    auto grp_id = grp.get_group_id(0);
+    auto loc_id = grp.get_local_id(0);
+    auto slice = elems * Unroll / n_grps;
+    auto base_off = grp_id * slice;
+
+    for (auto off = base_off + loc_id; off < base_off + slice; off += grp_sz * Unroll) {
+#     pragma unroll
+      for (int i = 0; i < Unroll; ++ i) {
+        dst[off + i * grp_sz] = src[off + i * grp_sz];
+      }
+      sycl::atomic_fence(sycl::memory_order::release, sycl::memory_scope::device);
     }
   }
 };
@@ -209,6 +285,7 @@ int main(int argc, char *argv[]) {
     ("g,groups", "Max Group Size", cxxopts::value<size_t>()->default_value("64"))
     ("l,local", "Local size", cxxopts::value<size_t>()->default_value("512"))
     ("s,sequential", "Sequential Unroll", cxxopts::value<bool>()->default_value("false"))
+    ("f,fence", "Atomic Fence at the end of bulk", cxxopts::value<int>()->default_value("0"))
     ("t,tile", "On which tile to deploy the test", cxxopts::value<uint32_t>()->default_value("0"))
     ("v,lanev", "Vecterize amoung SIMD lane", cxxopts::value<int>()->default_value("16"))
     ;
@@ -221,6 +298,7 @@ int main(int argc, char *argv[]) {
   auto seq = parsed_opts["sequential"].as<bool>();
   auto tile = parsed_opts["tile"].as<uint32_t>();
   auto v_lane = parsed_opts["lanev"].as<int>();
+  auto fence = parsed_opts["fence"].as<int>();
 
   auto nelems = parse_nelems(nelems_string);
   using test_type = sycl::half;
@@ -248,11 +326,35 @@ int main(int argc, char *argv[]) {
   sycl::event e;
 
   if (seq) {
-    e = launch<copy_persist, test_type, group_copy>(
-        queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+    switch (fence) {
+    default:
+      e = launch<copy_persist, test_type, group_copy>(
+          queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+      break;
+    case 1:
+      e = launch<copy_persist, test_type, group_copy_release>(
+          queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+      break;
+    case 2:
+      e = launch<copy_persist, test_type, group_copy_acquire>(
+          queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+      break;
+    }
   } else {
-    e = launch<copy_persist, test_type, jump_copy>(
-        queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+    switch (fence) {
+    default:
+      e = launch<copy_persist, test_type, jump_copy>(
+          queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+      break;
+    case 1:
+      e = launch<copy_persist, test_type, jump_copy_release>(
+          queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+      break;
+    case 2:
+      e = launch<copy_persist, test_type, jump_copy_acquire>(
+          queue, v_lane, unroll, dst, src, nelems, max_groups, local);
+      break;
+    }
   }
 
   // auto e = queue.memcpy(dst, src, alloc_size);

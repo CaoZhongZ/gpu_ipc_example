@@ -75,3 +75,15 @@ std::enable_if_t<std::is_trivially_destructible<T>::value &&
       "sycl_ext_oneapi_local_memory extension is not supported on host device");
 #endif
 }
+
+#define DIVUP(x, y) \
+    (((x)+(y)-1)/(y))
+
+#define ROUNDUP(x, y) \
+    (DIVUP((x), (y))*(y))
+
+#define ALIGN_POWER(x, y) \
+    ((x) > (y) ? ROUNDUP(x, y) : ((y)/((y)/(x))))
+
+#define ALIGN_SIZE(size, align) \
+  size = ((size + (align) - 1) / (align)) * (align);
