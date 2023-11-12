@@ -5,68 +5,6 @@
 #include "sycl_misc.hpp"
 
 template <typename T, int Unroll>
-struct seq_copy {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    for (size_t off = pos.get_global_id(0);
-        off < elems; off += pos.get_global_range(0)) {
-#     pragma unroll
-      for (int i = 0; i < Unroll; ++ i) {
-        auto i_off = Unroll * off + i;
-        if (i_off < elems)
-          dst[i_off] = src[i_off];
-      }
-    }
-  }
-};
-
-template <typename T, int Unroll>
-struct jump_copy {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    for (size_t off = pos.get_global_id(0);
-        off  < elems * Unroll; off += pos.get_global_range(0)* Unroll) {
-#     pragma unroll
-      for (int i = 0; i < Unroll; ++ i) {
-        auto i_off = off + pos.get_global_range(0) * i;
-        if (i_off < elems)
-          dst[i_off] = src[i_off];
-      }
-    }
-  }
-};
-
-template <typename T, int Unroll>
-struct jump_copy_release {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    for (size_t off = pos.get_global_id(0);
-        off  < elems * Unroll; off += pos.get_global_range(0)* Unroll) {
-#     pragma unroll
-      for (int i = 0; i < Unroll; ++ i) {
-        auto i_off = off + pos.get_global_range(0) * i;
-        if (i_off < elems)
-          dst[i_off] = src[i_off];
-      }
-      sycl::atomic_fence(sycl::memory_order::release, sycl::memory_scope::device);
-    }
-  }
-};
-
-template <typename T, int Unroll>
-struct jump_copy_acquire {
-  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
-    for (size_t off = pos.get_global_id(0);
-        off  < elems * Unroll; off += pos.get_global_range(0)* Unroll) {
-#     pragma unroll
-      for (int i = 0; i < Unroll; ++ i) {
-        auto i_off = off + pos.get_global_range(0) * i;
-        if (i_off < elems)
-          dst[i_off] = src[i_off];
-      }
-      sycl::atomic_fence(sycl::memory_order::acquire, sycl::memory_scope::device);
-    }
-  }
-};
-
-template <typename T, int Unroll>
 struct group_copy {
   static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
     auto grp = pos.get_group();
@@ -82,6 +20,47 @@ struct group_copy {
 #     pragma unroll
       for (int i = 0; i < Unroll; ++ i) {
         dst[off + i * grp_sz] = src[off + i * grp_sz];
+      }
+    }
+  }
+};
+
+template <typename T, int Unroll>
+struct asm_copy {
+  static inline void run(sycl::nd_item<1> pos, T* dst, const T* src, size_t elems) {
+    auto grp = pos.get_group();
+    auto n_grps = grp.get_group_linear_range();
+    auto grp_sz = grp.get_local_linear_range();
+
+    auto grp_id = grp.get_group_id(0);
+    auto loc_id = grp.get_local_id(0);
+    auto slice = elems * Unroll / n_grps;
+    auto base_off = grp_id * slice;
+
+    for (auto off = base_off + loc_id; off < base_off + slice; off += grp_sz * Unroll) {
+#     pragma unroll
+      for (int i = 0; i < Unroll; ++ i) {
+        if constexpr (sizeof(T) == 4) {
+          asm volatile ("\n"
+              ".decl V42 v_type=G type=d num_elts=16 align=GRF\n"
+              "lsc_load.ugm (M1, 16) V42:d32 flat[%1]:a64\n"
+              "lsc_store.ugm (M1, 16) flat[%0]:a64 V42:d32\n"
+              ::"rw" (dst + off + i * grp_sz), "rw"(src + off + i * grp_sz));
+        } else if constexpr (sizeof(T) == 8) {
+          asm volatile ("\n"
+              ".decl V42 v_type=G type=d num_elts=32 align=GRF\n"
+              "lsc_load.ugm (M1, 16) V42:d32x2 flat[%1]:a64\n"
+              "lsc_store.ugm (M1, 16) flat[%0]:a64 V42:d32x2\n"
+              ::"rw" (dst + off + i * grp_sz), "rw"(src + off + i * grp_sz));
+        } else if constexpr (sizeof(T) == 16) {
+          asm volatile ("\n"
+              ".decl V42 v_type=G type=d num_elts=64 align=GRF\n"
+              "lsc_load.ugm (M1, 16) V42:d32x4 flat[%1]:a64\n"
+              "lsc_store.ugm (M1, 16) flat[%0]:a64 V42:d32x4\n"
+              ::"rw" (dst + off + i * grp_sz), "rw"(src + off + i * grp_sz));
+        } else {
+          dst[off + i * grp_sz] = src[off + i * grp_sz];
+        }
       }
     }
   }
