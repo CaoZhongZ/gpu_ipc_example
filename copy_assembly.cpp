@@ -44,10 +44,7 @@ struct asm_copy {
 #if defined(__SYCL_DEVICE_ONLY__)
         T tmp;
 
-        asm volatile ("\n"
-            "lsc_load.ugm (M1, 16) %0:f32x4 flat[%1]:a64\n"
-            "lsc_store.ugm (M1, 16) flag[%2]:a64 %0:f32x4\n"
-        : "+rw"(tmp) : "r"(src + off + i * grp_sz), "r"(dst + off + i * grp_sz));
+        asm volatile ("lsc_load.ugm (M1, 16) %0:f32x4 flat[%1]:a64\n" : "=r"(tmp) : "r"(src + off + i * grp_sz));
 #else
         if (off + i * grp_sz < elems)
           dst[off + i * grp_sz] = src[off + i * grp_sz];

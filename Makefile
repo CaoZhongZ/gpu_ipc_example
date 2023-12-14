@@ -2,7 +2,7 @@ CC=clang
 CXX=clang++
 
 OPT=-O3 -fno-strict-aliasing
-# OPT=-g -fno-strict-aliasing
+# OPT=-g -fno-strict-aliasing -D_GLIBCXX_USE_CXX11_ABI=0
 
 SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc"
 
@@ -23,5 +23,9 @@ copy_baseline : copy_baseline.cpp sycl_misc.cpp
 
 copy_assembly : copy_assembly.cpp sycl_misc.cpp
 
+copy_verify : copy_verify.cpp sycl_misc.cpp
+
+optim_local_id : optim_local_id.cpp sycl_misc.cpp
+
 clean:
-	rm -f fill_remote atomic_2020 linearize allreduce list_device copy_atomicctl copy_assembly
+	rm -f fill_remote atomic_2020 linearize allreduce list_device copy_atomicctl copy_assembly optim_local_id
