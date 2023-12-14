@@ -69,7 +69,7 @@ int main(int argc, char *argv[]) {
 
   queue.submit([&](sycl::handler &h) {
       h.parallel_for(sycl::nd_range<1> {nelems, 32}, [=](sycl::nd_item<1> pos) {
-        constexpr int simd_array[32] = {
+        static constexpr int simd_array[32] = {
           16, 77, 102, 154, 816, 0xffff, 0xffff, 0xffff,
           0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff, 0xffff,
           16, 77, 102, 154, 816, 0xffff, 0xffff, 0xffff,
