@@ -166,20 +166,25 @@ struct atomic_baseline {
         sycl::memory_scope::device,
         sycl::access::address_space::global_space>;
 public:
-  atomic_baseline(void* self, void *next_peer, int rank, int world/*, sycl::stream s*/)
+  atomic_baseline(uint32_t* self, uint32_t *next_peer, int rank, int world/*, sycl::stream s*/)
     :self(self), next_peer(next_peer), rank(rank), world(world)/*, cout(s)*/ {
   }
 
   // create contension
   void operator() (sycl::nd_item<1> pos) const {
-    next_peer[0] = 1;
+    // if (pos.get_local_id() == 0)
+    //   next_peer[0] = 1;
 
-    sycl::atomic_fence(sycl::memory_order::release,
-        sycl::memory_scope::work_item);
+    // sycl::atomic_fence(sycl::memory_order::release,
+    //     sycl::memory_scope::work_item);
+    // sycl::group_barrier(pos.get_group());
 
     volatile uint32_t *flag = self;
 
-    while(flag[0] != 1);
+    if (pos.get_local_id() == 0)
+      while(*flag != 1);
+
+    sycl::group_barrier(pos.get_group());
   }
 
 private:
@@ -201,11 +206,13 @@ void stress_test(
 
   auto next = (rank + 1) == world ? 0 : rank + 1;
 
+  std::cout<<"Start test"<<std::endl;
+
   auto queue = currentQueue(rank / 2, rank & 1);
   queue.submit([&](sycl::handler &cgh) {
-    cgh.parallel_for({1, 1},
-        atomic_baseline(peer_ptrs[rank],
-          peer_ptrs[next], rank, world)
+    cgh.parallel_for(sycl::nd_range<1>(sycl::range(16), sycl::range(16)),
+        atomic_baseline((uint32_t *)peer_ptrs[rank],
+          (uint32_t *)peer_ptrs[next], rank, world)
     );
   });
 }
@@ -253,7 +260,7 @@ int main(int argc, char* argv[]) {
   // a GPU page
   size_t alloc_size = 64 * 1024;
   void* buffer = sycl::malloc_host(alloc_size, queue);
-  void *peer_bases[world];
+  void* peer_bases[world];
   size_t offsets[world];
   auto ipc_handle = open_peer_ipc_mems(buffer, rank, world, peer_bases, offsets);
 
@@ -263,28 +270,29 @@ int main(int argc, char* argv[]) {
   stress_test(
       rank, world, peer_bases, offsets, global_sz, group_sz, repeat);
 
+  auto next = rank + 1 == world ? 0:rank + 1;
+  std::cout<<"Choose next rank:"<<next<<std::endl;
+
+  volatile uint32_t *flag = (uint32_t *)((char *)peer_bases[next] + offsets[next]);
+  volatile uint32_t *check = (uint32_t *)buffer;
+
+  // while(*flag != 1) {
+  //   std::cout<<"Poll"<<std::endl;
+  //   sleep(1);
+  // }
+
+  // std::cout<<"Wait success"<<std::endl;
+  std::cout<<"Signal!"<<std::endl;
+  flag[0] = 1;
+
+  while(*check!= 1) {
+    std::cout<<"Poll"<<std::endl;
+    sleep(1);
+  }
+
   // avoid race condition
   queue.wait();
   MPI_Barrier(MPI_COMM_WORLD);
-
-  // Or we map the device to host
-  int dma_buf = 0;
-  memcpy(&dma_buf, &ipc_handle, sizeof(int));
-  uint32_t *host_buf = (uint32_t *)mmap_host(alloc_size, dma_buf);
-  std::cout<<"Peek: "<<host_buf[0]<<", "<<host_buf[1]<<", "<<host_buf[2]<<", ..."<<std::endl;
-
-  MPI_Barrier(MPI_COMM_WORLD);
-
-  // Clean up, close/put ipc handles, free memory, etc.
-  auto l0_ctx = sycl::get_native<
-    sycl::backend::ext_oneapi_level_zero>(queue.get_context());
-
-  munmap(host_buf, alloc_size);
-
-  for (int i = 0; i < world; ++ i)
-    if (i != rank)
-      zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
-
   // zeCheck(zeMemPutIpcHandle(l0_ctx, ipc_handle)); /* the API is added after v1.6 */
   sycl::free(buffer, queue);
   return 0;

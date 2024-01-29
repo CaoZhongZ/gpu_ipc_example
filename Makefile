@@ -1,5 +1,5 @@
-CC=icx
-CXX=icpx
+CC=clang
+CXX=clang++
 
 OPT=-O3
 
@@ -9,7 +9,7 @@ CCL_ROOT=../ccl/release/_install
 INCLUDES=-I$(CCL_ROOT)/include
 LIBRARIES=-L$(CCL_ROOT)/lib -lmpi -lze_loader
 
-CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES)
+CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES) -Wno-vla-cxx-extension
 
 all : fill_remote atomic_2020
 
