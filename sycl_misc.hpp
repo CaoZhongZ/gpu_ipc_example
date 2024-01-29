@@ -13,7 +13,7 @@ sycl::device getSubDevice() {
     return subs[nsub];
   } catch (sycl::exception &e) {
     std::cout<<e.what()<<std::endl;
-    return dev;
+    return dev[ndev * 2 + nsub];
   };
 }
 
