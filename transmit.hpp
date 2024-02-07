@@ -248,7 +248,8 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
     auto groupId = pos.get_group_id()[0];
     auto subGroupId = pos.get_sub_group().get_group_id()[0];
 
-    for (size_t gOff = 0; gOff < workSize; gOff += loopSize) {
+    // XXX: more cut according to job divide?
+    for (size_t gOff = 0; gOff /* * cableCap */ < workSize; gOff += loopSize) {
       auto gPos = gOff + groupId;
       auto cableOff = gPos * cableCap;
       auto wireOff = cableOff + subGroupId * wireCap;
