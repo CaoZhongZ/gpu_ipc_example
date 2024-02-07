@@ -15,17 +15,9 @@ LIBRARIES=-lmpi -lze_loader
 
 CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES)
 
-all : copy_assembly
+main : main.cpp ipc_exchange.cpp sycl_misc.cpp
 
-copy_atomicctl : copy_atomicctl.cpp ipc_exchange.cpp sycl_misc.cpp
-
-copy_baseline : copy_baseline.cpp sycl_misc.cpp
-
-copy_assembly : copy_assembly.cpp sycl_misc.cpp
-
-copy_verify : copy_verify.cpp sycl_misc.cpp
-
-optim_local_id : optim_local_id.cpp sycl_misc.cpp
+all : main
 
 clean:
-	rm -f fill_remote atomic_2020 linearize allreduce list_device copy_atomicctl copy_assembly optim_local_id
+	rm -f fill_remote main
