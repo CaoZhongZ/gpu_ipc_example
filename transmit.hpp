@@ -9,19 +9,27 @@
 #define alignUp(x, c) \
   (divUp(x, c) * c)
 
-//
-// XXX: group level class object.
-//
-template <typename T, int NPeers, int SubGroupSize=16>
-class SimpleTransmit {
-  // using message_t sycl::vec<uint32_t, 2>; // 128 bytes
-  using message_t uint64_t; // layout problem???
+template <int SubGroupSize> struct message_type;
 
+template <typename T, int NPeers, int SubGroupSize>
+class SimpleTransmit {
+  constexpr static int nReg128B = 128 / SubGroupSize / 4;
+  constexpr static int firstElem = 0;
+  constexpr static int lastElem = nReg128B -1;
+
+  using message_t = sycl::vec<uint32_t, nReg128B>;
+  // transaction of 128-byte is not atomic across HBM channel
+  constexpr static int nChan8B = 8 / sizeof(message_t);
+  constexpr static int lastDataChannel = SubGroupSize -nChan8B;
+  constexpr static int firstFlagChannel = SubGroupSize/2 -1;
+  constexpr static int lastFlagChannel = SubGroupSize -1;
+  constexpr static int wireSrcStep = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
+  constexpr static int wireMsgStep = SubGroupSize*sizeof(message_t)/sizeof(T);
 public:
   SimpleTransmit(
       sycl::nd_item<1> pos,
       size_t workSize, // should be a array in production code
-      uint64_t step,   // Serve as flag for checking
+      uint32_t step,   // Serve as flag for checking
       T* scatterSink[],
       T* gatherSink[],
       T* ioBuffer,
@@ -36,20 +44,22 @@ public:
       this->localGatherSink[i] = localGatherSink[i];
     }
   }
-
-  static constexpr int inputStep = (SubGroupSize -1) * sizeof(uint64_t) / sizeof(T);
-  static constexpr int messageStep = SubGroupSize * sizeof(uint64_t) / sizeof(T);
-
+  //
+  // Process of pack messages
+  // 1. multiple load inputs (32 round maximum)
+  // 2. Insert flags at the 16th lane
+  // 3. Shuffle flag into the middle of second register
+  //
   template <int unroll> inline void loadInput(
-      uint64_t (&v)[unroll], void* src, int nElt
+      message_t (&v)[unroll], void* src, int nElt
   ) {
     auto lid = pos.get_sub_group().get_local_id()[0];
-    int local_off = lid * sizeof(uint64_t) / sizeof(T);
+    int local_off = lid * sizeof(message_t) / sizeof(T);
 
-    if (lid != SubGroupSize -1) {
+    if (lid < lastDataChannel) {
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * inputStep + local_off;
+        auto off = i * wireSrcStep + local_off;
         if (off < nElt) {
           lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
               v[i], src + off;
@@ -57,15 +67,124 @@ public:
     }}}
   }
 
-  template <int unroll> inline void storeOutput(
-      uint64_t (&v)[unroll], void* dst, int nElt
+  template <int unroll>
+  inline void insertFlags(
+      message_t (& messages)[unroll], uint32_t flag
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
-    int local_off = lid * sizeof(uint64_t) / sizeof(T);
-    if (lid != SubGroupSize -1) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (SubGroupSize == 16) {
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * inputStep + local_off;
+        asm volatile (
+            "mov (M1, 1) %0(1, 7)<1> %1(0, 0)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i]))
+            : "rw"(flag);
+        );
+      }
+
+#     pragma unroll
+      for (int i = 0; i < unroll; ++ i) {
+        asm volatile (
+            "mov (M1, 1) %0(1, 15)<1> %1(0, 0)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i]))
+            : "rw"(flag);
+        );
+      }
+    } else {
+#     pragma unroll
+      for (int i = 0; i < unroll; ++ i) {
+        asm volatile (
+            "mov (M1, 1) %0(0, 15)<1> %1(0, 0)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i])) : "rw"(flag);
+        );
+      }
+
+#     pragma unroll
+      for (int i = 0; i < unroll; ++ i) {
+        asm volatile (
+            "mov (M1, 1) %0(0, 31)<1> %1(0, 0)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i])) : "rw"(flag);
+        );
+      }
+    }
+#else
+    // Add flags at the middle and tail
+    int lid = pos.get_sub_group().get_local_id()[0];
+    if (lid == firstFlag || lid == lastFlag) {
+#     pragma unroll
+      for (int i = 0; i < unroll; ++ i)
+        messages[i][lastElem] = flag;
+    }
+#endif
+  }
+
+  static inline void shuffleData(message_t (& messages)[unroll]) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+#   pragma unroll
+    for (int i = 0; i < unroll; ++ i) {
+      if constexpr (SubGroupSize == 16) {
+        asm volatile ("\n"
+            "mov (M1, 1) %0(0, 15)<1> %0(1, 7)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i]))
+            :
+        );
+      } else {
+        asm volatile ("\n"
+            "mov (M1, 1) %0(0, 30)<1> %0(0, 15)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i]))
+            :
+        );
+      }
+    }
+#else
+    auto sg = this_sub_group();
+#   pragma unroll
+    for (int i = 0; i < unroll; ++ i) {
+      auto data = sg.shuffle(messages[i][lastElem], SubGroupSize /2 -1);
+      if (sg.get_local_id() == lastDataChannel)
+        messages[i][firstElem] = data;
+    }
+#endif
+  }
+
+  static inline void restoreData(message_t (& messages)[unroll]) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+#   pragma unroll
+    for (int i = 0; i < unroll; ++ i) {
+      if constexpr (SubGroupSize == 16) {
+        asm volatile ("\n"
+            "mov (M1, 1) %0(1, 7)<1> %0(0, 15)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i]))
+            :
+        );
+      } else {
+        asm volatile ("\n"
+            "mov (M1, 1) %0(0, 15)<1> %0(0, 30)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<message_t::vector_t &>(messages[i]))
+            :
+        );
+      }
+    }
+#else
+    auto sg = this_sub_group();
+#   pragma unroll
+    for (int i = 0; i < unroll; ++ i) {
+      auto data = sg.shuffle(messages[i][firstElem], lastDataChannel);
+      if (sg.get_local_id() == SubGroupSize / 2 -1)
+        messages[i][lastElem] = flag;
+    }
+#endif
+  }
+
+  template <int unroll> inline void storeOutput(
+      message_t (&v)[unroll], void* dst, int nElt
+  ) {
+    auto lid = pos.get_sub_group().get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+    if (lid < lastDatachannel) {
+#     pragma unroll
+      for (int i = 0; i < unroll; ++ i) {
+        auto off = i * wireSrcStep + local_off;
         if (off < nElt) {
           lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
               dst + off, v[i];
@@ -73,39 +192,16 @@ public:
     }}}
   }
 
-  // sub-group level description
-  template <int unroll>
-  inline void packMessage(
-      message_t (& messages)[unroll], T* src, int nElt, uint64_t flag
-  ) {
-    int lid = pos.get_sub_group().get_local_id()[0];
-    // Add flags at the tail lane
-    if (lid == SubGroupSize -1) {
-#     pragma unroll
-      for (int i = 0; i < unroll; ++ i)
-        messages[i] = flag;
-    }
-
-    //
-    // contiguous load 15 lanes of data (120 bytes) multiple times
-    //
-    // For Subgroup 16 lane configuration, 128B message delivered
-    // possibly in two chunk or one Last lane are flags to occupy 8-byte
-    // and offset address always in 8-byte aligned fashion
-    //
-    loadInput(messages, src, nElt);
-  }
-
   // We always push 128-byte packages
   template <int unroll>
-  inline void sendMessages(T* ptr, uint64_t (&messages)[unroll]) {
+  inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
     int lid = pos.get_sub_group().get_local_id()[0];
-    int local_off = lid * sizeof(uint64_t) / sizeof(T);
+    int local_off = lid * sizeof(message_t) / sizeof(T);
 
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
       lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-          ptr + u * messageStep + local_off,
+          ptr + u * wireMsgStep + local_off,
           messages[u];
       );
     }
@@ -115,29 +211,41 @@ public:
   template <int unroll> scatter(size_t offset, size_t nelems) {
     auto offsetInType = offset / sizeof(T);
 
-    constexpr int eltPerPack =
-      unroll * (SubGroupSize -1) * sizeof(uint64_t) / sizeof(T);
+    constexpr int eltPerPack = unroll * wireSrcStep;
 
     int nElt = std::min(nelems, eltPerPack);
+
+    //
+    // register consumption:
+    // 2 x unroll x NPeers;
+    //
+    static_assert(unroll * NPeers * 2 < 64, "Too much register consumed");
+    message_t messages[NPeers][unroll];
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       auto next = (rank + i) % (NPeers + 1);
       auto peerOffset = next * workSize / sizeof(T);
       auto* ptr = ioBuffer + peerOffset + offsetInType;
-      auto* dst = scatterSink[i] + offsetInType;
 
-      message_t messages[unroll];
-      packMessage(messages, ptr, nElt, scatterStep);
-      sendMessage(messages, dst, nElt);
+      loadInput(messages[i], ptr, nElt, scatterStep);
+    }
+
+#   pragma unroll
+    for (int i = 0; i < NPeers; ++ i) {
+      shuffleData(messages[i], scatterStep);
+      insertFlags(messages[i], scatterStep);
+
+      auto* dst = scatterSink[i] + offsetInType;
+      sendMessage(messages[i], dst, nElt);
     }
   }
 
   template <int unroll>
   inline void pollRecvReduceGather(
-      uint64_t (&v)[unroll], size_t offset
+      message_t (&v)[unroll], size_t offset
   ) {
-    uint64_t messages[unroll]; // scraps from remote
+    message_t messages[unroll]; // scraps from remote
     auto offsetInType = offset / sizeof(T);
 
 #   pragma unroll
@@ -149,36 +257,50 @@ public:
 #       pragma unroll
         for (int u = 0; u < unroll; ++ u) {
           lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-              message[u], localScatterSink[peer] + offsetInType + u * messageStep);
+              messages[u], localScatterSink[peer] + offsetInType + u * wireMsgStep);
           retry |=
-            subgroup_id == (SubGroupSize -1)
-            && message[u] != flag;
+            subgroup_id == firstFlagChannel && messages[u][lastElem] != flag
+            || subgroup_id == lastFlagChannel && messages[u][lastElem] != flag
         }
-      } while(sycl::any_of_group(sg, poll));
+      } while(sycl::any_of_group(sycl::this_sub_group(), retry));
+
+      // do we need reload this???
 #     pragma unroll
       for (int u = 0; u < unroll; ++ u) {
         lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-            message[u], localScatterSink[peer] + offsetInType + u * messageStep);
-        v[u] = addAs<T, SubGroupSize>(v[u], message[u]);
+            messages[u], localScatterSink[peer] + offsetInType + u * wireMsgStep);
+      }
+
+      restoreData(messages);
+
+#if !defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+      using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
+      arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
+      arith_m = reinterpret_cast<math_t (&)[unroll]>(messages);
+#endif
+
+      if (sycl::this_sub_group.get_local_id() < lastDataChannel) {
+#       pragma unroll
+        for (int u = 0; u < unroll; ++ u) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+          v[u] = addAs<T, SubGroupSize>(v[u], messages[u]);
+#else
+          arith_v[u] = arith_v[u] + arith_m[u];
+#endif
+        }
       }
     }
 
     // push to gather sink
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = gatherStep;
-      int lid = pos.get_sub_group().get_local_id()[0];
+      shuffleData(v);
+      insertFlags(v, gatherStep);
 
 #     pragma unroll
       for (int u = 0; u < unroll; ++ u) {
-        if (lid == SubGroupSize -1)
-          v[u] = flag;
-      }
-
-#     pragma unroll
-      for (int u = 0; u < unroll; ++ u) {
-        lscStore<SubGroupSize>, CacheCtrl::L1UC_L3UC>(
-            gatherSink[i] + offsetInType + u * messageStep, v[u]);
+        lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+            gatherSink[i] + offsetInType + u * wireMsgStep, v[u]);
       }
     }
   }
@@ -191,8 +313,8 @@ private:
   T* localGatherSink[NPeers];
 
   size_t workSize;
-  uint64_t scatterStep;
-  uint64_t gatherStep;
+  message_t scatterStep;
+  message_t gatherStep;
 
   sycl::nd_item<1> pos;
 };
@@ -236,7 +358,10 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   //
   template <int unroll>
   void scatterTest(sycl::nd_item<1> pos) const {
-    constexpr int wireCap = unroll * (SubGroupSize -1) * sizeof(uint64_t);
+    constexpr int nReg128B = 128 / SubGroupSize / 4;
+    constexpr int nDataChannel = SubGroupSize - nReg128B;
+
+    constexpr int wireCap = unroll * nDataChannel * sizeof(message_t);
     auto cableCap = wireCap * pos.get_sub_group().get_group_range()[0];
     auto loopSize = pos.get_group_range() * cableCap;
 
@@ -269,19 +394,19 @@ private:
   //
   // We only do 8-byte aligned and 8-byte dividable case for now.
   //
-    if ((uintptr_t)input % sizeof(uint64_t) != 0)
+    if ((uintptr_t)input % sizeof(message_t) != 0)
       throw std::logic_error("We only support aligned pointer for now");
 
     auto nChunks = NPeers + 1;
-    auto octSize = divUp(size, sizeof(uint64_t));
+    auto octSize = divUp(size, sizeof(message_t));
     auto chunkSize = divUp(octSize, nChunks);
 
-    if (alignUpSize != size || chunkSize * sizeof(uint64_t) * nChunks > size)
+    if (alignUpSize != size || chunkSize * sizeof(message_t) * nChunks > size)
       throw std::logic_error("We don't support non-even divide yet");
 
     // TODO: Production logic needs every rank chunk
 
-    return chunkSize * sizeof(uint64_t);
+    return chunkSize * sizeof(message_t);
   }
 
   T* scatterSink[NPeers];
