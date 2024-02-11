@@ -2,7 +2,7 @@ CC=clang
 CXX=clang++
 
 OPT=-O3 -fno-strict-aliasing
-# OPT=-g -fno-strict-aliasing -D_GLIBCXX_USE_CXX11_ABI=0
+# OPT=-g -fno-strict-aliasing
 
 SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc"
 
@@ -10,14 +10,14 @@ SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-de
 # INCLUDES=-I$(CCL_ROOT)/include
 # LIBRARIES=-L$(CCL_ROOT)/lib -lmpi -lze_loader
 
-INCLUDES=
+INCLUDES=-Itvisa/include
 LIBRARIES=-lmpi -lze_loader
 
-CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES)
+CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall -Wno-vla-cxx-extension $(INCLUDES) $(LIBRARIES)
 
-main : main.cpp ipc_exchange.cpp sycl_misc.cpp
+main : main.cpp ipc_exchange.cpp sycl_misc.cpp transmit.cpp
 
 all : main
 
 clean:
-	rm -f fill_remote main
+	rm -f main

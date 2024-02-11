@@ -1,8 +1,14 @@
 #include <mpi.h>
 #include <sycl/sycl.hpp>
+#include <level_zero/ze_api.h>
+
+#include "ipc_exchange.h"
 
 #include "cxxopts.hpp"
 #include "utils.hpp"
+#include "ze_exception.hpp"
+#include "sycl_misc.hpp"
+#include "transmit.hpp"
 
 size_t parse_nelems(const std::string& nelems_string) {
   size_t base = 1;
@@ -45,7 +51,7 @@ int main(int argc, char* argv[]) {
     std::cout<<"MPI init error"<<std::endl;
     return -1;
   }
-  __scope_guard MPI_Finalize([] {MPI_Finalize();});
+  __scope_guard MPI_Exit([] {MPI_Finalize();});
   zeCheck(zeInit(0));
 
   int rank, world;
@@ -58,15 +64,15 @@ int main(int argc, char* argv[]) {
 
   auto queue = currentQueue(rank / 2, rank & 1);
 
-  void* input = sycl::malloc_device(alloc_size, queue);
+  auto* input = (test_type *)sycl::malloc_device(alloc_size, queue);
   //
   // We need double buffer for both scatter and gather
   // We only need single IPC exchange
   //
-  test_type* host_init = sycl::malloc_host(alloc_size);
+  auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
 
-  void* ipcbuf0 = sycl::malloc_device(interm_size * 2, queue);
-  void* ipcbuf1 = (void *)((uintptr_t)ipc_buf0 + interm_size);
+  auto* ipcbuf0 = (test_type *)sycl::malloc_device(interm_size * 2, queue);
+  auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
 
   __scope_guard free_pointers([&]{
       free(host_init, queue);
@@ -74,19 +80,22 @@ int main(int argc, char* argv[]) {
       free(ipcbuf1, queue);
   });
 
+  queue.memset(host_init, 0, alloc_size);
+  queue.memcpy(input, host_init, alloc_size);
+
   void *peer_bases[world];
   size_t offsets[world];
   auto ipc_handle = open_peer_ipc_mems(ipcbuf0, rank, world, peer_bases, offsets);
 
-  void *peerbuf0[world];
-  void *peerbuf1[world];
+  test_type *peerbuf0[world];
+  test_type *peerbuf1[world];
   std::transform(peer_bases, peer_bases+world, offsets, peerbuf0,
   [](void* p, size_t off) {
-      return (void *)((uintptr_t)p + off);
+      return (test_type *)((uintptr_t)p + off);
   });
   std::transform(peerbuf0, peerbuf0 + world, peerbuf1,
   [&](void *p){
-      return (void *)((uintptr_t)p + interm_size);
+      return (test_type *)((uintptr_t)p + interm_size);
   });
 
   auto l0_ctx = sycl::get_native<
@@ -96,12 +105,13 @@ int main(int argc, char* argv[]) {
       for (int i = 0;i < world; ++ i) {
         if (i != rank) zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
       }
+      (void)ipc_handle; // Put IPC handle in the future
   });
 
   auto e = testSimpleTransmit<test_type>(
       {sycl::range<1>(1), sycl::range<1>(16)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      alloc_size, rank, world, queue
+      alloc_size, rank, world, 0xf, queue
   );
   extract_profiling<test_type>(e);
 }
