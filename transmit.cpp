@@ -10,22 +10,42 @@ template <typename T> sycl::event testSimpleTransmit(
     T* const peerbuf0[], T* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, sycl::queue queue) {
   return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
       sycl::stream cout(16 * 1024, 1024 * 1024, cgh);
+#endif
       switch(world) {
       case 2:
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 2 -1, 16>(input, size, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1, cout)
+          AllReduce<T, 2 -1, 16>(
+            input, size, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+            )
         );
       case 4:
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 4 -1, 16>(input, size, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1, cout)
+          AllReduce<T, 4 -1, 16>(
+            input, size, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_steam__)
+            , cout
+#endif
+            )
         );
       case 8:
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 8 -1, 16>(input, size, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1, cout)
+          AllReduce<T, 8 -1, 16>(
+            input, size, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+            )
         );
       default:
         throw std::logic_error("Unsupported communication pattern!");

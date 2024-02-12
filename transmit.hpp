@@ -352,9 +352,16 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   AllReduce(
       T* input, size_t size, int rank, uint32_t step,
       T* scatterBuf, T* gatherBuf,
-      T* const peerBuf0[], T* const peerBuf1[], sycl::stream cout
+      T* const peerBuf0[], T* const peerBuf1[]
+#if defined(__enable_sycl_stream__)
+      , sycl::stream cout
+#endif
   )
-  : ioBuffer(input), rank(rank), step(step), cout(cout) {
+  : ioBuffer(input), rank(rank), step(step)
+#if defined(__enable_sycl_stream__)
+    , cout(cout)
+#endif
+  {
     workSize = calcWorkSize(input, size);
     transmitSize = divUp(workSize, 120)*128;
 
@@ -445,7 +452,9 @@ private:
   size_t workSize;
   size_t transmitSize;
 
+#if defined(__enable_sycl_stream__)
   sycl::stream cout;
+#endif
 };
 
 template <typename T>
