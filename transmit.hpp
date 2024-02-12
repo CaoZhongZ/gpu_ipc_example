@@ -23,8 +23,8 @@ class SimpleTransmit {
   constexpr static int lastDataChannel = SubGroupSize -nChan8B;
   constexpr static int firstFlagChannel = SubGroupSize/2 -1;
   constexpr static int lastFlagChannel = SubGroupSize -1;
-  constexpr static int wireSrcStep = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
-  constexpr static int wireMsgStep = SubGroupSize*sizeof(message_t)/sizeof(T);
+  constexpr static size_t wireSrcStep = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
+  constexpr static size_t wireMsgStep = SubGroupSize*sizeof(message_t)/sizeof(T);
 public:
   SimpleTransmit(
       sycl::nd_item<1> pos,
@@ -222,9 +222,9 @@ public:
   template <int unroll> inline void scatter(size_t offset, size_t nelems) {
     auto offsetInType = offset / sizeof(T);
 
-    constexpr int eltPerPack = unroll * wireSrcStep;
+    constexpr auto eltPerPack = unroll * wireSrcStep;
 
-    int nElt = nelems < eltPerPack? nelems : eltPerPack;
+    auto nElt = nelems < eltPerPack? nelems : eltPerPack;
 
     //
     // register consumption:
