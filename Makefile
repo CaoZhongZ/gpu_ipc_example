@@ -1,7 +1,7 @@
 CC=clang
 CXX=clang++
 
-OPT=-O3 -fno-strict-aliasing
+OPT=-O3 -fno-strict-aliasing -g
 # OPT=-g -fno-strict-aliasing
 
 SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc"

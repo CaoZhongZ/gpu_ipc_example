@@ -230,7 +230,11 @@ public:
     // register consumption:
     // 2 x unroll x NPeers;
     //
-    static_assert(unroll * NPeers * 2 < 64, "Too much register consumed");
+    // SWSB consumption:
+    // unroll * NPeers;
+    //
+    static_assert(unroll * NPeers * 2 < 64, "Too many registers consumed");
+    static_assert(NPeers * 2 < 16, "Too many swsb consumed");
     message_t messages[NPeers][unroll];
 
 #   pragma unroll
@@ -418,7 +422,10 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
       sycl::nd_item<1> pos
   ) const {
-    scatterTest<4>(pos);
+    if constexpr (NPeers < 4)
+      scatterTest<4>(pos);
+    else
+      scatterTest<2>(pos);
   }
 
 private:
