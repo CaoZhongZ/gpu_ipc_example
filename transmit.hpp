@@ -36,7 +36,8 @@ public:
       T* ioBuffer,
       T* const localScatterSink[],
       T* const localGatherSink[]
-  ) : workSize(workSize), scatterStep(step), gatherStep(step), rank(rank), pos(pos) {
+  ) : ioBuffer(ioBuffer), workSize(workSize), scatterStep(step),
+  gatherStep(step), rank(rank), pos(pos) {
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       this->scatterSink[i] = scatterSink[i];
