@@ -35,6 +35,11 @@ void extract_profiling(sycl::event e) {
   e.wait();
 };
 
+void fill_pattern(uint32_t *input, size_t n) {
+  for (int i = 0; i < n; ++ i)
+    input[i] = i % 32;
+}
+
 int main(int argc, char* argv[]) {
   cxxopts::Options opts(
       "GPU IPC access",
@@ -89,7 +94,7 @@ int main(int argc, char* argv[]) {
       free(ipcbuf0, queue);
   });
 
-  queue.memset(host_init, 0, alloc_size);
+  fill_pattern((uint32_t *)host_init, alloc_size/sizeof(uint32_t));
   queue.memcpy(input, host_init, alloc_size);
 
   void *peer_bases[world];
@@ -132,7 +137,7 @@ int main(int argc, char* argv[]) {
   auto e = testSimpleTransmit<test_type, SG_SZ>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, 0xf, queue
+      nelems, rank, world, 0xe00f100f, queue
   );
 
   MPI_Barrier(MPI_COMM_WORLD);
