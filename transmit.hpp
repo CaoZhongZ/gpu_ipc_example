@@ -246,9 +246,6 @@ public:
     auto offsetInType = offset / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireSrcStep;
-
-    bool boundCheck = nelems < eltPerPack;
-
     //
     // register consumption:
     // 2 x unroll x NPeers;
@@ -258,27 +255,47 @@ public:
     //
     static_assert(unroll * NPeers * 2 < 64, "Too many registers consumed");
     static_assert(NPeers * 2 < 16, "Too many swsb consumed");
-    message_t messages[NPeers][unroll];
 
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
-      auto next = (rank + i + 1) % (NPeers + 1);
-      auto peerOffset = next * workSize / sizeof(T);
-      auto* ptr = ioBuffer + peerOffset + offsetInType;
+    if (nelems < eltPerPack) {
+      // Slow path. Given we can't lookahead too much, we interleave message
+      // load and send
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i) {
+        message_t messages[unroll];
 
-      if (boundCheck)
-        loadInput(messages[i], ptr, nelems);
-      else
+        auto next = (rank + i + 1) % (NPeers + 1);
+        auto peerOffset = next * workSize / sizeof(T);
+        auto* ptr = ioBuffer + peerOffset + offsetInType;
+
+        loadInput(messages, ptr, nelems);
+
+        shuffleData(messages);
+        insertFlags(messages, scatterStep);
+
+        auto* dst = scatterSink[i] + offsetInType;
+        sendMessages(dst, messages);
+      }
+    } else {
+      // Fast path. Batching load and send
+      message_t messages[NPeers][unroll];
+
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i) {
+        auto next = (rank + i + 1) % (NPeers + 1);
+        auto peerOffset = next * workSize / sizeof(T);
+        auto* ptr = ioBuffer + peerOffset + offsetInType;
+
         loadInput(messages[i], ptr);
-    }
+      }
 
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
-      shuffleData(messages[i]);
-      insertFlags(messages[i], scatterStep);
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i) {
+        shuffleData(messages[i]);
+        insertFlags(messages[i], scatterStep);
 
-      auto* dst = scatterSink[i] + offsetInType;
-      sendMessages(dst, messages[i]);
+        auto* dst = scatterSink[i] + offsetInType;
+        sendMessages(dst, messages[i]);
+      }
     }
   }
 
