@@ -403,9 +403,9 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
     for (int i = 0; i < NPeers; ++ i) {
       int next = (rank + i + 1) % (NPeers + 1);
 
-      scatterSink[i] = (T *)((uintptr_t)peerBuf0[i]
+      scatterSink[i] = (T *)((uintptr_t)peerBuf0[next]
           + transmitSize * slotShift(rank, next));
-      gatherSink[i] = (T *)((uintptr_t)peerBuf1[i]
+      gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
           + transmitSize * slotShift(rank, next));
 
       localScatterSink[i] = scatterBuf + slotShift(next, rank) * transmitSize;
@@ -446,12 +446,15 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
 
     // XXX: more cut according to job divide?
     for (size_t gOff = 0; gOff /* * cableCap */ < workSize; gOff += loopSize) {
-      auto gPos = gOff + groupId;
-      auto cableOff = gPos * cableCap;
+      auto cableOff = groupId * cableCap + gOff;
       auto wireOff = cableOff + subGroupId * wireCap;
 #if defined(__enable_sycl_stream__)
       if (local_id == 0 && groupId == 0)
-        cout<<"["<<groupId<<", "<<subGroupId<<"] wireOff: "<<wireOff<<"; ";
+        cout<<"["<<groupId<<", "<<subGroupId
+          <<"] wireCap:"<<wireCap
+          <<", cableCap:"<<cableCap
+          <<", loopSize:"<<loopSize
+          <<", wireOff:"<<wireOff<<"; ";
 #endif
       cable.template scatter<unroll>(wireOff, workSize);
     }
