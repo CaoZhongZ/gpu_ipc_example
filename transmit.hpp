@@ -48,7 +48,7 @@ public:
   }
   //
   // Process of pack messages
-  // 1. multiple load inputs (32 round maximum)
+  // 1. multiple load inputs (16 round maximum)
   // 2. Insert flags at the 16th lane
   // 3. Shuffle flag into the middle of second register
   //
@@ -67,8 +67,30 @@ public:
           lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
               v[i], src + off
           );
+#else
+          (void)off;
 #endif
     }}}
+  }
+
+  template <int unroll> inline void loadInput(
+      message_t (&v)[unroll], T* src
+  ) {
+    auto lid = pos.get_sub_group().get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+
+    if (lid < lastDataChannel) {
+#     pragma unroll
+      for (int i = 0; i < unroll; ++ i) {
+        auto off = i * wireSrcStep + local_off;
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+        lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+            v[i], src + off
+        );
+#else
+        (void)off;
+#endif
+    }}
   }
 
   template <int unroll>
@@ -225,7 +247,7 @@ public:
 
     constexpr auto eltPerPack = unroll * wireSrcStep;
 
-    auto nElt = nelems < eltPerPack? nelems : eltPerPack;
+    bool boundCheck = nelems < eltPerPack;
 
     //
     // register consumption:
@@ -244,7 +266,10 @@ public:
       auto peerOffset = next * workSize / sizeof(T);
       auto* ptr = ioBuffer + peerOffset + offsetInType;
 
-      loadInput(messages[i], ptr, nElt);
+      if (boundCheck)
+        loadInput(messages[i], ptr, nelems);
+      else
+        loadInput(messages[i], ptr);
     }
 
 #   pragma unroll
