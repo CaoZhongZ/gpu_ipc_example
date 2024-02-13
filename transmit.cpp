@@ -7,17 +7,17 @@ void verifyTransmit(
   constexpr auto nElemPerInt = sizeof(uint32_t) / sizeof(T);
   switch(world) {
   case 2:
-    AllReduce<T, 2 -1, SubGroupSize>::scatterVerify(
+    AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
         input, host, step, nelems/nElemPerInt
     );
     break;
   case 4:
-    AllReduce<T, 4 -1, SubGroupSize>::scatterVerify(
+    AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
         input, host, step, nelems/nElemPerInt
     );
     break;
   case 8:
-    AllReduce<T, 8 -1, SubGroupSize>::scatterVerify(
+    AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
         input, host, step, nelems/nElemPerInt
     );
     break;
@@ -41,7 +41,7 @@ template <typename T, int SubGroupSize> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 2 -1, SubGroupSize>(
+          AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -57,7 +57,7 @@ template <typename T, int SubGroupSize> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 4 -1, SubGroupSize>(
+          AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -73,7 +73,7 @@ template <typename T, int SubGroupSize> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 8 -1, SubGroupSize>(
+          AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)

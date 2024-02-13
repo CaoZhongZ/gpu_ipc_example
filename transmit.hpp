@@ -242,8 +242,13 @@ public:
   }
 
   // Scatter local message to peers
-  template <int unroll> inline void scatter(size_t offset, size_t nelems) {
-    auto offsetInType = offset / sizeof(T);
+  template <int unroll>
+  inline void scatter(
+      size_t inputOffset, size_t sinkOffset, size_t workSize
+  ) {
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto nelems = workSize / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireSrcStep;
     //
@@ -265,14 +270,14 @@ public:
 
         auto next = (rank + i + 1) % (NPeers + 1);
         auto peerOffset = next * workSize / sizeof(T);
-        auto* ptr = ioBuffer + peerOffset + offsetInType;
+        auto* ptr = ioBuffer + peerOffset + inputOffInType;
 
         loadInput(messages, ptr, nelems);
 
         shuffleData(messages);
         insertFlags(messages, scatterStep);
 
-        auto* dst = scatterSink[i] + offsetInType;
+        auto* dst = scatterSink[i] + sinkOffInType;
         sendMessages(dst, messages);
       }
     } else {
@@ -283,7 +288,7 @@ public:
       for (int i = 0; i < NPeers; ++ i) {
         auto next = (rank + i + 1) % (NPeers + 1);
         auto peerOffset = next * workSize / sizeof(T);
-        auto* ptr = ioBuffer + peerOffset + offsetInType;
+        auto* ptr = ioBuffer + peerOffset + inputOffInType;
 
         loadInput(messages[i], ptr);
       }
@@ -293,7 +298,7 @@ public:
         shuffleData(messages[i]);
         insertFlags(messages[i], scatterStep);
 
-        auto* dst = scatterSink[i] + offsetInType;
+        auto* dst = scatterSink[i] + sinkOffInType;
         sendMessages(dst, messages[i]);
       }
     }
@@ -389,12 +394,19 @@ private:
   sycl::nd_item<1> pos;
 };
 
-template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
+template <typename T,
+         int NPeers,
+         template <typename, int, int> class Transmit,
+         int SubGroupSize = 16>
+struct AllReduce {
   constexpr static int nReg128B = 128 / SubGroupSize / 4;
   using message_t = sycl::vec<uint32_t, nReg128B>;
 
   constexpr static int nChan8B = 8 / sizeof(message_t);
   constexpr static int nDataChannel = SubGroupSize - nChan8B;
+  constexpr static int unroll = NPeers < 4 ? 4 : 2;
+  constexpr static int wireCapacity = unroll * nDataChannel * sizeof(message_t);
+  constexpr static int wireTransSize = unroll * SubGroupSize * sizeof(message_t);
 
   AllReduce(
       T* input, size_t nelems, int rank, uint32_t step,
@@ -406,7 +418,7 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   )
   : ioBuffer(input), rank(rank), step(step),
   workSize(calcWorkSize(input, nelems * sizeof(T))),
-  transmitSize(divUp(workSize, 120) * 128)
+  transmitSize(divUp(workSize, wireCapacity) * wireTransSize)
 #if defined(__enable_sycl_stream__)
     , cout(cout)
 #endif
@@ -435,18 +447,23 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   ) {
     constexpr auto n120B = 120 / 4;
     for (int i = 0, j = 0; i < nelems * NPeers; ++i, ++j) {
-      T temp[32];
-      T scrat[32];
+      uint32_t temp[32];
+      uint32_t scrat[32];
 
       temp[i % n120B] = origin[i];
       scrat[j % 32] = host[j];
 
       if (i % n120B == n120B -1) {
         // swap data to 30
-        temp[30] = temp[7]; temp[7] = flag; temp[31] = flag;
+        temp[30] = temp[15]; temp[15] = flag; temp[31] = flag;
         scrat[30] = host[++j]; scrat[31] = host[++j];
-      }
-    }
+
+        for (auto k = 0; k < 32; ++ k) {
+          if (temp[k] != scrat[k]) {
+            std::cout<<"Verify failed @"<<i<<", "<<k
+              <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
+            break;
+    }}}}
   }
   //
   // I found this analogy fascinating:
@@ -456,13 +473,14 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   //
   // Total cables will deliver the full capacity of single loop.
   //
-  template <int unroll>
   void scatterTest(sycl::nd_item<1> pos) const {
-    constexpr int wireCap = unroll * nDataChannel * sizeof(message_t);
-    auto cableCap = wireCap * pos.get_sub_group().get_group_range()[0];
-    auto loopSize = pos.get_group_range()[0] * cableCap;
+    auto cableCapacity = wireCapacity * pos.get_sub_group().get_group_range()[0];
+    auto cableTransSize = wireTransSize * pos.get_sub_group().get_group_range()[0];
 
-    SimpleTransmit<T, NPeers, SubGroupSize> cable (
+    auto loopSize = pos.get_group_range()[0] * cableCapacity;
+    auto transStride = pos.get_group_range()[0] * cableTransSize;
+
+    Transmit<T, NPeers, SubGroupSize> cable (
         pos, workSize, step, rank, scatterSink, gatherSink,
         ioBuffer, localScatterSink, localGatherSink
     );
@@ -473,6 +491,10 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
     auto local_id = pos.get_sub_group().get_local_id()[0];
     if (local_id == 0 && groupId == 0)
       cout<<"["<<groupId<<", "<<subGroupId<<"]scatterTest: ioBuffer:"<<ioBuffer
+        <<"] wireCapacity:"<<wireCapacity
+        <<", cableCapacity:"<<cableCapacity
+        <<"] wireTransSize:"<<wireTransSize
+        <<", cableTransSize:"<<cableTransSize
         <<", scatterSink:"<<scatterSink[0]
         <<", gatherSink:"<<gatherSink[0]
         <<", localScatterSink:"<<localScatterSink[0]
@@ -480,18 +502,19 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
 #endif
 
     // XXX: more cut according to job divide?
-    for (size_t gOff = 0; gOff /* * cableCap */ < workSize; gOff += loopSize) {
-      auto cableOff = groupId * cableCap + gOff;
-      auto wireOff = cableOff + subGroupId * wireCap;
+    for (size_t gOff = 0, tOff = 0;
+        gOff /* * cableCapacity */ < workSize;
+        gOff += loopSize, tOff += transStride) {
+      auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
+      auto transOff = groupId * cableTransSize + subGroupId * wireTransSize + tOff;
 #if defined(__enable_sycl_stream__)
       if (local_id == 0 && groupId == 0)
         cout<<"["<<groupId<<", "<<subGroupId
-          <<"] wireCap:"<<wireCap
-          <<", cableCap:"<<cableCap
           <<", loopSize:"<<loopSize
-          <<", wireOff:"<<wireOff<<"; ";
+          <<", wireOff:"<<wireOff<<"; "
+          <<", transOff:"<<transOff<<"; ";
 #endif
-      cable.template scatter<unroll>(wireOff, workSize);
+      cable.template scatter<unroll>(wireOff, transOff, workSize);
     }
 #if defined(__enable_sycl_stream__)
       if (local_id == 0 && groupId == 0)
@@ -502,10 +525,7 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
       sycl::nd_item<1> pos
   ) const {
-    if constexpr (NPeers < 4)
-      scatterTest<4>(pos);
-    else
-      scatterTest<2>(pos);
+    scatterTest(pos);
   }
 
 private:
