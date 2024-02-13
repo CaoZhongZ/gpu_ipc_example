@@ -509,7 +509,7 @@ private:
 #endif
 };
 
-template <typename T>
+template <typename T, int SubGroupSize = 16>
 sycl::event testSimpleTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,

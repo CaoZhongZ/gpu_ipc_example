@@ -45,10 +45,17 @@ int main(int argc, char* argv[]) {
   opts.add_options()
     ("n,nelems", "Number of elements, in half",
      cxxopts::value<std::string>()->default_value("8MB"))
+    ("g,groups", "Number of groups",
+     cxxopts::value<size_t>()->default_value("1"))
+    ("w,subgroups", "Number of sub-groups",
+     cxxopts::value<size_t>()->default_value("1"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems = parse_nelems(parsed_opts["nelems"].as<std::string>());
+  auto groups = parsed_opts["groups"].as<size_t>();
+  auto subgroups = parsed_opts["subgroups"].as<size_t>();
+
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
     std::cout<<"MPI init error"<<std::endl;
@@ -117,8 +124,13 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  auto e = testSimpleTransmit<test_type>(
-      {sycl::range<1>(16), sycl::range<1>(16)},
+  constexpr int SG_SZ = 16;
+
+  auto local_size = subgroups * SG_SZ;
+  auto global_size = groups * local_size;
+
+  auto e = testSimpleTransmit<test_type, SG_SZ>(
+      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, 0xf, queue
   );
