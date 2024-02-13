@@ -431,17 +431,34 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
         pos, workSize, step, rank, scatterSink, gatherSink,
         ioBuffer, localScatterSink, localGatherSink
     );
-
     auto groupId = pos.get_group().get_group_id()[0];
     auto subGroupId = pos.get_sub_group().get_group_id()[0];
+
+#if defined(__enable_sycl_stream__)
+    auto local_id = pos.get_sub_group().get_local_id()[0];
+    if (local_id == 0 && groupId == 0)
+      cout<<"["<<groupId<<", "<<subGroupId<<"]scatterTest: ioBuffer:"<<ioBuffer
+        <<", scatterSink:"<<scatterSink[0]
+        <<", gatherSink:"<<gatherSink[0]
+        <<", localScatterSink:"<<localScatterSink[0]
+        <<", localGatherSink:"<<localGatherSink[0]<<sycl::endl;
+#endif
 
     // XXX: more cut according to job divide?
     for (size_t gOff = 0; gOff /* * cableCap */ < workSize; gOff += loopSize) {
       auto gPos = gOff + groupId;
       auto cableOff = gPos * cableCap;
       auto wireOff = cableOff + subGroupId * wireCap;
+#if defined(__enable_sycl_stream__)
+      if (local_id == 0 && groupId == 0)
+        cout<<"["<<groupId<<", "<<subGroupId<<"] wireOff: "<<wireOff<<"; ";
+#endif
       cable.template scatter<unroll>(wireOff, workSize);
     }
+#if defined(__enable_sycl_stream__)
+      if (local_id == 0 && groupId == 0)
+        cout<<sycl::endl;
+#endif
   }
 
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (

@@ -13,7 +13,7 @@ template <typename T> sycl::event testSimpleTransmit(
   case 2:
     return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
-      sycl::stream cout(16 * 1024, 1024 * 1024, cgh);
+      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
 #endif
         cgh.parallel_for(
           launchParam,
@@ -29,7 +29,7 @@ template <typename T> sycl::event testSimpleTransmit(
   case 4:
     return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
-      sycl::stream cout(16 * 1024, 1024 * 1024, cgh);
+      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
 #endif
         cgh.parallel_for(
           launchParam,
@@ -45,7 +45,7 @@ template <typename T> sycl::event testSimpleTransmit(
   case 8:
     return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
-      sycl::stream cout(16 * 1024, 1024 * 1024, cgh);
+      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
 #endif
         cgh.parallel_for(
           launchParam,
