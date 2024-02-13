@@ -147,10 +147,16 @@ static size_t align_up(size_t size, size_t align_sz) {
     return ((size + align_sz -1) / align_sz) * align_sz;
 }
 
-void *mmap_host(size_t map_size, int dma_buf_fd) {
+void *mmap_host(size_t map_size, ze_ipc_mem_handle_t ipc_handle) {
   auto page_size = getpagesize();
   map_size = align_up(map_size, page_size);
-  return mmap(nullptr, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, dma_buf_fd, 0);
+
+  union {
+    ze_ipc_mem_handle_t ipc_handle;
+    int fd = -1;
+  } uhandle {ipc_handle};
+
+  return mmap(nullptr, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, uhandle.fd, 0);
 }
 
 void fill_random(void *p, int rank, size_t size) {

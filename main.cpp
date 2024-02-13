@@ -1,4 +1,5 @@
 #include <mpi.h>
+#include <sys/mman.h>
 #include <sycl/sycl.hpp>
 #include <level_zero/ze_api.h>
 
@@ -102,12 +103,17 @@ int main(int argc, char* argv[]) {
   auto l0_ctx = sycl::get_native<
     sycl::backend::ext_oneapi_level_zero>(queue.get_context());
 
+  auto host_view = mmap_host(interm_size * 2, ipc_handle);
+
   __scope_guard release_handles([&] {
+      munmap(host_view, interm_size * 2);
+
       for (int i = 0;i < world; ++ i) {
         if (i != rank) zeCheck(zeMemCloseIpcHandle(l0_ctx, peer_bases[i]));
       }
       (void)ipc_handle; // Put IPC handle in the future
   });
+
 
   MPI_Barrier(MPI_COMM_WORLD);
 

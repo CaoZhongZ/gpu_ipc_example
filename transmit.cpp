@@ -68,3 +68,9 @@ template sycl::event testSimpleTransmit<sycl::half>(
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, sycl::queue queue);
+
+template sycl::event testSimpleTransmit<float>(
+    sycl::nd_range<1> launchParam,
+    float* input, float* ipcbuf0, float* ipcbuf1,
+    float* const peerbuf0[], float* const peerbuf1[], size_t size,
+    int rank, int world, uint32_t step, sycl::queue queue);
