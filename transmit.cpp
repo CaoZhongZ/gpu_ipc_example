@@ -1,5 +1,29 @@
 #include "transmit.hpp"
 
+template<typename T, int SubGroupSize>
+void verifyTransmit(
+    uint32_t* input, uint32_t* host, uint32_t step, size_t nelems, int world
+) {
+  constexpr auto nElemPerInt = sizeof(uint32_t) / sizeof(T);
+  switch(world) {
+  case 2:
+    AllReduce<T, 2 -1, SubGroupSize>::scatterVerify(
+        input, host, step, nelems/nElemPerInt
+    );
+    break;
+  case 4:
+    AllReduce<T, 4 -1, SubGroupSize>::scatterVerify(
+        input, host, step, nelems/nElemPerInt
+    );
+    break;
+  case 8:
+    AllReduce<T, 8 -1, SubGroupSize>::scatterVerify(
+        input, host, step, nelems/nElemPerInt
+    );
+    break;
+  }
+}
+
 //
 // We will remove sycl::event return in real API call.
 // It's for test only.
@@ -69,6 +93,10 @@ template sycl::event testSimpleTransmit<sycl::half, 16>(
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, sycl::queue queue);
 
+template
+void verifyTransmit<sycl::half, 16>(
+    uint32_t* input, uint32_t* host, uint32_t step, size_t nelems, int world
+);
 /* disabled temporarily for saving compile time
 template sycl::event testSimpleTransmit<float, 16>(
     sycl::nd_range<1> launchParam,

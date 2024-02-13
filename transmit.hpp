@@ -430,6 +430,24 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
     }
   }
 
+  static void scatterVerify(
+      uint32_t* origin, uint32_t* host, uint32_t flag, size_t nelems
+  ) {
+    constexpr auto n120B = 120 / 4;
+    for (int i = 0, j = 0; i < nelems * NPeers; ++i, ++j) {
+      T temp[32];
+      T scrat[32];
+
+      temp[i % n120B] = origin[i];
+      scrat[j % 32] = host[j];
+
+      if (i % n120B == n120B -1) {
+        // swap data to 30
+        temp[30] = temp[7]; temp[7] = flag; temp[31] = flag;
+        scrat[30] = host[++j]; scrat[31] = host[++j];
+      }
+    }
+  }
   //
   // I found this analogy fascinating:
   //
@@ -532,4 +550,9 @@ sycl::event testSimpleTransmit(
     T* input, T* ipcbuf0, T* ipcbuf1,
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, sycl::queue queue
+);
+
+template <typename T, int SubGroupSize = 16>
+void verifyTransmit(
+    uint32_t* input, uint32_t* host, uint32_t step, size_t nelems, int world
 );

@@ -85,12 +85,14 @@ int main(int argc, char* argv[]) {
   // We only need single IPC exchange
   //
   auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
+  auto* host_verify = (test_type *)sycl::malloc_host(interm_size, queue);
 
   auto* ipcbuf0 = (test_type *)sycl::malloc_device(interm_size * 2, queue);
   auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
 
   __scope_guard free_pointers([&]{
       free(host_init, queue);
+      free(host_verify, queue);
       free(ipcbuf0, queue);
   });
 
@@ -142,4 +144,12 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
   extract_profiling<test_type>(e);
+
+  auto workNelems = nelems / world;
+
+  queue.memcpy(host_verify, ipcbuf0, interm_size);
+  verifyTransmit<test_type, SG_SZ>(
+      (uint32_t *)input, (uint32_t *)host_verify,
+      0xe00f100f, workNelems, world
+  );
 }
