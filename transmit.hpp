@@ -262,7 +262,7 @@ public:
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto next = (rank + i) % (NPeers + 1);
+      auto next = (rank + i + 1) % (NPeers + 1);
       auto peerOffset = next * workSize / sizeof(T);
       auto* ptr = ioBuffer + peerOffset + offsetInType;
 
@@ -380,21 +380,20 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
   constexpr static int nDataChannel = SubGroupSize - nChan8B;
 
   AllReduce(
-      T* input, size_t size, int rank, uint32_t step,
+      T* input, size_t nelems, int rank, uint32_t step,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[]
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
   )
-  : ioBuffer(input), rank(rank), step(step)
+  : ioBuffer(input), rank(rank), step(step),
+  workSize(calcWorkSize(input, nelems * sizeof(T))),
+  transmitSize(divUp(workSize, 120) * 128)
 #if defined(__enable_sycl_stream__)
     , cout(cout)
 #endif
   {
-    workSize = calcWorkSize(input, size);
-    transmitSize = divUp(workSize, 120)*128;
-
     auto slotShift = [](int rank, int peer) {
       if (rank > peer) return rank -1;
       else return rank;
@@ -402,7 +401,7 @@ template <typename T, int NPeers, int SubGroupSize=16> struct AllReduce {
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      int next = (rank + i) % (NPeers + 1);
+      int next = (rank + i + 1) % (NPeers + 1);
 
       scatterSink[i] = (T *)((uintptr_t)peerBuf0[i]
           + transmitSize * slotShift(rank, next));
@@ -494,6 +493,6 @@ template <typename T>
 sycl::event testSimpleTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,
-    T* const peerbuf0[], T* const peerbuf1[], size_t size,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, sycl::queue queue
 );

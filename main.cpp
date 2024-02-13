@@ -30,7 +30,9 @@ size_t parse_nelems(const std::string& nelems_string) {
 }
 
 template <typename T>
-void extract_profiling(sycl::event e) {};
+void extract_profiling(sycl::event e) {
+  e.wait();
+};
 
 int main(int argc, char* argv[]) {
   cxxopts::Options opts(
@@ -41,7 +43,7 @@ int main(int argc, char* argv[]) {
   opts.allow_unrecognised_options();
   opts.add_options()
     ("n,nelems", "Number of elements, in half",
-     cxxopts::value<std::string>()->default_value("16MB"))
+     cxxopts::value<std::string>()->default_value("8MB"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -77,7 +79,6 @@ int main(int argc, char* argv[]) {
   __scope_guard free_pointers([&]{
       free(host_init, queue);
       free(ipcbuf0, queue);
-      free(ipcbuf1, queue);
   });
 
   queue.memset(host_init, 0, alloc_size);
@@ -108,10 +109,14 @@ int main(int argc, char* argv[]) {
       (void)ipc_handle; // Put IPC handle in the future
   });
 
+  MPI_Barrier(MPI_COMM_WORLD);
+
   auto e = testSimpleTransmit<test_type>(
-      {sycl::range<1>(1), sycl::range<1>(16)},
+      {sycl::range<1>(16), sycl::range<1>(16)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      alloc_size, rank, world, 0xf, queue
+      nelems, rank, world, 0xf, queue
   );
+
+  MPI_Barrier(MPI_COMM_WORLD);
   extract_profiling<test_type>(e);
 }
