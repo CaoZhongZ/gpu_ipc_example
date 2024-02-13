@@ -8,5 +8,5 @@ export ONEAPI_DEVICE_SELECTOR=level_zero:gpu
 gdbserver2="gdbserver :44555"
 
 mpirun -disable-auto-cleanup \
-  -np 1 $gdbserver1 ./copy_atomicctl $@ : \
-  -np 1 $gdbserver2 ./copy_atomicctl $@
+  -np 1 $gdbserver1 ./main $@ : \
+  -np 1 $gdbserver2 ./main $@
