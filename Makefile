@@ -3,6 +3,7 @@ CXX=clang++
 
 OPT=-O3 -fno-strict-aliasing
 # OPT=-g -fno-strict-aliasing
+# VERBOSE=-D__enable_sycl_stream__
 
 SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc"
 
@@ -13,7 +14,7 @@ SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-de
 INCLUDES=-Itvisa/include
 LIBRARIES=-lmpi -lze_loader
 
-CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall -Wno-vla-cxx-extension $(INCLUDES) $(LIBRARIES)
+CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) $(VERBOSE) -Wall -Wno-vla-cxx-extension $(INCLUDES) $(LIBRARIES)
 
 main : main.cpp ipc_exchange.cpp sycl_misc.cpp transmit.cpp
 
