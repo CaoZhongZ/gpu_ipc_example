@@ -448,7 +448,7 @@ struct AllReduce {
     else return rank;
   }
 
-  static void scatterVerify(
+  static int scatterVerify(
       uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
   ) {
     constexpr auto n120B = 120 / 4;
@@ -485,9 +485,11 @@ struct AllReduce {
               if (temp[k] != scrat[k] && temp[k] != 0) {
                 std::cout<<"Verify failed @"<<i<<", "<<k
                   <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
-                break;
+                return -1;
       }}}}}
     }
+
+    return 0;
   }
   //
   // I found this analogy fascinating:
@@ -598,6 +600,6 @@ sycl::event testSimpleTransmit(
 );
 
 template <typename T, int SubGroupSize = 16>
-void verifyTransmit(
+int verifyTransmit(
     uint32_t* host, uint32_t step, int rank, int world, size_t nWorkElems
 );

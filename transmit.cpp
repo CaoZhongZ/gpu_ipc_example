@@ -1,26 +1,28 @@
 #include "transmit.hpp"
 
 template<typename T, int SubGroupSize>
-void verifyTransmit(
+int verifyTransmit(
     uint32_t* host, uint32_t step, int rank, int world, size_t nWorkElems
 ) {
   constexpr auto nElemPerInt = sizeof(uint32_t) / sizeof(T);
   switch(world) {
   case 2:
-    AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
+    return AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
         host, rank, step, nWorkElems/nElemPerInt
     );
     break;
   case 4:
-    AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
+    return AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
         host, rank, step, nWorkElems/nElemPerInt
     );
     break;
   case 8:
-    AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
+    return AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
         host, rank, step, nWorkElems/nElemPerInt
     );
     break;
+  default:
+    throw std::logic_error("Not supported communication pattern");
   }
 }
 
@@ -94,7 +96,7 @@ template sycl::event testSimpleTransmit<sycl::half, 16>(
     int rank, int world, uint32_t step, sycl::queue queue);
 
 template
-void verifyTransmit<sycl::half, 16>(
+int verifyTransmit<sycl::half, 16>(
     uint32_t* host, uint32_t step, int rank, int world, size_t nWorkElems
 );
 /* disabled temporarily for saving compile time
