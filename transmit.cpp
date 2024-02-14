@@ -2,23 +2,24 @@
 
 template<typename T, int SubGroupSize>
 void verifyTransmit(
-    uint32_t* input, uint32_t* host, uint32_t step, size_t nelems, int world
+    uint32_t* input, uint32_t* host,
+    uint32_t step, int rank, int world, size_t nWorkElems
 ) {
   constexpr auto nElemPerInt = sizeof(uint32_t) / sizeof(T);
   switch(world) {
   case 2:
     AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
-        input, host, step, nelems/nElemPerInt
+        input, host, rank, step, nWorkElems/nElemPerInt
     );
     break;
   case 4:
     AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
-        input, host, step, nelems/nElemPerInt
+        input, host, rank, step, nWorkElems/nElemPerInt
     );
     break;
   case 8:
     AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::scatterVerify(
-        input, host, step, nelems/nElemPerInt
+        input, host, rank, step, nWorkElems/nElemPerInt
     );
     break;
   }
@@ -95,7 +96,7 @@ template sycl::event testSimpleTransmit<sycl::half, 16>(
 
 template
 void verifyTransmit<sycl::half, 16>(
-    uint32_t* input, uint32_t* host, uint32_t step, size_t nelems, int world
+    uint32_t* input, uint32_t* host, uint32_t step, size_t nWorkElems, int world
 );
 /* disabled temporarily for saving compile time
 template sycl::event testSimpleTransmit<float, 16>(

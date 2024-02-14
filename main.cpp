@@ -35,9 +35,9 @@ void extract_profiling(sycl::event e) {
   e.wait();
 };
 
-void fill_pattern(uint32_t *input, size_t n) {
+void fill_pattern(uint32_t *input, int rank, size_t n) {
   for (int i = 0; i < n; ++ i)
-    input[i] = i % 32;
+    input[i] = i % 32 | rank << 16;
 }
 
 int main(int argc, char* argv[]) {
@@ -96,7 +96,7 @@ int main(int argc, char* argv[]) {
       free(ipcbuf0, queue);
   });
 
-  fill_pattern((uint32_t *)host_init, alloc_size/sizeof(uint32_t));
+  fill_pattern((uint32_t *)host_init, rank, alloc_size/sizeof(uint32_t));
   queue.memcpy(input, host_init, alloc_size);
 
   void *peer_bases[world];
@@ -145,6 +145,7 @@ int main(int argc, char* argv[]) {
   MPI_Barrier(MPI_COMM_WORLD);
   extract_profiling<test_type>(e);
 
+  // XXX: over simplification
   auto workNelems = nelems / world;
 
   queue.memcpy(host_verify, ipcbuf0, interm_size).wait();

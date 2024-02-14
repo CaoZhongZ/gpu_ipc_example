@@ -443,27 +443,42 @@ struct AllReduce {
   }
 
   static void scatterVerify(
-      uint32_t* origin, uint32_t* host, uint32_t flag, size_t nelems
+      uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
   ) {
     constexpr auto n120B = 120 / 4;
-    for (int i = 0, j = 0; i < nelems * NPeers; ++i, ++j) {
-      uint32_t temp[32];
-      uint32_t scrat[32];
+    constexpr auto wireCapInInt = wireCapacity / sizeof(uint32_t);
+    constexpr auto wireTransInInt = wireTransSize / sizeof(uint32_t);
 
-      temp[i % n120B] = origin[i];
-      scrat[j % 32] = host[j];
+    for (int i = 0; i < NPeers; ++ i) {
+      int next = (rank + i + 1) % (NPeers + 1);
+      auto* peer_ptr = host + nWorkElemsInInt * next;
 
-      if (i % n120B == n120B -1) {
-        // swap data to 30
-        temp[30] = temp[15]; temp[15] = flag; temp[31] = flag;
-        scrat[30] = host[++j]; scrat[31] = host[++j];
+      // we are expecting pattern = (scale | next)
+      size_t nChunks = divUp(nWorkElemsInInt/wireCapacity);
+      for (int chunk = 0; chunk < nChunks; ++ chunk) {
+        uint32_t temp[32];
+        uint32_t scrat[32];
 
-        for (auto k = 0; k < 32; ++ k) {
-          if (temp[k] != scrat[k]) {
-            std::cout<<"Verify failed @"<<i<<", "<<k
-              <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
-            break;
-    }}}}
+        for (size_t b = 0, j = 0; b < wireCapInInt; ++ b, ++ j) {
+          if (b + chunk * wireCapInInt < nWorkElemsInInt)
+            temp[b % n120B] = b % 32 | next << 16;
+          else
+            temp[b % n120B] = 0;
+          scrat[j % 32] = peer_ptr[j + chunk * wireTransInInt];
+
+          // wireCapInInt will be divided by n120B.
+          if (b % n128B == n120B -1) {
+            temp[30] = temp[15]; temp[15] = flag; temp[31] = flag;
+            scrat[30] = host[++j + chunk * wireTransInInt];
+            scrat[31] = host[++j + chunk * wireTransInInt];
+
+            for (auto k = 0; k < 32; ++ k) {
+              if (temp[k] != scrat[k] && temp[k] != 0) {
+                std::cout<<"Verify failed @"<<i<<", "<<k
+                  <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
+                break;
+      }}}}}
+    }
   }
   //
   // I found this analogy fascinating:
@@ -574,5 +589,5 @@ sycl::event testSimpleTransmit(
 
 template <typename T, int SubGroupSize = 16>
 void verifyTransmit(
-    uint32_t* input, uint32_t* host, uint32_t step, size_t nelems, int world
+    uint32_t* input, uint32_t* host, uint32_t step, size_t nWorkElems, int world
 );
