@@ -36,8 +36,15 @@ public:
       T* ioBuffer,
       T* const localScatterSink[],
       T* const localGatherSink[]
+#if defined(__enable_sycl_stream__)
+      , sycl::stream cout
+#endif
   ) : ioBuffer(ioBuffer), workSize(workSize), scatterStep(step),
-  gatherStep(step), rank(rank), pos(pos) {
+  gatherStep(step), rank(rank), pos(pos)
+#if defined(__enable_sycl_stream__)
+  , cout(cout)
+#endif
+  {
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       this->scatterSink[i] = scatterSink[i];
@@ -392,6 +399,9 @@ private:
   int rank;
 
   sycl::nd_item<1> pos;
+#if defined(__enable_sycl_stream__)
+  sycl::stream cout
+#endif
 };
 
 template <typename T,
@@ -509,6 +519,9 @@ struct AllReduce {
     Transmit<T, NPeers, SubGroupSize> cable (
         pos, workSize, step, rank, scatterSink, gatherSink,
         ioBuffer, localScatterSink, localGatherSink
+#if defined(__enable_sycl_stream__)
+        , cout
+#endif
     );
     auto groupId = pos.get_group().get_group_id()[0];
     auto subGroupId = pos.get_sub_group().get_group_id()[0];
