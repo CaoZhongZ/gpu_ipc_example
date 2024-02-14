@@ -150,7 +150,6 @@ int main(int argc, char* argv[]) {
 
   queue.memcpy(host_verify, ipcbuf0, interm_size).wait();
   verifyTransmit<test_type, SG_SZ>(
-      (uint32_t *)host_init, (uint32_t *)host_verify,
-      0xe00f100f, workNelems, world
+      (uint32_t *)host_verify, 0xe00f100f, rank, world, workNelems
   );
 }
