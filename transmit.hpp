@@ -505,10 +505,11 @@ struct AllReduce {
 #if defined(__enable_sycl_stream__)
     auto local_id = pos.get_sub_group().get_local_id()[0];
     if (local_id == 0 && groupId == 0)
-      cout<<"["<<groupId<<", "<<subGroupId<<"]scatterTest: ioBuffer:"<<ioBuffer
-        <<"] wireCapacity:"<<wireCapacity
+      cout<<"["<<groupId<<", "<<subGroupId
+        <<"] scatterTest: ioBuffer:"<<ioBuffer
+        <<", wireCapacity:"<<wireCapacity
         <<", cableCapacity:"<<cableCapacity
-        <<"] wireTransSize:"<<wireTransSize
+        <<", wireTransSize:"<<wireTransSize
         <<", cableTransSize:"<<cableTransSize
         <<", scatterSink:"<<scatterSink[0]
         <<", gatherSink:"<<gatherSink[0]
