@@ -28,7 +28,7 @@ class SimpleTransmit {
 public:
   SimpleTransmit(
       sycl::nd_item<1> pos,
-      size_t workSize, // should be a array in production code
+      ssize_t workSize, // should be a array in production code
       uint32_t step,   // Serve as flag for checking
       int rank,
       T* const scatterSink[],
@@ -74,6 +74,10 @@ public:
           lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
               v[i], src + off
           );
+#if defined(__enable_sycl_stream__)
+          // cout<<"["<<rank<<","<<lid<<"]off: "<<off
+          //   <<", src "<<src<<":"<<v[i]<<sycl::endl;
+#endif
 #else
           (void)off;
 #endif
@@ -251,7 +255,7 @@ public:
   // Scatter local message to peers
   template <int unroll>
   inline void scatter(
-      size_t inputOffset, size_t sinkOffset, size_t workSize
+      size_t inputOffset, size_t sinkOffset, ssize_t workSize
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
     auto sinkOffInType = sinkOffset / sizeof(T);
@@ -267,7 +271,6 @@ public:
     //
     static_assert(unroll * NPeers * 2 < 64, "Too many registers consumed");
     static_assert(NPeers * 2 < 16, "Too many swsb consumed");
-
     if (nelems < eltPerPack) {
       // Slow path. Given we can't lookahead too much, we interleave message
       // load and send
@@ -278,7 +281,15 @@ public:
         auto next = (rank + i + 1) % (NPeers + 1);
         auto peerOffset = next * workSize / sizeof(T);
         auto* ptr = ioBuffer + peerOffset + inputOffInType;
+#if defined(__enable_sycl_stream__)
+        // auto sg = sycl::ext::oneapi::experimental::this_group<1>();
 
+        // if (sg.get_local_id() == 0)
+        //   cout<<"Input offset: "<<inputOffset
+        //     <<"workSize: "<<workSize
+        //     <<"peerOffset: "<<peerOffset
+        //     <<sycl::endl;
+#endif
         loadInput(messages, ptr, nelems);
 
         shuffleData(messages);
@@ -393,14 +404,14 @@ private:
   T* localScatterSink[NPeers];
   T* localGatherSink[NPeers];
 
-  size_t workSize;
+  ssize_t workSize;
   uint32_t scatterStep;
   uint32_t gatherStep;
   int rank;
 
   sycl::nd_item<1> pos;
 #if defined(__enable_sycl_stream__)
-  sycl::stream cout
+  sycl::stream cout;
 #endif
 };
 
@@ -471,6 +482,7 @@ struct AllReduce {
     for (int i = 0; i < NPeers; ++ i) {
       int next = (rank + i + 1) % (NPeers + 1);
       auto* peer_ptr = host + nTransmitElemsInInt * slot(next, rank);
+      size_t contentOff = rank * nWorkElemsInInt;
 
       // we are expecting pattern = (scale | next)
       size_t nChunks = divUp(nWorkElemsInInt, wireCapInInt);
@@ -480,9 +492,9 @@ struct AllReduce {
 
         for (size_t b = 0, j = 0; b < wireCapInInt; ++ b, ++ j) {
           if (b + chunk * wireCapInInt < nWorkElemsInInt)
-            temp[b % n120B] = (b + chunk * wireCapInInt) % 32 | next << 16;
+            temp[b % n120B] = (b + chunk * wireCapInInt + contentOff) % 32 | next << 16;
           else
-            temp[b % n120B] = 0;
+            temp[b % n120B] = 0xffffffff;
           scrat[j % 32] = peer_ptr[j + chunk * wireTransInInt];
 
           // wireCapInInt will be divided by n120B.
@@ -492,7 +504,7 @@ struct AllReduce {
             scrat[31] = peer_ptr[++j + chunk * wireTransInInt];
 
             for (auto k = 0; k < 32; ++ k) {
-              if (temp[k] != scrat[k] && temp[k] != 0) {
+              if (temp[k] != scrat[k] && temp[k] != 0xffffffff) {
                 std::cout<<"["<<rank<<"] Verify failed @"<<i<<", "<<k
                   <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
                 return -1;
@@ -528,17 +540,17 @@ struct AllReduce {
 
 #if defined(__enable_sycl_stream__)
     auto local_id = pos.get_sub_group().get_local_id()[0];
-    if (local_id == 0 && groupId == 0)
-      cout<<"["<<groupId<<", "<<subGroupId
-        <<"] scatterTest: ioBuffer:"<<ioBuffer
-        <<", wireCapacity:"<<wireCapacity
-        <<", cableCapacity:"<<cableCapacity
-        <<", wireTransSize:"<<wireTransSize
-        <<", cableTransSize:"<<cableTransSize
-        <<", scatterSink:"<<scatterSink[0]
-        <<", gatherSink:"<<gatherSink[0]
-        <<", localScatterSink:"<<localScatterSink[0]
-        <<", localGatherSink:"<<localGatherSink[0]<<sycl::endl;
+    // if (local_id == 0 && groupId == 0)
+    //   cout<<"["<<groupId<<", "<<subGroupId
+    //     <<"] scatterTest: ioBuffer:"<<ioBuffer
+    //     <<", wireCapacity:"<<wireCapacity
+    //     <<", cableCapacity:"<<cableCapacity
+    //     <<", wireTransSize:"<<wireTransSize
+    //     <<", cableTransSize:"<<cableTransSize
+    //     <<", scatterSink:"<<scatterSink[0]
+    //     <<", gatherSink:"<<gatherSink[0]
+    //     <<", localScatterSink:"<<localScatterSink[0]
+    //     <<", localGatherSink:"<<localGatherSink[0]<<sycl::endl;
 #endif
 
     // XXX: more cut according to job divide?
@@ -550,15 +562,17 @@ struct AllReduce {
 #if defined(__enable_sycl_stream__)
       if (local_id == 0 && groupId == 0)
         cout<<"["<<groupId<<", "<<subGroupId
-          <<", loopSize:"<<loopSize
+          <<"] loopSize:"<<loopSize
           <<", wireOff:"<<wireOff<<"; "
           <<", transOff:"<<transOff<<"; ";
 #endif
-      cable.template scatter<unroll>(wireOff, transOff, workSize);
+      ssize_t workLeft = workSize - wireOff;
+      if (workLeft > 0)
+        cable.template scatter<unroll>(wireOff, transOff, workSize);
     }
 #if defined(__enable_sycl_stream__)
-      if (local_id == 0 && groupId == 0)
-        cout<<sycl::endl;
+    if (local_id == 0 && groupId == 0)
+      cout<<sycl::endl;
 #endif
   }
 
@@ -596,7 +610,7 @@ private:
 
   int rank;
   uint32_t step;
-  size_t workSize;
+  ssize_t workSize;
   size_t transmitSize;
 
 #if defined(__enable_sycl_stream__)
