@@ -493,7 +493,7 @@ struct AllReduce {
 
             for (auto k = 0; k < 32; ++ k) {
               if (temp[k] != scrat[k] && temp[k] != 0) {
-                std::cout<<"Verify failed @"<<i<<", "<<k
+                std::cout<<"["<<rank<<"] Verify failed @"<<i<<", "<<k
                   <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
                 return -1;
       }}}}}
