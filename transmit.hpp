@@ -588,6 +588,13 @@ struct AllReduce {
         gOff < workSize; gOff += loopSize, tOff += loopTSize) {
       auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
       auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
+#if defined(__enable_sycl_stream__)
+      if (local_id == 0 && groupId == 0)
+        cout<<"["<<groupId<<", "<<subGroupId
+          <<"] loopSize:"<<loopSize
+          <<", wireOff:"<<wireOff<<"; "
+          <<", transOff:"<<transOff<<"; ";
+#endif
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
         cable.template scatter<unroll>(wireOff, transOff, workSize);

@@ -100,6 +100,7 @@ int main(int argc, char* argv[]) {
   });
 
   fill_pattern((uint32_t *)host_init, rank, alloc_size/sizeof(uint32_t));
+  queue.memset(ipcbuf0, 0, interm_size * 2);
   queue.memcpy(input, host_init, alloc_size);
 
   void *peer_bases[world];
@@ -131,7 +132,8 @@ int main(int argc, char* argv[]) {
       (void)ipc_handle; // Put IPC handle in the future
   });
 
-
+  // barrier
+  queue.wait();
   MPI_Barrier(MPI_COMM_WORLD);
 
   constexpr int SG_SZ = 16;
