@@ -435,14 +435,7 @@ public:
     for (int i = 0; i < NPeers; ++ i) {
       shuffleData(v);
       insertFlags(v, gatherStep);
-
-#     pragma unroll
-      for (int u = 0; u < unroll; ++ u) {
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-            gatherSink[i] + sinkOffInType + u * wireMsgStep, v[u]);
-#endif
-      }
+      sendMessages(gatherSink[i] + sinkOffInType, v);
     }
   }
 
