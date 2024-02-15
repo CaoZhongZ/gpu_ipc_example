@@ -25,6 +25,7 @@ class SimpleTransmit {
   constexpr static int lastFlagChannel = SubGroupSize -1;
   constexpr static size_t wireSrcStep = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
   constexpr static size_t wireMsgStep = SubGroupSize*sizeof(message_t)/sizeof(T);
+
 public:
   SimpleTransmit(
       sycl::nd_item<1> pos,
@@ -360,7 +361,7 @@ public:
   }
 
   template <int unroll>
-  inline void pollRecvReduceGather(
+  inline void pollRecvReduceBcast(
       size_t inputOffset, size_t sinkOffset, ssize_t workSize
   ) {
     message_t v[unroll];        // Input
@@ -433,13 +434,60 @@ public:
       }
     }
 
+    // write back locally before shuffle data
+    if (nelems < eltPerPack) {
+      storeOutput(ioBuffer + inputOffInType, v, nelems);
+    } else {
+      storeOutput(ioBuffer + inputOffInType, v);
+    }
+
     shuffleData(v);
     insertFlags(v, gatherStep);
 
     // push to gather sink
 #   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
+    for (int i = 0; i < NPeers; ++ i)
       sendMessages(gatherSink[i] + sinkOffInType, v);
+  }
+
+  template <int unroll>
+  inline void pollGatherOutputs(
+      size_t inputOffset, size_t sinkOffset, ssize_t workSize
+  ) {
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto nelems = workSize / sizeof(T);
+
+    constexpr auto eltPerPack = unroll * wireSrcStep;
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    int lane_id = sg.get_local_id();
+
+#   pragma unroll
+    for (int i = 0; i < NPeers; ++ i) {
+      auto flag = scatterStep;
+      bool retry;
+      message_t messages[unroll];
+      do {
+        retry = false;
+#       pragma unroll
+        for (int u = 0; u < unroll; ++ u) {
+          recvMessages(messages, localGatherSink[i] + sinkOffInType);
+          retry |=
+            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
+            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
+        }
+      } while(sycl::any_of_group(sg, retry));
+
+      auto next = (rank + i + 1) % (NPeers + 1);
+      auto peerOffset = next * workSize / sizeof(T);
+      auto ptr = ioBuffer + peerOffset + inputOffInType;
+
+      restoreData(v);
+
+      if (nelems < eltPerPack)
+        storeOutput(ptr, v, nelems);
+      else
+        storeOutput(ptr, v);
     }
   }
 
@@ -617,7 +665,7 @@ struct AllReduce {
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
         cable.template scatter<unroll>(wireOff, transOff, workSize);
-        cable.template pollRecvReduceGather<unroll>(wireOff, transOff, workSize);
+        cable.template pollRecvReduceBcast<unroll>(wireOff, transOff, workSize);
       }
     }
   }
