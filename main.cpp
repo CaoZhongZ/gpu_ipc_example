@@ -10,6 +10,7 @@
 #include "ze_exception.hpp"
 #include "sycl_misc.hpp"
 #include "transmit.hpp"
+#include "utils.hpp"
 
 size_t parse_nelems(const std::string& nelems_string) {
   size_t base = 1;
@@ -34,11 +35,6 @@ template <typename T>
 void extract_profiling(sycl::event e) {
   e.wait();
 };
-
-void fill_pattern(uint32_t *input, int rank, size_t n) {
-  for (int i = 0; i < n; ++ i)
-    input[i] = i % 32 | rank << 16;
-}
 
 int main(int argc, char* argv[]) {
   cxxopts::Options opts(
@@ -99,7 +95,7 @@ int main(int argc, char* argv[]) {
       free(ipcbuf0, queue);
   });
 
-  fill_pattern((uint32_t *)host_init, rank, alloc_size/sizeof(uint32_t));
+  fill_pattern(host_init, rank, nelems);
   queue.memset(ipcbuf0, 0, interm_size * 2);
   queue.memcpy(input, host_init, alloc_size);
 

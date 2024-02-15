@@ -1,4 +1,5 @@
 #include "transmit.hpp"
+#include "utils.hpp"
 
 template <typename T,
          int NPeers,
@@ -49,34 +50,63 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::scatterVerify(
   return 0;
 }
 
+template <typename T>
+static void allreduce(T* allRanks[], int nRanks, size_t nelems) {
+  for (int i = 0; i < nelems; ++ i) {
+    T sum;
+    for (int r = 0; r < nRanks; ++ r)
+      sum += allRanks[r];
+
+    for (int r = 0; r < nRanks; ++ r)
+      allRanks[r] = sum;
+  }
+}
+
 template <typename T,
          int NPeers,
          template <typename, int, int> class Transmit,
          int SubGroupSize>
 int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
-    uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
+    T* host, int rank, uint32_t flag, size_t nelems
 ){
   constexpr auto n120B = 120 / 4;
-  constexpr auto wireCapInInt = wireCapacity / sizeof(uint32_t);
-  constexpr auto wireTransInInt = wireTransSize / sizeof(uint32_t);
+  constexpr auto wireCapInType = wireCapacity / sizeof(T);
+  constexpr auto wireTransInType = wireTransSize / sizeof(T);
+  constexpr NRanks = NPeers + 1;
 
-  auto nTransmitElemsInInt
-    = divUp(nWorkElemsInInt, wireCapInInt) * wireTransInInt;
+  auto nWorkElems = nelems / NRanks;
+  size_t nChunks = divUp(nWorkElems, wireCapInType);
+  auto nTransmitElems = nChunks * wireTransInType;
 
+  T* allRanks[NRanks];
+
+  for (int i = 0; i < NRanks; ++ i)
+    allRanks[i] = malloc(sizeof(T) * nWorkElems * NRanks);
+
+  __scope_guard free_pointers([&] {
+    for (int i = 0; i < NRanks; ++ i)
+      free(allRanks[i]);
+  });
+
+  for (int i = 0; i < NRanks; ++ i)
+    fill_pattern(allRanks[i], i, nelems);
+
+  // simulate an allreduce
+  allreduce(allRanks, NRanks, nelems);
+
+  // Check each gather buffer
   for (int i = 0; i < NPeers; ++ i) {
     int next = (rank + i + 1) % (NPeers + 1);
-    auto* peer_ptr = host + nTransmitElemsInInt * slot(next, rank);
-    size_t contentOff = rank * nWorkElemsInInt;
+    auto* peer_ptr = host + nTransmitElems * slot(next, rank);
 
     // we are expecting pattern = (scale | next)
-    size_t nChunks = divUp(nWorkElemsInInt, wireCapInInt);
     for (int chunk = 0; chunk < nChunks; ++ chunk) {
       uint32_t temp[32];
       uint32_t scrat[32];
 
       for (size_t b = 0, j = 0; b < wireCapInInt; ++ b, ++ j) {
         if (b + chunk * wireCapInInt < nWorkElemsInInt) {
-          temp[b % n120B] = (b + chunk * wireCapInInt + contentOff) % 32 | next << 16;
+          temp[b % n120B] = allRanks[0] + b + chunk * wireCapInType;
         } else
           temp[b % n120B] = 0xffffffff;
         scrat[j % 32] = peer_ptr[j + chunk * wireTransInInt];
