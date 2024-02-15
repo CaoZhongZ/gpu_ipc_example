@@ -1,5 +1,54 @@
 #include "transmit.hpp"
 
+template <typename T,
+         int NPeers,
+         template <typename, int, int> class Transmit,
+         int SubGroupSize>
+ine AllReduce<T, NPeers, Transmit, SubGroupSize>::scatterVerify(
+    uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
+){
+  constexpr auto n120B = 120 / 4;
+  constexpr auto wireCapInInt = wireCapacity / sizeof(uint32_t);
+  constexpr auto wireTransInInt = wireTransSize / sizeof(uint32_t);
+
+  auto nTransmitElemsInInt
+    = divUp(nWorkElemsInInt, wireCapInInt) * wireTransInInt;
+
+  for (int i = 0; i < NPeers; ++ i) {
+    int next = (rank + i + 1) % (NPeers + 1);
+    auto* peer_ptr = host + nTransmitElemsInInt * slot(next, rank);
+    size_t contentOff = rank * nWorkElemsInInt;
+
+    // we are expecting pattern = (scale | next)
+    size_t nChunks = divUp(nWorkElemsInInt, wireCapInInt);
+    for (int chunk = 0; chunk < nChunks; ++ chunk) {
+      uint32_t temp[32];
+      uint32_t scrat[32];
+
+      for (size_t b = 0, j = 0; b < wireCapInInt; ++ b, ++ j) {
+        if (b + chunk * wireCapInInt < nWorkElemsInInt)
+          temp[b % n120B] = (b + chunk * wireCapInInt + contentOff) % 32 | next << 16;
+        else
+          temp[b % n120B] = 0xffffffff;
+        scrat[j % 32] = peer_ptr[j + chunk * wireTransInInt];
+
+        // wireCapInInt will be divided by n120B.
+        if (b % n120B == n120B -1) {
+          temp[30] = temp[15]; temp[15] = flag; temp[31] = flag;
+          scrat[30] = peer_ptr[++j + chunk * wireTransInInt];
+          scrat[31] = peer_ptr[++j + chunk * wireTransInInt];
+
+          for (auto k = 0; k < 32; ++ k) {
+            if (temp[k] != scrat[k] && temp[k] != 0xffffffff) {
+              std::cout<<"["<<rank<<"] Verify failed @"<<i<<", "<<k
+                <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
+              return -1;
+    }}}}}
+  }
+
+  return 0;
+}
+
 template<typename T, int SubGroupSize>
 int verifyTransmit(
     uint32_t* host, uint32_t step, int rank, int world, size_t nWorkElems

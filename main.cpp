@@ -54,12 +54,15 @@ int main(int argc, char* argv[]) {
      cxxopts::value<size_t>()->default_value("1"))
     ("w,subgroups", "Number of sub-groups",
      cxxopts::value<size_t>()->default_value("1"))
+    ("f,flag", "Transmit flag identify steps",
+     cxxopts::value<uint32_t>()->default_value("0xe00f100f"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
   auto nelems = parse_nelems(parsed_opts["nelems"].as<std::string>());
   auto groups = parsed_opts["groups"].as<size_t>();
   auto subgroups = parsed_opts["subgroups"].as<size_t>();
+  auto flag = parsed_opts["flag"].as<size_t>();
 
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
@@ -139,7 +142,7 @@ int main(int argc, char* argv[]) {
   auto e = testSimpleTransmit<test_type, SG_SZ>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, 0xe00f100f, queue
+      nelems, rank, world, flag, queue
   );
 
   MPI_Barrier(MPI_COMM_WORLD);
@@ -150,6 +153,6 @@ int main(int argc, char* argv[]) {
 
   queue.memcpy(host_verify, ipcbuf0, interm_size).wait();
   return verifyTransmit<test_type, SG_SZ>(
-      (uint32_t *)host_verify, 0xe00f100f, rank, world, workNelems
+      (uint32_t *)host_verify, flag, rank, world, workNelems
   );
 }

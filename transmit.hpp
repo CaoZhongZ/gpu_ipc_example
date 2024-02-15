@@ -216,6 +216,23 @@ public:
   }
 
   template <int unroll> inline void storeOutput(
+      message_t (&v)[unroll], T* dst
+  ) {
+    auto lid = pos.get_sub_group().get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+    if (lid < lastDataChannel) {
+#     pragma unroll
+      for (int i = 0; i < unroll; ++ i) {
+        auto off = i * wireSrcStep + local_off;
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+          lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+              dst + off, v[i]
+          );
+#endif
+    }}
+  }
+
+  template <int unroll> inline void storeOutput(
       message_t (&v)[unroll], T* dst, int nElt
   ) {
     auto lid = pos.get_sub_group().get_local_id()[0];
@@ -324,16 +341,27 @@ public:
 
   template <int unroll>
   inline void pollRecvReduceGather(
-      message_t (&v)[unroll], size_t offset
+      size_t inputOffset, size_t sinkOffset, ssize_t workSize
   ) {
-    message_t messages[unroll]; // scraps from remote
-    auto offsetInType = offset / sizeof(T);
+    message_t v[unroll];        // Input
+    message_t messages[unroll]; // Scraps from remote
+
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto nelems = workSize / sizeof(T);
+
+    constexpr auto eltPerPack = unroll * wireSrcStep;
+    if (nelems < eltPerPack) {
+      loadInput(v, ioBuffer + inputOffInType, nelems);
+    } else {
+      loadInput(v, ioBuffer + inputOffInType);
+    }
 
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    int subgroup_id = sg.get_local_id();
+    int lane_id = sg.get_local_id();
 
 #   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
+    for (int i = 1; i < NPeers; ++ i) {
       auto flag = scatterStep;
       bool retry;
       do {
@@ -342,24 +370,27 @@ public:
         for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
           lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-              messages[u], localScatterSink[i] + offsetInType + u * wireMsgStep);
+              messages[u], localScatterSink[i] + sinkOffInType + u * wireMsgStep);
 #else
-          (void)offsetInType;
+          (void)sinkOffInType;
 #endif
           retry |=
-            (subgroup_id == firstFlagChannel && messages[u][lastElem] != flag)
-            || (subgroup_id == lastFlagChannel && messages[u][lastElem] != flag);
+            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
+            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
         }
       } while(sycl::any_of_group(sg, retry));
 
       // do we need reload this???
+      /*
 #     pragma unroll
       for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-            messages[u], localScatterSink[i] + offsetInType + u * wireMsgStep);
+            messages[u], localScatterSink[i] + sinkOffInType + u * wireMsgStep);
+#else
+        (void)sinkOffInType;
 #endif
-      }
+      }*/
 
       restoreData(messages);
 
@@ -369,7 +400,7 @@ public:
       auto arith_m = reinterpret_cast<math_t (&)[unroll]>(messages);
 #endif
 
-      if (subgroup_id < lastDataChannel) {
+      if (lane_id < lastDataChannel) {
 #       pragma unroll
         for (int u = 0; u < unroll; ++ u) {
 #if 0// defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
@@ -391,7 +422,7 @@ public:
       for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-            gatherSink[i] + offsetInType + u * wireMsgStep, v[u]);
+            gatherSink[i] + sinkOffInType + u * wireMsgStep, v[u]);
 #endif
       }
     }
@@ -471,62 +502,21 @@ struct AllReduce {
 
   static int scatterVerify(
       uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
-  ) {
-    constexpr auto n120B = 120 / 4;
-    constexpr auto wireCapInInt = wireCapacity / sizeof(uint32_t);
-    constexpr auto wireTransInInt = wireTransSize / sizeof(uint32_t);
-
-    auto nTransmitElemsInInt
-      = divUp(nWorkElemsInInt, wireCapInInt) * wireTransInInt;
-
-    for (int i = 0; i < NPeers; ++ i) {
-      int next = (rank + i + 1) % (NPeers + 1);
-      auto* peer_ptr = host + nTransmitElemsInInt * slot(next, rank);
-      size_t contentOff = rank * nWorkElemsInInt;
-
-      // we are expecting pattern = (scale | next)
-      size_t nChunks = divUp(nWorkElemsInInt, wireCapInInt);
-      for (int chunk = 0; chunk < nChunks; ++ chunk) {
-        uint32_t temp[32];
-        uint32_t scrat[32];
-
-        for (size_t b = 0, j = 0; b < wireCapInInt; ++ b, ++ j) {
-          if (b + chunk * wireCapInInt < nWorkElemsInInt)
-            temp[b % n120B] = (b + chunk * wireCapInInt + contentOff) % 32 | next << 16;
-          else
-            temp[b % n120B] = 0xffffffff;
-          scrat[j % 32] = peer_ptr[j + chunk * wireTransInInt];
-
-          // wireCapInInt will be divided by n120B.
-          if (b % n120B == n120B -1) {
-            temp[30] = temp[15]; temp[15] = flag; temp[31] = flag;
-            scrat[30] = peer_ptr[++j + chunk * wireTransInInt];
-            scrat[31] = peer_ptr[++j + chunk * wireTransInInt];
-
-            for (auto k = 0; k < 32; ++ k) {
-              if (temp[k] != scrat[k] && temp[k] != 0xffffffff) {
-                std::cout<<"["<<rank<<"] Verify failed @"<<i<<", "<<k
-                  <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
-                return -1;
-      }}}}}
-    }
-
-    return 0;
-  }
+  );
   //
-  // I found this analogy fascinating:
+  // Found this analogy fascinating:
   //
   // Let correspond sub-group to wire, sequential guaranteed.
   // Bundle sub-groups(wires) into group(cable).
   //
   // Total cables will deliver the full capacity of single loop.
   //
-  void scatterTest(sycl::nd_item<1> pos) const {
+  inline void scatterTest(sycl::nd_item<1> pos) const {
     auto cableCapacity = wireCapacity * pos.get_sub_group().get_group_range()[0];
-    auto cableTransSize = wireTransSize * pos.get_sub_group().get_group_range()[0];
+    auto cableTSize = wireTransSize * pos.get_sub_group().get_group_range()[0];
 
     auto loopSize = pos.get_group_range()[0] * cableCapacity;
-    auto transStride = pos.get_group_range()[0] * cableTransSize;
+    auto loopTSize = pos.get_group_range()[0] * cableTSize;
 
     Transmit<T, NPeers, SubGroupSize> cable (
         pos, workSize, step, rank, scatterSink, gatherSink,
@@ -539,14 +529,14 @@ struct AllReduce {
     auto subGroupId = pos.get_sub_group().get_group_id()[0];
 
 #if defined(__enable_sycl_stream__)
-    auto local_id = pos.get_sub_group().get_local_id()[0];
+    // auto local_id = pos.get_sub_group().get_local_id()[0];
     // if (local_id == 0 && groupId == 0)
     //   cout<<"["<<groupId<<", "<<subGroupId
     //     <<"] scatterTest: ioBuffer:"<<ioBuffer
     //     <<", wireCapacity:"<<wireCapacity
     //     <<", cableCapacity:"<<cableCapacity
     //     <<", wireTransSize:"<<wireTransSize
-    //     <<", cableTransSize:"<<cableTransSize
+    //     <<", cableTSize:"<<cableTSize
     //     <<", scatterSink:"<<scatterSink[0]
     //     <<", gatherSink:"<<gatherSink[0]
     //     <<", localScatterSink:"<<localScatterSink[0]
@@ -556,9 +546,9 @@ struct AllReduce {
     // XXX: more cut according to job divide?
     for (size_t gOff = 0, tOff = 0;
         gOff /* * cableCapacity */ < workSize;
-        gOff += loopSize, tOff += transStride) {
+        gOff += loopSize, tOff += loopTSize) {
       auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
-      auto transOff = groupId * cableTransSize + subGroupId * wireTransSize + tOff;
+      auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
 #if defined(__enable_sycl_stream__)
       if (local_id == 0 && groupId == 0)
         cout<<"["<<groupId<<", "<<subGroupId
@@ -576,10 +566,40 @@ struct AllReduce {
 #endif
   }
 
+  inline void stage2Test() const {
+    auto cableCapacity = wireCapacity * pos.get_sub_group().get_group_range()[0];
+    auto cableTSize = wireTransSize * pos.get_sub_group().get_group_range()[0];
+
+    auto loopSize = pos.get_group_range()[0] * cableCapacity;
+    auto loopTSize = pos.get_group_range()[0] * cableTSize;
+
+    Transmit<T, NPeers, SubGroupSize> cable(
+        pos, workSize, step, rank, scatterSink, gatherSink,
+        ioBuffer, localScatterSink, localGatherSink,
+#if defined(__enable_sycl_stream__)
+        ,cout
+#endif
+    );
+
+    auto groupId = pos.get_group().get_group_id()[0];
+    auto subGroupId = pos.get_sub_group().get_group_id()[0];
+
+    for (size_t gOff = 0, tOff = 0;
+        gOff < workSize; gOff += loopSize, tOff += loopTSize) {
+      auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
+      auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
+      ssize_t workLeft = workSize - wireOff;
+      if (workLeft > 0) {
+        cable.template scatter<unroll>(wireOff, transOff, workSize);
+        cable.template pollRecvReduceGather<unroll>(wireOff, transOff, workSize);
+      }
+    }
+  }
+
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
       sycl::nd_item<1> pos
   ) const {
-    scatterTest(pos);
+    stage2Test(pos);
   }
 
 private:
