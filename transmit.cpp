@@ -53,12 +53,12 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::scatterVerify(
 template <typename T>
 static void allreduce(T* allRanks[], int nRanks, size_t nelems) {
   for (int i = 0; i < nelems; ++ i) {
-    T sum;
+    T sum = 0.0;
     for (int r = 0; r < nRanks; ++ r)
-      sum += allRanks[r];
+      sum += allRanks[r][i];
 
     for (int r = 0; r < nRanks; ++ r)
-      allRanks[r] = sum;
+      allRanks[r][i] = sum;
   }
 }
 
@@ -69,10 +69,11 @@ template <typename T,
 int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
     T* host, int rank, uint32_t flag, size_t nelems
 ){
-  constexpr auto n120B = 120 / 4;
+  constexpr auto n120B = 120 / sizeof(T);
+  constexpr auto n128B = 128 / sizeof(T);
   constexpr auto wireCapInType = wireCapacity / sizeof(T);
   constexpr auto wireTransInType = wireTransSize / sizeof(T);
-  constexpr NRanks = NPeers + 1;
+  constexpr auto NRanks = NPeers + 1;
 
   auto nWorkElems = nelems / NRanks;
   size_t nChunks = divUp(nWorkElems, wireCapInType);
@@ -81,7 +82,7 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
   T* allRanks[NRanks];
 
   for (int i = 0; i < NRanks; ++ i)
-    allRanks[i] = malloc(sizeof(T) * nWorkElems * NRanks);
+    allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
 
   __scope_guard free_pointers([&] {
     for (int i = 0; i < NRanks; ++ i)
@@ -101,24 +102,30 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
 
     // we are expecting pattern = (scale | next)
     for (int chunk = 0; chunk < nChunks; ++ chunk) {
-      uint32_t temp[32];
-      uint32_t scrat[32];
+      T temp[n128B];
+      T scrat[n128B];
 
-      for (size_t b = 0, j = 0; b < wireCapInInt; ++ b, ++ j) {
-        if (b + chunk * wireCapInInt < nWorkElemsInInt) {
-          temp[b % n120B] = allRanks[0] + b + chunk * wireCapInType;
+      for (size_t b = 0, j = 0; b < wireCapInType; ++ b, ++ j) {
+        if (b + chunk * wireCapInType < nWorkElems) {
+          temp[b % n120B] = allRanks[0][b + chunk * wireCapInType];
         } else
-          temp[b % n120B] = 0xffffffff;
-        scrat[j % 32] = peer_ptr[j + chunk * wireTransInInt];
+          temp[b % n120B] = -1.;
+        scrat[j % n128B] = peer_ptr[j + chunk * wireTransInType];
 
         // wireCapInInt will be divided by n120B.
         if (b % n120B == n120B -1) {
-          temp[30] = temp[15]; temp[15] = flag; temp[31] = flag;
-          scrat[30] = peer_ptr[++j + chunk * wireTransInInt];
-          scrat[31] = peer_ptr[++j + chunk * wireTransInInt];
+          temp[60] = temp[30]; temp[61] = temp[31];
 
-          for (auto k = 0; k < 32; ++ k) {
-            if (temp[k] != scrat[k] && temp[k] != 0xffffffff) {
+          *(uint32_t *)&temp[30] = flag;
+          *(uint32_t *)&temp[62] = flag;
+
+          scrat[60] = peer_ptr[++j + chunk * wireTransInType];
+          scrat[61] = peer_ptr[++j + chunk * wireTransInType];
+          scrat[62] = peer_ptr[++j + chunk * wireTransInType];
+          scrat[63] = peer_ptr[++j + chunk * wireTransInType];
+
+          for (auto k = 0; k < n128B; ++ k) {
+            if (temp[k] != scrat[k] && temp[k] != -1.) {
               std::cout<<"["<<rank<<"] Verify failed @"<<i<<", "<<k
                 <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
               return -1;
@@ -130,23 +137,22 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
 
 template<typename T, int SubGroupSize>
 int verifyTransmit(
-    uint32_t* host, uint32_t step, int rank, int world, size_t nWorkElems
+    T* host, uint32_t step, int rank, int world, size_t nelems
 ) {
-  constexpr auto nElemPerInt = sizeof(uint32_t) / sizeof(T);
   switch(world) {
   case 2:
     return AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
-        host, rank, step, nWorkElems/nElemPerInt
+        host, rank, step, nelems
     );
     break;
   case 4:
     return AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
-        host, rank, step, nWorkElems/nElemPerInt
+        host, rank, step, nelems
     );
     break;
   case 8:
     return AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
-        host, rank, step, nWorkElems/nElemPerInt
+        host, rank, step, nelems
     );
     break;
   default:
@@ -225,7 +231,7 @@ template sycl::event testSimpleTransmit<sycl::half, 16>(
 
 template
 int verifyTransmit<sycl::half, 16>(
-    uint32_t* host, uint32_t step, int rank, int world, size_t nWorkElems
+    sycl::half* host, uint32_t step, int rank, int world, size_t nWorkElems
 );
 /* disabled temporarily for saving compile time
 template sycl::event testSimpleTransmit<float, 16>(

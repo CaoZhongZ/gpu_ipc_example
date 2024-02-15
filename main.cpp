@@ -146,11 +146,8 @@ int main(int argc, char* argv[]) {
   MPI_Barrier(MPI_COMM_WORLD);
   extract_profiling<test_type>(e);
 
-  // XXX: over simplification
-  auto workNelems = nelems / world;
-
   queue.memcpy(host_verify, ipcbuf1, interm_size).wait();
   return verifyTransmit<test_type, SG_SZ>(
-      (uint32_t *)host_verify, flag, rank, world, workNelems
+      host_verify, flag, rank, world, nelems
   );
 }

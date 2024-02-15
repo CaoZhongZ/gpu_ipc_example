@@ -407,9 +407,6 @@ public:
 #endif
       }*/
 
-      if (lane_id == 0 || lane_id == firstFlagChannel) {
-        cout<<"Messages: "<<messages[0]<<", "<<messages[1]<<";"<<sycl::endl;
-      }
       restoreData(messages);
 
 #if 1 //!defined(__SYCL_DEVICE_ONLY__)
@@ -670,5 +667,5 @@ sycl::event testSimpleTransmit(
 
 template <typename T, int SubGroupSize = 16>
 int verifyTransmit(
-    uint32_t* host, uint32_t step, int rank, int world, size_t nWorkElems
+    T* host, uint32_t step, int rank, int world, size_t nWorkElems
 );
