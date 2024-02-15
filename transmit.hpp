@@ -503,6 +503,9 @@ struct AllReduce {
   static int scatterVerify(
       uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
   );
+  static int stage2Verify(
+      uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
+  );
   //
   // Found this analogy fascinating:
   //
