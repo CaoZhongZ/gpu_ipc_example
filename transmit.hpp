@@ -271,6 +271,24 @@ public:
     }
   }
 
+  template <int unroll>
+  inline void recvMessages(message_t (&messages)[unroll], T* ptr) {
+    int lid = pos.get_sub_group().get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+
+#   pragma unroll
+    for (int u = 0; u < unroll; ++ u) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+      lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+          messages[u],
+          ptr + u * wireMsgStep + local_off
+      );
+#else
+      (void) lid; (void) local_off;
+#endif
+    }
+  }
+
   // Scatter local message to peers
   template <int unroll>
   inline void scatter(
@@ -370,20 +388,12 @@ public:
         retry = false;
 #       pragma unroll
         for (int u = 0; u < unroll; ++ u) {
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-              messages[u],
-              localScatterSink[i]
-              + sinkOffInType + u * wireMsgStep
-              + lane_id *  sizeof(message_t) / sizeof(T));
-#else
-          (void)sinkOffInType;
-#endif
+          recvMessages(messages, localScatterSink[i] + sinkOffInType);
           retry |=
             (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
             || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
         }
-      } while(false/*sycl::any_of_group(sg, retry)*/);
+      } while(sycl::any_of_group(sg, retry));
 
       // do we need reload this???
       /*
