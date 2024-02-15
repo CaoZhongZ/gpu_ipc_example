@@ -55,7 +55,7 @@ int main(int argc, char* argv[]) {
     ("w,subgroups", "Number of sub-groups",
      cxxopts::value<size_t>()->default_value("1"))
     ("f,flag", "Transmit flag identify steps",
-     cxxopts::value<uint32_t>()->default_value("0xe00f100f"))
+     cxxopts::value<size_t>()->default_value("0xe00f100f"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -153,7 +153,7 @@ int main(int argc, char* argv[]) {
   // XXX: over simplification
   auto workNelems = nelems / world;
 
-  queue.memcpy(host_verify, ipcbuf0, interm_size).wait();
+  queue.memcpy(host_verify, ipcbuf1, interm_size).wait();
   return verifyTransmit<test_type, SG_SZ>(
       (uint32_t *)host_verify, flag, rank, world, workNelems
   );

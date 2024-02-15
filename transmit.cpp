@@ -4,7 +4,7 @@ template <typename T,
          int NPeers,
          template <typename, int, int> class Transmit,
          int SubGroupSize>
-ine AllReduce<T, NPeers, Transmit, SubGroupSize>::scatterVerify(
+int AllReduce<T, NPeers, Transmit, SubGroupSize>::scatterVerify(
     uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
 ){
   constexpr auto n120B = 120 / 4;
@@ -53,7 +53,7 @@ template <typename T,
          int NPeers,
          template <typename, int, int> class Transmit,
          int SubGroupSize>
-ine AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
+int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
     uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
 ){
   constexpr auto n120B = 120 / 4;

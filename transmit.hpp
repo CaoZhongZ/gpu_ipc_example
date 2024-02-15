@@ -225,9 +225,11 @@ public:
       for (int i = 0; i < unroll; ++ i) {
         auto off = i * wireSrcStep + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-              dst + off, v[i]
-          );
+        lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+            dst + off, v[i]
+        );
+#else
+        (void)off; (void)local_off;
 #endif
     }}
   }
@@ -361,7 +363,7 @@ public:
     int lane_id = sg.get_local_id();
 
 #   pragma unroll
-    for (int i = 1; i < NPeers; ++ i) {
+    for (int i = 0; i < NPeers; ++ i) {
       auto flag = scatterStep;
       bool retry;
       do {
@@ -370,7 +372,10 @@ public:
         for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
           lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-              messages[u], localScatterSink[i] + sinkOffInType + u * wireMsgStep);
+              messages[u],
+              localScatterSink[i]
+              + sinkOffInType + u * wireMsgStep
+              + lane_id *  sizeof(message_t) / sizeof(T));
 #else
           (void)sinkOffInType;
 #endif
@@ -378,7 +383,7 @@ public:
             (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
             || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
         }
-      } while(sycl::any_of_group(sg, retry));
+      } while(false/*sycl::any_of_group(sg, retry)*/);
 
       // do we need reload this???
       /*
@@ -392,6 +397,9 @@ public:
 #endif
       }*/
 
+      if (lane_id == 0 || lane_id == firstFlagChannel) {
+        cout<<"Messages: "<<messages[0]<<", "<<messages[1]<<";"<<sycl::endl;
+      }
       restoreData(messages);
 
 #if 1 //!defined(__SYCL_DEVICE_ONLY__)
@@ -532,7 +540,7 @@ struct AllReduce {
     auto subGroupId = pos.get_sub_group().get_group_id()[0];
 
 #if defined(__enable_sycl_stream__)
-    // auto local_id = pos.get_sub_group().get_local_id()[0];
+    auto local_id = pos.get_sub_group().get_local_id()[0];
     // if (local_id == 0 && groupId == 0)
     //   cout<<"["<<groupId<<", "<<subGroupId
     //     <<"] scatterTest: ioBuffer:"<<ioBuffer
@@ -569,7 +577,7 @@ struct AllReduce {
 #endif
   }
 
-  inline void stage2Test() const {
+  inline void stage2Test(sycl::nd_item<1> pos) const {
     auto cableCapacity = wireCapacity * pos.get_sub_group().get_group_range()[0];
     auto cableTSize = wireTransSize * pos.get_sub_group().get_group_range()[0];
 
@@ -578,7 +586,7 @@ struct AllReduce {
 
     Transmit<T, NPeers, SubGroupSize> cable(
         pos, workSize, step, rank, scatterSink, gatherSink,
-        ioBuffer, localScatterSink, localGatherSink,
+        ioBuffer, localScatterSink, localGatherSink
 #if defined(__enable_sycl_stream__)
         ,cout
 #endif
@@ -592,11 +600,12 @@ struct AllReduce {
       auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
       auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
 #if defined(__enable_sycl_stream__)
+      auto local_id = pos.get_sub_group().get_local_id()[0];
       if (local_id == 0 && groupId == 0)
         cout<<"["<<groupId<<", "<<subGroupId
           <<"] loopSize:"<<loopSize
           <<", wireOff:"<<wireOff<<"; "
-          <<", transOff:"<<transOff<<"; ";
+          <<", transOff:"<<transOff<<"; "<<sycl::endl;
 #endif
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
