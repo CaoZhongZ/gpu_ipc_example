@@ -37,7 +37,7 @@ void extract_profiling(sycl::event e) {
   auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
   auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
 
-  std::cout<"Running time: "<<(end - start)<<"ns"<<std::endl;
+  std::cout<<"Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
 int main(int argc, char* argv[]) {
@@ -149,6 +149,24 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
   extract_profiling<test_type>(e);
+
+  auto e1 = testSimpleTransmit<test_type, SG_SZ>(
+      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 2, queue
+  );
+  extract_profiling<test_type>(e1);
+
+
+  MPI_Barrier(MPI_COMM_WORLD);
+  std::cout<<"---------last run------------------"<<std::endl;
+
+  auto e2 = testSimpleTransmit<test_type, SG_SZ>(
+      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 4, queue
+  );
+  extract_profiling<test_type>(e2);
 
   queue.memcpy(host_verify, ipcbuf1, interm_size).wait();
   return verifyTransmit<test_type, SG_SZ>(

@@ -72,7 +72,7 @@ public:
         auto off = i * wireSrcStep + local_off;
         if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+          lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
               v[i], src + off
           );
 #if defined(__enable_sycl_stream__)
@@ -96,7 +96,7 @@ public:
       for (int i = 0; i < unroll; ++ i) {
         auto off = i * wireSrcStep + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+        lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
             v[i], src + off
         );
 #else
@@ -226,7 +226,7 @@ public:
       for (int i = 0; i < unroll; ++ i) {
         auto off = i * wireSrcStep + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+        lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
             dst + off, v[i]
         );
 #else
@@ -246,7 +246,7 @@ public:
         auto off = i * wireSrcStep + local_off;
         if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+          lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
               dst + off, v[i]
           );
 #endif
@@ -428,7 +428,7 @@ public:
 //               <<", m:"<<arith_m[0]
 //               <<sycl::endl<<sycl::flush;
 //           }
-          arith_v[u] = arith_v[u] + arith_m[u];
+          arith_v[u] += arith_m[u];
 #endif
         }
       }
@@ -519,7 +519,7 @@ struct AllReduce {
 
   constexpr static int nChan8B = 8 / sizeof(message_t);
   constexpr static int nDataChannel = SubGroupSize - nChan8B;
-  constexpr static int unroll = NPeers < 4 ? 4 : 2;
+  constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
   constexpr static int wireCapacity = unroll * nDataChannel * sizeof(message_t);
   constexpr static int wireTransSize = unroll * SubGroupSize * sizeof(message_t);
 
