@@ -157,7 +157,6 @@ int main(int argc, char* argv[]) {
   );
   extract_profiling<test_type>(e1);
 
-
   MPI_Barrier(MPI_COMM_WORLD);
   std::cout<<"---------last run------------------"<<std::endl;
 

@@ -397,6 +397,15 @@ public:
         }
       } while(sycl::any_of_group(sg, retry));
 
+#if defined(__enable_sycl_stream__)
+      if (lane_id == firstFlagChannel || lane_id == lastFlagChannel) {
+        cout<<"["<<rank<<","<<lane_id<<"]";
+        for (int u = 0; u < unroll; ++ u)
+          cout<<sycl::hex<<messages[u]<<"; ";
+        cout<<sycl::endl<<sycl::flush;
+      }
+#endif
+
       // do we need reload this???
       /*
 #     pragma unroll
