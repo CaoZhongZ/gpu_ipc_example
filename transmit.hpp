@@ -367,10 +367,10 @@ public:
     message_t v[unroll];        // Input
     message_t messages[unroll]; // Scraps from remote
 
-    auto rankOffset = rank * workSize / sizeof(T);
+    auto nelems = workSize / sizeof(T);
+    auto rankOffset = rank * nelems;
     auto inputOffInType = inputOffset / sizeof(T);
     auto sinkOffInType = sinkOffset / sizeof(T);
-    auto nelems = workSize / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireSrcStep;
     if (nelems < eltPerPack) {
@@ -436,9 +436,9 @@ public:
 
     // write back locally before shuffle data
     if (nelems < eltPerPack) {
-      storeOutput(ioBuffer + inputOffInType, v, nelems);
+      storeOutput(ioBuffer + inputOffInType + rankOffset, v, nelems);
     } else {
-      storeOutput(ioBuffer + inputOffInType, v);
+      storeOutput(ioBuffer + inputOffInType + rankOffset, v);
     }
 
     shuffleData(v);
@@ -552,8 +552,10 @@ struct AllReduce {
       gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
           + transmitSize * slotShift(rank, next));
 
-      localScatterSink[i] = (T *)((uintptr_t)scatterBuf + slotShift(next, rank) * transmitSize);
-      localGatherSink[i] = (T *)((uintptr_t)gatherBuf + slotShift(next, rank) * transmitSize);
+      localScatterSink[i] = (T *)((uintptr_t)scatterBuf
+          + slotShift(next, rank) * transmitSize);
+      localGatherSink[i] = (T *)((uintptr_t)gatherBuf
+          + slotShift(next, rank) * transmitSize);
     }
   }
 
@@ -666,6 +668,7 @@ struct AllReduce {
       if (workLeft > 0) {
         cable.template scatter<unroll>(wireOff, transOff, workSize);
         cable.template pollRecvReduceBcast<unroll>(wireOff, transOff, workSize);
+        cable.template pollGatherOutputs<unroll>(wireOff, transOff, workSize);
       }
     }
   }
