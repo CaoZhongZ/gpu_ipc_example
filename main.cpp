@@ -34,6 +34,10 @@ size_t parse_nelems(const std::string& nelems_string) {
 template <typename T>
 void extract_profiling(sycl::event e) {
   e.wait();
+  auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
+  auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
+
+  std::cout<"Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
 int main(int argc, char* argv[]) {
