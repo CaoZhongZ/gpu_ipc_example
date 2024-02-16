@@ -497,8 +497,8 @@ struct AllReduce {
       gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
           + transmitSize * slotShift(rank, next));
 
-      localScatterSink[i] = scatterBuf + slotShift(next, rank) * transmitSize;
-      localGatherSink[i] = gatherBuf + slotShift(next, rank) * transmitSize;
+      localScatterSink[i] = (T *)((uintptr_t)scatterBuf + slotShift(next, rank) * transmitSize);
+      localGatherSink[i] = (T *)((uintptr_t)gatherBuf + slotShift(next, rank) * transmitSize);
     }
   }
 
