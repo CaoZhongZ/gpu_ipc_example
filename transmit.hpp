@@ -217,7 +217,7 @@ public:
   }
 
   template <int unroll> inline void storeOutput(
-      message_t (&v)[unroll], T* dst
+      T* dst, message_t (&v)[unroll]
   ) {
     auto lid = pos.get_sub_group().get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
@@ -236,7 +236,7 @@ public:
   }
 
   template <int unroll> inline void storeOutput(
-      message_t (&v)[unroll], T* dst, int nElt
+      T* dst, message_t (&v)[unroll], int nElt
   ) {
     auto lid = pos.get_sub_group().get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
@@ -464,7 +464,7 @@ public:
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = scatterStep;
+      auto flag = gatherStep;
       bool retry;
       message_t messages[unroll];
       do {
@@ -482,12 +482,12 @@ public:
       auto peerOffset = next * workSize / sizeof(T);
       auto ptr = ioBuffer + peerOffset + inputOffInType;
 
-      restoreData(v);
+      restoreData(messages);
 
       if (nelems < eltPerPack)
-        storeOutput(ptr, v, nelems);
+        storeOutput(ptr, messages, nelems);
       else
-        storeOutput(ptr, v);
+        storeOutput(ptr, messages);
     }
   }
 
