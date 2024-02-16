@@ -11,5 +11,5 @@ public:
 template <typename T>
 void fill_pattern(T *input, int rank, size_t n) {
   for (int i = 0; i < n; ++ i)
-    input[i] = (T)((i % 32) * rank);
+    input[i] = (T)((i % 32) * (rank + 1));
 }

@@ -40,7 +40,7 @@ public:
       , sycl::stream cout
 #endif
   ) : ioBuffer(ioBuffer), workSize(workSize), scatterStep(step),
-  gatherStep(step), rank(rank), pos(pos)
+  gatherStep(step + 1), rank(rank), pos(pos)
 #if defined(__enable_sycl_stream__)
   , cout(cout)
 #endif
@@ -408,11 +408,6 @@ public:
 #endif
       }*/
 
-      if (lane_id == lastFlagChannel) {
-        for (int u = 0; u < unroll; ++ u)
-          cout<<"["<<rank<<"]peer["<<i<<"] "<<sycl::hex<<messages[u][0]<<",";
-        cout<<sycl::endl<<sycl::flush;
-      }
       restoreData(messages);
 
 #if 1 //!defined(__SYCL_DEVICE_ONLY__)
@@ -438,11 +433,12 @@ public:
       }
     }
 
+    shuffleData(v);
+    insertFlags(v, gatherStep);
+
     // push to gather sink
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      shuffleData(v);
-      insertFlags(v, gatherStep);
       sendMessages(gatherSink[i] + sinkOffInType, v);
     }
   }
