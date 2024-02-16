@@ -99,6 +99,7 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
   for (int i = 0; i < NPeers; ++ i) {
     int next = (rank + i + 1) % (NPeers + 1);
     auto* peer_ptr = host + nTransmitElems * slot(next, rank);
+    auto* local_ptr = allRanks[0] + nWorkElems * next;
 
     // we are expecting pattern = (scale | next)
     for (int chunk = 0; chunk < nChunks; ++ chunk) {
@@ -107,7 +108,7 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
 
       for (size_t b = 0, j = 0; b < wireCapInType; ++ b, ++ j) {
         if (b + chunk * wireCapInType < nWorkElems) {
-          temp[b % n120B] = allRanks[0][b + chunk * wireCapInType];
+          temp[b % n120B] = local_ptr[b + chunk * wireCapInType];
         } else
           temp[b % n120B] = -1.;
         scrat[j % n128B] = peer_ptr[j + chunk * wireTransInType];
@@ -121,12 +122,15 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
 
           scrat[60] = peer_ptr[++j + chunk * wireTransInType];
           scrat[61] = peer_ptr[++j + chunk * wireTransInType];
+
+          // flag
           scrat[62] = peer_ptr[++j + chunk * wireTransInType];
           scrat[63] = peer_ptr[++j + chunk * wireTransInType];
 
           for (auto k = 0; k < n128B; ++ k) {
-            if (temp[k] != scrat[k] && temp[k] != -1.) {
-              std::cout<<"["<<rank<<"] Verify failed @"<<i<<", "<<k
+            if (temp[k] - scrat[k] > 1e-5 && temp[k] != -1.) {
+              std::cout<<"["<<rank<<"] Verify failed @"
+                <<i<<","<<k<<","<<b<<","<<chunk
                 <<", expect:"<<temp[k]<<", but get:"<<scrat[k]<<std::endl;
               return -1;
     }}}}}

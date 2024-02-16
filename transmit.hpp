@@ -366,15 +366,16 @@ public:
     message_t v[unroll];        // Input
     message_t messages[unroll]; // Scraps from remote
 
+    auto rankOffset = rank * workSize / sizeof(T);
     auto inputOffInType = inputOffset / sizeof(T);
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workSize / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireSrcStep;
     if (nelems < eltPerPack) {
-      loadInput(v, ioBuffer + inputOffInType, nelems);
+      loadInput(v, ioBuffer + inputOffInType + rankOffset, nelems);
     } else {
-      loadInput(v, ioBuffer + inputOffInType);
+      loadInput(v, ioBuffer + inputOffInType + rankOffset);
     }
 
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
@@ -407,6 +408,11 @@ public:
 #endif
       }*/
 
+      if (lane_id == lastFlagChannel) {
+        for (int u = 0; u < unroll; ++ u)
+          cout<<"["<<rank<<"]peer["<<i<<"] "<<sycl::hex<<messages[u][0]<<",";
+        cout<<sycl::endl<<sycl::flush;
+      }
       restoreData(messages);
 
 #if 1 //!defined(__SYCL_DEVICE_ONLY__)
@@ -421,6 +427,11 @@ public:
 #if 0// defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
           v[u] = addAs<T, SubGroupSize>(v[u], messages[u]);
 #else
+//           if (lane_id == 0 && u == 0) {
+//             cout<<"["<<rank<<"]v:"<<arith_v[0]
+//               <<", m:"<<arith_m[0]
+//               <<sycl::endl<<sycl::flush;
+//           }
           arith_v[u] = arith_v[u] + arith_m[u];
 #endif
         }
