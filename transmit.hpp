@@ -724,15 +724,15 @@ private:
 #endif
 };
 
-template <typename T, int SubGroupSize = 16>
+template <typename T>
 sycl::event testSimpleTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
-    int rank, int world, uint32_t step, sycl::queue queue
+    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue
 );
 
-template <typename T, int SubGroupSize = 16>
+template <typename T>
 int verifyTransmit(
-    T* host, uint32_t step, int rank, int world, size_t nWorkElems
+    T* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );

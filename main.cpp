@@ -56,6 +56,8 @@ int main(int argc, char* argv[]) {
      cxxopts::value<size_t>()->default_value("1"))
     ("f,flag", "Transmit flag identify steps",
      cxxopts::value<size_t>()->default_value("0xe00f100f"))
+    ("s,simd", "Transmit flag identify steps",
+     cxxopts::value<uint32_t>()->default_value("16"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -63,6 +65,7 @@ int main(int argc, char* argv[]) {
   auto groups = parsed_opts["groups"].as<size_t>();
   auto subgroups = parsed_opts["subgroups"].as<size_t>();
   auto flag = parsed_opts["flag"].as<size_t>();
+  auto simd = parsed_opts["simd"].as<uint32_t>();
 
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
@@ -136,39 +139,37 @@ int main(int argc, char* argv[]) {
   queue.wait();
   MPI_Barrier(MPI_COMM_WORLD);
 
-  constexpr int SG_SZ = 16;
-
-  auto local_size = subgroups * SG_SZ;
+  auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-  auto e = testSimpleTransmit<test_type, SG_SZ>(
+  auto e = testSimpleTransmit<test_type>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag, queue
+      nelems, rank, world, flag, simd, queue
   );
 
   MPI_Barrier(MPI_COMM_WORLD);
   extract_profiling<test_type>(e);
 
-  auto e1 = testSimpleTransmit<test_type, SG_SZ>(
+  auto e1 = testSimpleTransmit<test_type>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 2, queue
+      nelems, rank, world, flag + 2, simd, queue
   );
   extract_profiling<test_type>(e1);
 
   MPI_Barrier(MPI_COMM_WORLD);
   std::cout<<"---------last run------------------"<<std::endl;
 
-  auto e2 = testSimpleTransmit<test_type, SG_SZ>(
+  auto e2 = testSimpleTransmit<test_type>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 4, queue
+      nelems, rank, world, flag + 4, simd, queue
   );
   extract_profiling<test_type>(e2);
 
   queue.memcpy(host_verify, ipcbuf1, interm_size).wait();
-  return verifyTransmit<test_type, SG_SZ>(
-      host_verify, flag, rank, world, nelems
+  return verifyTransmit<test_type>(
+      host_verify, flag, rank, world, simd, nelems
   );
 }

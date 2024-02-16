@@ -139,28 +139,52 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
   return 0;
 }
 
-template<typename T, int SubGroupSize>
+template<typename T>
 int verifyTransmit(
-    T* host, uint32_t step, int rank, int world, size_t nelems
+    T* host, uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
-  switch(world) {
-  case 2:
-    return AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
-        host, rank, step, nelems
-    );
-    break;
-  case 4:
-    return AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
-        host, rank, step, nelems
-    );
-    break;
-  case 8:
-    return AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
-        host, rank, step, nelems
-    );
-    break;
-  default:
-    throw std::logic_error("Not supported communication pattern");
+  if (simd == 16) {
+    constexpr int SubGroupSize = 16;
+    switch(world) {
+    case 2:
+      return AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+          host, rank, step, nelems
+      );
+      break;
+    case 4:
+      return AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+          host, rank, step, nelems
+      );
+      break;
+    case 8:
+      return AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+          host, rank, step, nelems
+      );
+      break;
+    default:
+      throw std::logic_error("Not supported communication pattern");
+    }
+  } else {
+    constexpr int SubGroupSize = 32;
+    switch(world) {
+    case 2:
+      return AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+          host, rank, step, nelems
+      );
+      break;
+    case 4:
+      return AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+          host, rank, step, nelems
+      );
+      break;
+    case 8:
+      return AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+          host, rank, step, nelems
+      );
+      break;
+    default:
+      throw std::logic_error("Not supported communication pattern");
+    }
   }
 }
 
@@ -168,11 +192,13 @@ int verifyTransmit(
 // We will remove sycl::event return in real API call.
 // It's for test only.
 //
-template <typename T, int SubGroupSize> sycl::event testSimpleTransmit(
+template <typename T> sycl::event testSimpleTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
-    int rank, int world, uint32_t step, sycl::queue queue) {
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
+  if (subgroup == 16) {
+    constexpr int SubGroupSize = 16;
   switch(world) {
   case 2:
     return queue.submit([&](sycl::handler &cgh) {
@@ -225,40 +251,83 @@ template <typename T, int SubGroupSize> sycl::event testSimpleTransmit(
   default:
     throw std::logic_error("Unsupported communication topology");
   }
+  } else {
+    constexpr int SubGroupSize = 32;
+  switch(world) {
+  case 2:
+    return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+            )
+        );
+    });
+  case 4:
+    return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+            )
+        );
+    });
+  case 8:
+    return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+            )
+        );
+    });
+  default:
+    throw std::logic_error("Unsupported communication topology");
+  }
+
+  }
 }
 
-template sycl::event testSimpleTransmit<sycl::half, 16>(
+template sycl::event testSimpleTransmit<sycl::half>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, sycl::queue queue);
+    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 
 template
-int verifyTransmit<sycl::half, 16>(
-    sycl::half* host, uint32_t step, int rank, int world, size_t nWorkElems
+int verifyTransmit<sycl::half>(
+    sycl::half* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );
 /* disabled temporarily for saving compile time
-template sycl::event testSimpleTransmit<float, 16>(
+template sycl::event testSimpleTransmit<float>(
     sycl::nd_range<1> launchParam,
     float* input, float* ipcbuf0, float* ipcbuf1,
     float* const peerbuf0[], float* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, sycl::queue queue);
-*/
-
-template sycl::event testSimpleTransmit<sycl::half, 32>(
-    sycl::nd_range<1> launchParam,
-    sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
-    sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, sycl::queue queue);
+    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 
 template
-int verifyTransmit<sycl::half, 32>(
-    sycl::half* host, uint32_t step, int rank, int world, size_t nWorkElems
+int verifyTransmit<float>(
+    float* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );
-/*
-template sycl::event testSimpleTransmit<float, 32>(
-    sycl::nd_range<1> launchParam,
-    float* input, float* ipcbuf0, float* ipcbuf1,
-    float* const peerbuf0[], float* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, sycl::queue queue);
 */
