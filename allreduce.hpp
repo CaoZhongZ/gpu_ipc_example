@@ -142,7 +142,6 @@ private:
       throw std::logic_error("We don't support non-even divide yet");
 
     // TODO: Production logic needs every rank chunk
-
     return chunkSize * sizeof(message_t);
   }
   ssize_t workSize;

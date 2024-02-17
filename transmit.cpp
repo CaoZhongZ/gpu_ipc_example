@@ -1,4 +1,5 @@
 #include "transmit.hpp"
+#include "allreduce.hpp"
 #include "utils.hpp"
 
 template <typename T,

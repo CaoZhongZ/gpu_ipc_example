@@ -9,8 +9,9 @@
 #include "utils.hpp"
 #include "ze_exception.hpp"
 #include "sycl_misc.hpp"
-#include "transmit.hpp"
 #include "utils.hpp"
+
+#include "allreduce.hpp"
 
 size_t parse_nelems(const std::string& nelems_string) {
   size_t base = 1;
@@ -142,21 +143,21 @@ int main(int argc, char* argv[]) {
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-  auto e = testSimpleTransmit<test_type>(
+  /*auto e =*/ testSimpleTransmit<test_type>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag, simd, queue
   );
 
   MPI_Barrier(MPI_COMM_WORLD);
-  extract_profiling<test_type>(e);
+  // extract_profiling<test_type>(e);
 
-  auto e1 = testSimpleTransmit<test_type>(
+  /* auto e1 =*/ testSimpleTransmit<test_type>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 2, simd, queue
   );
-  extract_profiling<test_type>(e1);
+  // extract_profiling<test_type>(e1);
 
   MPI_Barrier(MPI_COMM_WORLD);
   std::cout<<"---------last run------------------"<<std::endl;

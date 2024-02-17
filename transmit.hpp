@@ -27,9 +27,9 @@ public:
       T (* const & localScatterSink)[NPeers],
       T (* const & localGatherSink)[NPeers],
       T* const ioBuffer,
-      T (* const & ioForPeers)[Npeers],
+      T (* const & ioForPeers)[NPeers],
       uint32_t step,   // Serve as flag for checking
-      int rank,
+      int rank
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
@@ -54,7 +54,7 @@ public:
       auto off = i * wireSrcStep + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        if constexpr (SubGroupSize = 16)
+        if constexpr (SubGroupSize == 16)
           asm volatile ("\n" // Add this partial load to tvisa
               "lsc_load.ugm.ca.ca (M1, 16) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
@@ -78,7 +78,7 @@ public:
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireSrcStep + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      if constexpr (SubGroupSize = 16)
+      if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
             "lsc_load.ugm.ca.ca (M1, 16) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
@@ -119,7 +119,7 @@ public:
 #else
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i)
-      messages[i][lastElem] = flag;
+      messages[i][flagElem] = flag;
 #endif
   }
 
@@ -132,7 +132,7 @@ public:
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireSrcStep + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      if constexpr (SubGroupSize = 16)
+      if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
             "lsc_store.ugm.ca.ca (M1, 16) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[i][dataElem]));
@@ -156,7 +156,7 @@ public:
       auto off = i * wireSrcStep + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        if constexpr (SubGroupSize = 16)
+        if constexpr (SubGroupSize == 16)
           asm volatile ("\n"
               "lsc_store.ugm.ca.ca (M1, 16) flat[%0]:a64 %1:d32\n"
               :: "rw"(dst + off), "rw"(v[i][dataElem]));
@@ -277,6 +277,7 @@ public:
       loadInput(v, ioBuffer + inputOffInType);
     }
 
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       auto flag = scatterStep;
@@ -286,7 +287,7 @@ public:
 #       pragma unroll
         for (int u = 0; u < unroll; ++ u) {
           recvMessages(messages, localScatterSink[i] + sinkOffInType);
-          retry |= (messages[u][lastElem] != flag);
+          retry |= (messages[u][flagElem] != flag);
         }
       } while(sycl::any_of_group(sg, retry));
 
@@ -329,6 +330,7 @@ public:
 
     constexpr auto eltPerPack = unroll * wireSrcStep;
 
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       auto flag = gatherStep;
@@ -339,7 +341,7 @@ public:
 #       pragma unroll
         for (int u = 0; u < unroll; ++ u) {
           recvMessages(messages, localGatherSink[i] + sinkOffInType);
-          retry |= messages[u][lastElem] != flag;
+          retry |= messages[u][flagElem] != flag;
         }
       } while(sycl::any_of_group(sg, retry));
 
@@ -388,14 +390,14 @@ class SimpleTransmit {
 public:
   SimpleTransmit(
       sycl::nd_item<1> pos,
-      T (* const & scatterSink)[NPeers],
-      T (* const & gatherSink)[NPeers],
-      T (* const & localScatterSink)[NPeers],
-      T (* const & localGatherSink)[NPeers],
+      T* const (& scatterSink)[NPeers],
+      T* const (& gatherSink)[NPeers],
+      T* const (& localScatterSink)[NPeers],
+      T* const (& localGatherSink)[NPeers],
       T* const ioBuffer,
-      T (* const & ioForPeers)[Npeers],
+      T* const (& ioForPeers)[NPeers],
       uint32_t step,   // Serve as flag for checking
-      int rank,
+      int rank
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
@@ -712,8 +714,8 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
 
     auto inPtr = ioBuffer + inputOffInType;
-
     constexpr auto eltPerPack = unroll * wireSrcStep;
+
     if (nelems < eltPerPack) {
       loadInput(v, inPtr, nelems);
     } else {
@@ -828,12 +830,12 @@ public:
   }
 
 private:
-  T (* const &scatterSink)[NPeers];
-  T (* const &gatherSink)[NPeers];
-  T (* const &localScatterSink)[NPeers];
-  T (* const &localGatherSink)[NPeers];
+  T* const (& scatterSink)[NPeers];
+  T* const (& gatherSink)[NPeers];
+  T* const (& localScatterSink)[NPeers];
+  T* const (& localGatherSink)[NPeers];
   T* const ioBuffer; // point to workload of self
-  T (* const &ioForPeers)[NPeers]; // point to distributed workload
+  T* const (&ioForPeers)[NPeers]; // point to distributed workload
 
   uint32_t scatterStep;
   uint32_t gatherStep;
