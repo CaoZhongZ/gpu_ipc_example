@@ -81,6 +81,8 @@ int main(int argc, char* argv[]) {
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
   using test_type = sycl::half;
+  template <typename, int, int> using test_transmit = Transmit;
+
   size_t alloc_size = nelems * sizeof(test_type);
   size_t interm_size = 32 * 1024 * 1024; // fix at 32M for now.
 
@@ -143,7 +145,7 @@ int main(int argc, char* argv[]) {
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-  /*auto e =*/ testTransmit<test_type, SimpleTransmit>(
+  /*auto e =*/ testTransmit<test_type, test_transmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag, simd, queue
@@ -152,7 +154,7 @@ int main(int argc, char* argv[]) {
   MPI_Barrier(MPI_COMM_WORLD);
   // extract_profiling<test_type>(e);
 
-  /* auto e1 =*/ testTransmit<test_type, SimpleTransmit>(
+  /* auto e1 =*/ testTransmit<test_type, test_transmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 2, simd, queue
@@ -164,7 +166,7 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  auto e2 = testTransmit<test_type, SimpleTransmit>(
+  auto e2 = testTransmit<test_type, test_transmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 4, simd, queue
@@ -172,7 +174,7 @@ int main(int argc, char* argv[]) {
   extract_profiling<test_type>(e2);
 
   queue.memcpy(host_verify, ipcbuf1, interm_size).wait();
-  return verifyTransmit<test_type, SimpleTransmit>(
+  return verifyTransmit<test_type, test_transmit>(
       host_verify, flag, rank, world, simd, nelems
   );
 }
