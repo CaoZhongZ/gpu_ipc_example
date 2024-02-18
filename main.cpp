@@ -159,8 +159,10 @@ int main(int argc, char* argv[]) {
   );
   // extract_profiling<test_type>(e1);
 
+  if (rank == 0)
+    std::cout<<"---------last run------------------"<<std::endl;
+
   MPI_Barrier(MPI_COMM_WORLD);
-  std::cout<<"---------last run------------------"<<std::endl;
 
   auto e2 = testSimpleTransmit<test_type>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
