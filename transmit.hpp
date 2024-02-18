@@ -12,31 +12,22 @@
 template <typename T, int NPeers, int SubGroupSize>
 class smallTransmit {
   // first row contains data, second row, flags
+protected:
   using message_t = sycl::vec<uint32_t, 2>;
   static constexpr int dataElem = 0;
   static constexpr int flagElem = 1;
 
-  constexpr static int wireSrcStep = sizeof(message_t) / 2;
-  constexpr static int wireMsgStep = sizeof(message_t);
+  constexpr static int wireCapacity = SubGroupSize * sizeof(message_t) / 2;
+  constexpr static int wireTransSize = SubGroupSize * sizeof(message_t);
 
 public:
   smallTransmit(
-      sycl::nd_item<1> pos,
-      T (* const & scatterSink)[NPeers],
-      T (* const & gatherSink)[NPeers],
-      T (* const & localScatterSink)[NPeers],
-      T (* const & localGatherSink)[NPeers],
-      T* const ioBuffer,
-      T (* const & ioForPeers)[NPeers],
-      uint32_t step,   // Serve as flag for checking
-      int rank
+      int rank,
+      uint32_t seqNo   // Serve as flag for checking
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : scatterSink(scatterSink),gatherSink(gatherSink),
-  localScatterSink(localScatterSink), localGatherSink(localGatherSink),
-  ioBuffer(ioBuffer), ioForPeers(ioForPeers),
-  scatterStep(step), gatherStep(step + 1), rank(rank), pos(pos)
+  ) : scatterStep(seqNo), gatherStep(seqNo + 1), rank(rank)
 #if defined(__enable_sycl_stream__)
   , cout(cout)
 #endif
@@ -46,12 +37,13 @@ public:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireSrcStep + local_off;
+      auto off = i * wireCapacity + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
@@ -71,12 +63,13 @@ public:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireSrcStep + local_off;
+      auto off = i * wireCapacity + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
@@ -126,11 +119,12 @@ public:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireSrcStep + local_off;
+      auto off = i * wireCapacity + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
@@ -149,11 +143,12 @@ public:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireSrcStep + local_off;
+      auto off = i * wireCapacity + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
@@ -173,14 +168,15 @@ public:
   // We always push 128-byte packages
   template <int unroll>
   inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    int lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-          ptr + u * wireMsgStep + local_off,
+          ptr + u * wireTransSize + local_off,
           messages[u]
       );
 #else
@@ -191,7 +187,8 @@ public:
 
   template <int unroll>
   inline void recvMessages(message_t (&messages)[unroll], T* ptr) {
-    int lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
 #   pragma unroll
@@ -199,7 +196,7 @@ public:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
           messages[u],
-          ptr + u * wireMsgStep + local_off
+          ptr + u * wireTransSize + local_off
       );
 #else
       (void) lid; (void) local_off;
@@ -216,7 +213,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireSrcStep;
+    constexpr auto eltPerPack = unroll * wireCapacity;
     //
     // register consumption:
     // 2 x unroll x NPeers;
@@ -270,7 +267,7 @@ public:
     auto inputOffInType = inputOffset / sizeof(T);
     auto sinkOffInType = sinkOffset / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireSrcStep;
+    constexpr auto eltPerPack = unroll * wireCapacity;
     if (nelems < eltPerPack) {
       loadInput(v, ioBuffer + inputOffInType, nelems);
     } else {
@@ -328,7 +325,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireSrcStep;
+    constexpr auto eltPerPack = unroll * wireCapacity;
 
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
@@ -354,19 +351,18 @@ public:
     }
   }
 
-private:
-  T (* const &scatterSink)[NPeers];
-  T (* const &gatherSink)[NPeers];
-  T (* const &localScatterSink)[NPeers];
-  T (* const &localGatherSink)[NPeers];
-  T* const ioBuffer; // point to workload of self
-  T (* const &ioForPeers)[NPeers]; // point to distributed workload
+protected:
+  T* scatterSink[NPeers];
+  T* gatherSink[NPeers];
+  T* localScatterSink[NPeers];
+  T* localGatherSink[NPeers];
+  T* ioBuffer; // point to workload of self
+  T* ioForPeers[NPeers]; // point to distributed workload
 
   uint32_t scatterStep;
   uint32_t gatherStep;
   int rank;
 
-  sycl::nd_item<1> pos;
 #if defined(__enable_sycl_stream__)
   sycl::stream cout;
 #endif
@@ -378,33 +374,24 @@ class SimpleTransmit {
   constexpr static int firstElem = 0;
   constexpr static int lastElem = nReg128B -1;
 
+protected:
   using message_t = sycl::vec<uint32_t, nReg128B>;
   // transaction of 128-byte is not atomic across HBM channel
   constexpr static int nChan8B = 8 / sizeof(message_t);
   constexpr static int lastDataChannel = SubGroupSize -nChan8B;
   constexpr static int firstFlagChannel = SubGroupSize/2 -1;
   constexpr static int lastFlagChannel = SubGroupSize -1;
-  constexpr static size_t wireSrcStep = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
-  constexpr static size_t wireMsgStep = SubGroupSize*sizeof(message_t)/sizeof(T);
+  constexpr static size_t wireCapacity = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
+  constexpr static size_t wireTransSize = SubGroupSize*sizeof(message_t)/sizeof(T);
 
 public:
   SimpleTransmit(
-      sycl::nd_item<1> pos,
-      T* const (& scatterSink)[NPeers],
-      T* const (& gatherSink)[NPeers],
-      T* const (& localScatterSink)[NPeers],
-      T* const (& localGatherSink)[NPeers],
-      T* const ioBuffer,
-      T* const (& ioForPeers)[NPeers],
-      uint32_t step,   // Serve as flag for checking
-      int rank
+      int rank,
+      uint32_t seqNo  // Serve as flag for checking
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : scatterSink(scatterSink),gatherSink(gatherSink),
-  localScatterSink(localScatterSink), localGatherSink(localGatherSink),
-  ioBuffer(ioBuffer), ioForPeers(ioForPeers),
-  scatterStep(step), gatherStep(step + 1), rank(rank), pos(pos)
+  ) : scatterStep(seqNo), gatherStep(seqNo + 1), rank(rank)
 #if defined(__enable_sycl_stream__)
   , cout(cout)
 #endif
@@ -419,13 +406,14 @@ public:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
     if (lid < lastDataChannel) { // TODO: diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireSrcStep + local_off;
+        auto off = i * wireCapacity + local_off;
         if (off < nElt) {        // TODO: condition branch !
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
           lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
@@ -444,13 +432,14 @@ public:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
     if (lid < lastDataChannel) { // XXX: diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireSrcStep + local_off;
+        auto off = i * wireCapacity + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
             v[i], src + off
@@ -503,7 +492,8 @@ public:
     }
 #else
     // Add flags at the middle and tail
-    int lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     if (lid == firstFlagChannel || lid == lastFlagChannel) {
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i)
@@ -575,12 +565,13 @@ public:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireSrcStep + local_off;
+        auto off = i * wireCapacity + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
             dst + off, v[i]
@@ -594,12 +585,13 @@ public:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Fixed diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireSrcStep + local_off;
+        auto off = i * wireCapacity + local_off;
         if (off < nElt) {        // XXX: runtime condition
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
           lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
@@ -612,14 +604,15 @@ public:
   // We always push 128-byte packages
   template <int unroll>
   inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    int lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-          ptr + u * wireMsgStep + local_off,
+          ptr + u * wireTransSize + local_off,
           messages[u]
       );
 #else
@@ -630,7 +623,8 @@ public:
 
   template <int unroll>
   inline void recvMessages(message_t (&messages)[unroll], T* ptr) {
-    int lid = pos.get_sub_group().get_local_id()[0];
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
 #   pragma unroll
@@ -638,7 +632,7 @@ public:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
           messages[u],
-          ptr + u * wireMsgStep + local_off
+          ptr + u * wireTransSize + local_off
       );
 #else
       (void) lid; (void) local_off;
@@ -655,7 +649,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireSrcStep;
+    constexpr auto eltPerPack = unroll * wireCapacity;
     //
     // register consumption:
     // 2 x unroll x NPeers;
@@ -714,7 +708,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
 
     auto inPtr = ioBuffer + inputOffInType;
-    constexpr auto eltPerPack = unroll * wireSrcStep;
+    constexpr auto eltPerPack = unroll * wireCapacity;
 
     if (nelems < eltPerPack) {
       loadInput(v, inPtr, nelems);
@@ -798,7 +792,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireSrcStep;
+    constexpr auto eltPerPack = unroll * wireCapacity;
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     int lane_id = sg.get_local_id();
 
@@ -829,19 +823,18 @@ public:
     }
   }
 
-private:
-  T* const (& scatterSink)[NPeers];
-  T* const (& gatherSink)[NPeers];
-  T* const (& localScatterSink)[NPeers];
-  T* const (& localGatherSink)[NPeers];
-  T* const ioBuffer; // point to workload of self
-  T* const (&ioForPeers)[NPeers]; // point to distributed workload
+protected:
+  T* scatterSink[NPeers];
+  T* gatherSink[NPeers];
+  T* localScatterSink[NPeers];
+  T* localGatherSink[NPeers];
+  T* ioBuffer; // point to workload of self
+  T* ioForPeers[NPeers]; // point to distributed workload
 
   uint32_t scatterStep;
   uint32_t gatherStep;
   int rank;
 
-  sycl::nd_item<1> pos;
 #if defined(__enable_sycl_stream__)
   sycl::stream cout;
 #endif

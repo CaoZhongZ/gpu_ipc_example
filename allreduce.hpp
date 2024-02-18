@@ -9,28 +9,27 @@ template <typename T,
          int NPeers,
          template <typename, int, int> class Transmit,
          int SubGroupSize = 16>
-struct AllReduce {
-  constexpr static int nReg128B = 128 / SubGroupSize / 4;
-  using message_t = sycl::vec<uint32_t, nReg128B>;
-
-  constexpr static int nChan8B = 8 / sizeof(message_t);
-  constexpr static int nDataChannel = SubGroupSize - nChan8B;
+struct AllReduce : public Transmit<T, NPeers, SubGroupSize> {
+  using Super = Transmit<T, NPeers, SubGroupSize>;
+  using message_t = typename Super::message_t;
   constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
-  constexpr static int wireCapacity = unroll * nDataChannel * sizeof(message_t);
-  constexpr static int wireTransSize = unroll * SubGroupSize * sizeof(message_t);
+  constexpr static int wireCapacity = Super::wireCapacity;
+  constexpr static int wireTransSize = Super::wireTransSize;
 
   AllReduce(
-      T* input, size_t nelems, int rank, uint32_t step,
+      T* input, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[]
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
   )
-  : workSize(calcWorkSize(input, nelems * sizeof(T))),
-  transmitSize(divUp(workSize, wireCapacity) * wireTransSize),
-  rank(rank), step(step),
-  ioBuffer(input + rank * workSize / sizeof(T))
+  : Transmit<T, NPeers, SubGroupSize>(rank, seqNo
+#if defined(__enable_sycl_stream__)
+      , sycl::stream cout
+#endif
+  ), workSize(calcWorkSize(input, nelems * sizeof(T))),
+  transmitSize(divUp(workSize, wireCapacity) * wireTransSize)
 #if defined(__enable_sycl_stream__)
     , cout(cout)
 #endif
@@ -40,21 +39,23 @@ struct AllReduce {
       else return rank;
     };
 
+    Super::ioBuffer = (input + rank * workSize / sizeof(T));
+
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       int next = (rank + i + 1) % (NPeers + 1);
 
-      scatterSink[i] = (T *)((uintptr_t)peerBuf0[next]
+      Super::scatterSink[i] = (T *)((uintptr_t)peerBuf0[next]
           + transmitSize * slotShift(rank, next));
-      gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
+      Super::gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
           + transmitSize * slotShift(rank, next));
 
-      localScatterSink[i] = (T *)((uintptr_t)scatterBuf
+      Super::localScatterSink[i] = (T *)((uintptr_t)scatterBuf
           + slotShift(next, rank) * transmitSize);
-      localGatherSink[i] = (T *)((uintptr_t)gatherBuf
+      Super::localGatherSink[i] = (T *)((uintptr_t)gatherBuf
           + slotShift(next, rank) * transmitSize);
 
-      ioForPeers[i] = input + next * workSize / sizeof(T);
+      Super::ioForPeers[i] = input + next * workSize / sizeof(T);
     }
   }
 
@@ -79,14 +80,6 @@ struct AllReduce {
   // Total cables will deliver the full capacity of single loop.
   //
   inline void stage2Test(sycl::nd_item<1> pos) const {
-    Transmit<T, NPeers, SubGroupSize> cable(
-        pos, scatterSink, gatherSink, localScatterSink, localGatherSink,
-        ioBuffer, ioForPeers, step, rank
-#if defined(__enable_sycl_stream__)
-        ,cout
-#endif
-    );
-
     auto groupRange = pos.get_group_range()[0];
     int subGroupRange = pos.get_sub_group().get_group_range()[0];
 
@@ -114,9 +107,9 @@ struct AllReduce {
 #endif
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
-        cable.template scatter<unroll>(wireOff, transOff, workLeft);
-        cable.template pollRecvReduceBcast<unroll>(wireOff, transOff, workLeft);
-        cable.template pollGatherOutputs<unroll>(wireOff, transOff, workLeft);
+        const_cast<AllReduce *>(this)->template scatter<unroll>(wireOff, transOff, workLeft);
+        const_cast<AllReduce *>(this)->template pollRecvReduceBcast<unroll>(wireOff, transOff, workLeft);
+        const_cast<AllReduce *>(this)->template pollGatherOutputs<unroll>(wireOff, transOff, workLeft);
       }
     }
   }
@@ -144,18 +137,9 @@ private:
     // TODO: Production logic needs every rank chunk
     return chunkSize * sizeof(message_t);
   }
+
   ssize_t workSize;
   size_t transmitSize;
-  int rank;
-  uint32_t step;
-
-  T* scatterSink[NPeers];
-  T* gatherSink[NPeers];
-  T* localScatterSink[NPeers];
-  T* localGatherSink[NPeers];
-
-  T* ioBuffer;
-  T* ioForPeers[NPeers];
 
 #if defined(__enable_sycl_stream__)
   sycl::stream cout;
