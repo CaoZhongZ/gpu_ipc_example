@@ -107,9 +107,12 @@ struct AllReduce : public Transmit<T, NPeers, SubGroupSize> {
 #endif
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
-        const_cast<AllReduce *>(this)->template scatter<unroll>(wireOff, transOff, workLeft);
-        const_cast<AllReduce *>(this)->template pollRecvReduceBcast<unroll>(wireOff, transOff, workLeft);
-        const_cast<AllReduce *>(this)->template pollGatherOutputs<unroll>(wireOff, transOff, workLeft);
+        const_cast<AllReduce *>(this)->
+          template scatter<unroll>(wireOff, transOff, workLeft);
+        const_cast<AllReduce *>(this)->
+          template pollRecvReduceBcast<unroll>(wireOff, transOff, workLeft);
+        const_cast<AllReduce *>(this)->
+          template pollGatherOutputs<unroll>(wireOff, transOff, workLeft);
       }
     }
   }
@@ -146,15 +149,15 @@ private:
 #endif
 };
 
-template <typename T>
-sycl::event testSimpleTransmit(
+template <typename T, template <typename, int, int> class Transmit>
+sycl::event testTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue
 );
 
-template <typename T>
+template <typename T, template <typename, int, int> class Transmit>
 int verifyTransmit(
     T* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );

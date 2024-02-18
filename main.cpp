@@ -143,7 +143,7 @@ int main(int argc, char* argv[]) {
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-  /*auto e =*/ testSimpleTransmit<test_type>(
+  /*auto e =*/ testTransmit<test_type, SimpleTransmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag, simd, queue
@@ -152,7 +152,7 @@ int main(int argc, char* argv[]) {
   MPI_Barrier(MPI_COMM_WORLD);
   // extract_profiling<test_type>(e);
 
-  /* auto e1 =*/ testSimpleTransmit<test_type>(
+  /* auto e1 =*/ testTransmit<test_type, SimpleTransmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 2, simd, queue
@@ -164,7 +164,7 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  auto e2 = testSimpleTransmit<test_type>(
+  auto e2 = testTransmit<test_type, SimpleTransmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 4, simd, queue
@@ -172,7 +172,7 @@ int main(int argc, char* argv[]) {
   extract_profiling<test_type>(e2);
 
   queue.memcpy(host_verify, ipcbuf1, interm_size).wait();
-  return verifyTransmit<test_type>(
+  return verifyTransmit<test_type, SimpleTransmit>(
       host_verify, flag, rank, world, simd, nelems
   );
 }

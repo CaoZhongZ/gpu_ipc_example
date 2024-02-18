@@ -1,6 +1,5 @@
-#include "transmit.hpp"
-#include "allreduce.hpp"
 #include "utils.hpp"
+#include "allreduce.hpp"
 
 template <typename T,
          int NPeers,
@@ -140,7 +139,7 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
   return 0;
 }
 
-template<typename T>
+template<typename T, template <typename, int, int> class Transmit>
 int verifyTransmit(
     T* host, uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
@@ -148,17 +147,17 @@ int verifyTransmit(
     constexpr int SubGroupSize = 16;
     switch(world) {
     case 2:
-      return AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+      return AllReduce<T, 2 -1, Transmit, SubGroupSize>::stage2Verify(
           host, rank, step, nelems
       );
       break;
     case 4:
-      return AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+      return AllReduce<T, 4 -1, Transmit, SubGroupSize>::stage2Verify(
           host, rank, step, nelems
       );
       break;
     case 8:
-      return AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+      return AllReduce<T, 8 -1, Transmit, SubGroupSize>::stage2Verify(
           host, rank, step, nelems
       );
       break;
@@ -169,17 +168,17 @@ int verifyTransmit(
     constexpr int SubGroupSize = 32;
     switch(world) {
     case 2:
-      return AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+      return AllReduce<T, 2 -1, Transmit, SubGroupSize>::stage2Verify(
           host, rank, step, nelems
       );
       break;
     case 4:
-      return AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+      return AllReduce<T, 4 -1, Transmit, SubGroupSize>::stage2Verify(
           host, rank, step, nelems
       );
       break;
     case 8:
-      return AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>::stage2Verify(
+      return AllReduce<T, 8 -1, Transmit, SubGroupSize>::stage2Verify(
           host, rank, step, nelems
       );
       break;
@@ -193,7 +192,8 @@ int verifyTransmit(
 // We will remove sycl::event return in real API call.
 // It's for test only.
 //
-template <typename T> sycl::event testSimpleTransmit(
+template <typename T, template <typename, int, int> class Transmit>
+sycl::event testTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
@@ -208,7 +208,7 @@ template <typename T> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>(
+          AllReduce<T, 2 -1, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -224,7 +224,7 @@ template <typename T> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>(
+          AllReduce<T, 4 -1, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -240,7 +240,7 @@ template <typename T> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>(
+          AllReduce<T, 8 -1, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -262,7 +262,7 @@ template <typename T> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 2 -1, SimpleTransmit, SubGroupSize>(
+          AllReduce<T, 2 -1, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -278,7 +278,7 @@ template <typename T> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 4 -1, SimpleTransmit, SubGroupSize>(
+          AllReduce<T, 4 -1, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -294,7 +294,7 @@ template <typename T> sycl::event testSimpleTransmit(
 #endif
         cgh.parallel_for(
           launchParam,
-          AllReduce<T, 8 -1, SimpleTransmit, SubGroupSize>(
+          AllReduce<T, 8 -1, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -310,25 +310,25 @@ template <typename T> sycl::event testSimpleTransmit(
   }
 }
 
-template sycl::event testSimpleTransmit<sycl::half>(
+template sycl::event testTransmit<sycl::half, SimpleTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 
 template
-int verifyTransmit<sycl::half>(
+int verifyTransmit<sycl::half, SimpleTransmit>(
     sycl::half* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );
 /* disabled temporarily for saving compile time
-template sycl::event testSimpleTransmit<float>(
+template sycl::event testTransmit<float, SimpleTransmit>(
     sycl::nd_range<1> launchParam,
     float* input, float* ipcbuf0, float* ipcbuf1,
     float* const peerbuf0[], float* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 
 template
-int verifyTransmit<float>(
+int verifyTransmit<float, SimpleTransmit>(
     float* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );
 */

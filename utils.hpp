@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstddef>
+
 template <typename F>
 class __scope_guard {
   F f;

@@ -16,7 +16,7 @@ LIBRARIES=-lmpi -lze_loader
 
 CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) $(VERBOSE) -Wall -Wno-vla-cxx-extension $(INCLUDES) $(LIBRARIES)
 
-main : main.cpp ipc_exchange.cpp sycl_misc.cpp transmit.cpp
+main : main.cpp ipc_exchange.cpp sycl_misc.cpp allreduce.cpp
 
 all : main
 
