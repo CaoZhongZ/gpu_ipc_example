@@ -41,6 +41,9 @@ void extract_profiling(sycl::event e) {
   std::cout<<"Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
+#define test_transmit smallTransmit
+using test_type = sycl::half;
+
 int main(int argc, char* argv[]) {
   cxxopts::Options opts(
       "GPU IPC access",
@@ -79,9 +82,6 @@ int main(int argc, char* argv[]) {
   int rank, world;
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-
-  using test_type = sycl::half;
-  template <typename, int, int> using test_transmit = Transmit;
 
   size_t alloc_size = nelems * sizeof(test_type);
   size_t interm_size = 32 * 1024 * 1024; // fix at 32M for now.

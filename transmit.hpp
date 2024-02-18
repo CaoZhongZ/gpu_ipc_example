@@ -17,8 +17,8 @@ protected:
   static constexpr int dataElem = 0;
   static constexpr int flagElem = 1;
 
-  constexpr static int wireCapacity = SubGroupSize * sizeof(message_t) / 2;
-  constexpr static int wireTransSize = SubGroupSize * sizeof(message_t);
+  constexpr static int wireCapacity = SubGroupSize * sizeof(message_t) / 2 / sizeof(T);
+  constexpr static int wireTransSize = SubGroupSize * sizeof(message_t) / sizeof(T);
 
 public:
   smallTransmit(
@@ -35,7 +35,7 @@ public:
 
   // load first row of registers
   template <int unroll> inline void loadInput(
-      message_t (&v)[unroll], T* src, int nElt
+      message_t (&v)[unroll], T* const src, int nElt
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
@@ -48,11 +48,11 @@ public:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.ca.ca (M1, 16) %0:d32 flat[%1]:a64\n"
+              "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
         else
           asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.ca.ca (M1, 32) %0:d32 flat[%1]:a64\n"
+              "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
         v[i][0] = src[off];
@@ -73,11 +73,11 @@ public:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.ca.ca (M1, 16) %0:d32 flat[%1]:a64\n"
+            "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
       else
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.ca.ca (M1, 32) %0:d32 flat[%1]:a64\n"
+            "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
       v[i][0] = src[off];
@@ -128,11 +128,11 @@ public:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
-            "lsc_store.ugm.ca.ca (M1, 16) flat[%0]:a64 %1:d32\n"
+            "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[i][dataElem]));
       else
         asm volatile ("\n"
-            "lsc_store.ugm.ca.ca (M1, 32) flat[%0]:a64 %1:d32\n"
+            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[i][dataElem]));
 #else
       dst[off] = v[i][0];
@@ -153,11 +153,11 @@ public:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n"
-              "lsc_store.ugm.ca.ca (M1, 16) flat[%0]:a64 %1:d32\n"
+              "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
               :: "rw"(dst + off), "rw"(v[i][dataElem]));
         else
           asm volatile ("\n"
-              "lsc_store.ugm.ca.ca (M1, 32) flat[%0]:a64 %1:d32\n"
+              "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
               :: "rw"(dst + off), "rw"(v[i][dataElem]));
 #else
       dst[off] = v[i][dataElem];
@@ -342,6 +342,11 @@ public:
         }
       } while(sycl::any_of_group(sg, retry));
 
+#if defined(__enable_sycl_stream__)
+      if (sg.get_local_id() == 0)
+        cout<<"["<<rank<<"] Message: "<<sycl::hex<<messages[0][1]
+          <<sycl::endl<<sycl::flush;
+#endif
       auto* ptr = ioForPeers[i] + inputOffInType;
 
       if (nelems < eltPerPack)

@@ -1,7 +1,7 @@
 CC=clang
 CXX=clang++
 
-OPT=-O3 -fno-strict-aliasing
+OPT=-O3 -fno-strict-aliasing -g
 # OPT=-g -fno-strict-aliasing
 # VERBOSE=-D__enable_sycl_stream__
 

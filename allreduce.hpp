@@ -26,7 +26,7 @@ struct AllReduce : public Transmit<T, NPeers, SubGroupSize> {
   )
   : Transmit<T, NPeers, SubGroupSize>(rank, seqNo
 #if defined(__enable_sycl_stream__)
-      , sycl::stream cout
+      , cout
 #endif
   ), workSize(calcWorkSize(input, nelems * sizeof(T))),
   transmitSize(divUp(workSize, wireCapacity) * wireTransSize)
