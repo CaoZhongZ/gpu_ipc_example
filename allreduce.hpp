@@ -149,6 +149,107 @@ private:
 #endif
 };
 
+// New AllReduce API will be here
+template <typename T,
+         int NRanks,
+         template <typename, int, int> class Transmit,
+         int SubGroupSize = 16>
+struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
+  using Super = Transmit<T, NRanks, SubGroupSize>;
+  using message_t = typename Super::message_t;
+  constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
+  constexpr static int wireCapacity = Super::wireCapacity;
+  constexpr static int wireTransSize = Super::wireTransSize;
+
+  AllReduce(
+      T* input, size_t nelems, int rank, uint32_t seqNo,
+      T* scatterBuf, T* gatherBuf,
+      T* const peerBuf0[], T* const peerBuf1[]
+#if defined(__enable_sycl_stream__)
+      , sycl::stream cout
+#endif
+  ) : Transmit<T, NPeers, SubGroupSize>(input, scatterBuf, gatherBuf,
+      peerBuf0, peerBuf1, calcWorkSize(input, nelems * sizeof(T)),
+      divUp(workSize, wireCapacity) * wireTransSize, rank, seqNo
+#if defined(__enable_sycl_stream__)
+      , sycl::stream cout
+#endif
+  ), workSize(calcWorkSize(input, nelems * sizeof(T)))
+#if defined(__enable_sycl_stream__)
+    , cout(cout)
+#endif
+  {}
+
+  // Calculate which slot 'rank' take at 'peer''s sink buffer
+  static int slot(int rank, int peer) {
+    if (rank > peer) return rank -1;
+    else return rank;
+  }
+
+  static int stageVerify(
+      T* host, int rank, uint32_t flag, size_t nWorkElemsInInt
+  );
+
+  void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
+      sycl::nd_item<1> pos
+  ) const {
+    auto groupRange = pos.get_group_range()[0];
+    int subGroupRange = pos.get_sub_group().get_group_range()[0];
+
+    auto cableCapacity = wireCapacity * subGroupRange;
+    auto cableTSize = wireTransSize * subGroupRange;
+
+    auto groupId = pos.get_group().get_group_id()[0];
+    auto subGroupId = pos.get_sub_group().get_group_id()[0];
+
+    auto loopSize = groupRange * cableCapacity;
+    auto loopTSize = groupRange * cableTSize;
+
+    for (size_t gOff = 0, tOff = 0;
+        gOff < workSize; gOff += loopSize, tOff += loopTSize) {
+      auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
+      auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
+
+#if defined(__enable_sycl_stream__)
+      auto local_id = pos.get_sub_group().get_local_id()[0];
+      if (local_id == 0 && groupId == 0)
+        cout<<"["<<groupId<<", "<<subGroupId
+          <<"] loopSize:"<<loopSize
+          <<", wireOff:"<<wireOff<<"; "
+          <<", transOff:"<<transOff<<"; "<<sycl::endl;
+#endif
+      ssize_t workLeft = workSize - wireOff;
+      if (workLeft > 0) {
+        const_cast<AllReduce *>(this)->
+          template run<unroll>(wireOff, transOff, workLeft);
+      }
+    }
+  }
+
+private:
+  // TODO: buffer plan and start point calc
+  static size_t calcWorkSize(T* input, size_t size) {
+    // Input must be message size align
+    if ((uintptr_t)input % sizeof(message_t) != 0)
+      throw std::logic_error("We only support aligned pointer for now");
+
+    auto nChunks = NPeers + 1;
+    auto octSize = divUp(size, sizeof(message_t));
+    auto chunkSize = divUp(octSize, nChunks);
+
+    if (octSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
+      throw std::logic_error("We don't support non-even divide yet");
+
+    // TODO: Production logic needs every rank chunk
+    return chunkSize * sizeof(message_t);
+  }
+
+  ssize_t workSize;
+#if defined(__enable_sycl_stream__)
+  sycl::stream cout;
+#endif
+};
+
 template <typename T, template <typename, int, int> class Transmit>
 sycl::event testTransmit(
     sycl::nd_range<1> launchParam,

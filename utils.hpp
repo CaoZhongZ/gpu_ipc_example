@@ -15,3 +15,8 @@ void fill_pattern(T *input, int rank, size_t n) {
   for (int i = 0; i < n; ++ i)
     input[i] = (T)((i % 32) * (rank + 1));
 }
+
+int slot(int rank, int peer) {
+  if (rank > peer) return rank -1;
+  else return rank;
+}

@@ -1,7 +1,9 @@
 #pragma once
 
-template <typename T, int NPeers, int SubGroupSize>
-class SimpleTransmit {
+template <typename T, int NRanks, int SubGroupSize>
+class bisectTransmit {
+  constexpr static int BiNRanks = NRanks / 2;
+  constexpr static int NPeers = BiNRanks -1;
   constexpr static int nReg128B = 128 / SubGroupSize / 4;
   constexpr static int firstElem = 0;
   constexpr static int lastElem = nReg128B -1;
@@ -16,25 +18,8 @@ protected:
   constexpr static size_t wireCapacity = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
   constexpr static size_t wireTransSize = SubGroupSize*sizeof(message_t)/sizeof(T);
 
-public:
-  SimpleTransmit(
-      int rank,
-      uint32_t seqNo  // Serve as flag for checking
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
-  ) : scatterStep(seqNo), gatherStep(seqNo + 1), rank(rank)
-#if defined(__enable_sycl_stream__)
-  , cout(cout)
-#endif
-  {}
-
-  //
-  // Process of pack messages
-  // 1. multiple load inputs (16 round maximum)
-  // 2. Insert flags at the 16th lane
-  // 3. Shuffle flag into the middle of second register
-  //
+private:
+  // factor basic communication into another class
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
@@ -260,7 +245,6 @@ public:
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
     bool retry = false;
-
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
@@ -277,19 +261,6 @@ public:
     return retry;
   }
 
-  inline void recvMessage(message_t &message, T* ptr) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(message_t) / sizeof(T);
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-        messages[u], ptr + local_off
-    );
-#else
-    (void) lid; (void) local_off;
-#endif
-  }
-
   template <int unroll> inline accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
@@ -300,10 +271,9 @@ public:
     for (u = 0; u < unroll; ++ u)
       arith_v[u] += arith_m;
   }
+public:
 
-  // Scatter local message to peers
-  template <int unroll>
-  inline void scatter(
+  template <int unroll> inline void scatterFar(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
@@ -311,48 +281,76 @@ public:
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireCapacity;
-    //
-    // register consumption:
-    // 2 x unroll x NPeers;
-    //
-    // SWSB consumption:
-    // unroll * NPeers;
-    //
-    static_assert(unroll * NPeers * 2 < 64, "Too many registers consumed");
-    static_assert(NPeers * 2 < 16, "Too many swsb consumed");
-    message_t messages[NPeers][unroll];
+
+    message_t messages[BiNRanks][unroll];
 
     if (nelems < eltPerPack) {
-#     pragma unroll
-      for (int i = 0; i < NPeers; ++ i) {
-        auto* ptr = ioForPeers[i] + inputOffInType;
+      for (int i = 0; i < BiNRanks; ++ i) {
+        auto *ptr = ioForFar[i] + inputOffInType;
         loadInput(messages[i], ptr, nelems);
       }
     } else {
-      // Fast path. No predicated load
-#     pragma unroll
-      for (int i = 0; i < NPeers; ++ i) {
-        auto* ptr = ioForPeers[i] + inputOffInType;
+      for (int i = 0; i < BiNRanks; ++ i) {
+        auto *ptr = ioForFar[i] + inputOffInType;
         loadInput(messages[i], ptr);
       }
     }
 
 #   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
+    for (int i = 0; i < BiNRanks; ++ i) {
       shuffleData(messages[i]);
-      insertFlags(messages[i], scatterStep);
-
-      auto* dst = scatterSink[i] + sinkOffInType;
+      insertFlags(messages[i], farScatterStep);
+      auto* dst = farScatterSink[i] + sinkOffInType;
       sendMessages(dst, messages[i]);
     }
   }
 
-  template <int unroll>
-  inline void pollRecvReduceBcast(
+  template <int unroll> inline void closePollReduceScatter(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
-    message_t v[unroll];        // Input
-    message_t messages[unroll]; // Scraps from remote
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto nelems = workLeft / sizeof(T);
+    constexpr auto eltPerPack = unroll * wireCapacity;
+
+    message_t v[NPeers][unroll];
+
+    // Load all locals
+    if (nelems < eltPerPack)
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i)
+        loadInput(v[i], ioForPeers[i] + inputOffInType, nelems);
+    else
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i)
+        loadInput(v[i], ioForPeers[i] + inputOffInType);
+
+    // Poll, reduce and send to close remotes
+#   pragma unroll
+    for (int i = 0; i < NPeers; ++ i) {
+      message_t messages[unroll];
+
+      bool retry;
+      do {
+        retry = false;
+        retry |= recvMessages(
+            messages, localBiScatterSink[i] + sinkOffInType, farScatterStep);
+      } while(sycl::any_of_group(sg, retry))
+
+      shuffleData(v[i]);
+      accumMessages(v[i], messages);
+      insertFlags(v[i], closeScatterStep);
+
+      sendMessages(scatterSink[i] + sinkOffInType, v[i]);
+    }
+  }
+
+  template <int unroll>
+  inline void closePollRecvReduceBcast(
+      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
+  ) {
+    message_t v[unroll];  //input
+    message_t messages[unroll];
 
     auto nelems = workLeft / sizeof(T);
     auto inputOffInType = inputOffset / sizeof(T);
@@ -367,76 +365,44 @@ public:
       loadInput(v, inPtr);
     }
 
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    int lane_id = sg.get_local_id();
+    bool retry;
+    do {
+      retry = false;
+      retry |= recvMessages(
+          messages, localFarScatterSink0 + sinkOffInType, farScatterStep);
+    } while (sycl::any_of_group(sg, retry));
 
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
-      auto flag = scatterStep;
+    shuffleData(v);
+    accumMessages(v, messages);
+
+    for (int i =0; i < NPeers; ++ i) {
       bool retry;
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages, localScatterSink[i] + sinkOffInType);
-          retry |=
-            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
-            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
-        }
-      } while(sycl::any_of_group(sg, retry));
-
-#if defined(__enable_sycl_stream__)
-      if (lane_id == firstFlagChannel || lane_id == lastFlagChannel) {
-        cout<<"["<<rank<<","<<lane_id<<"]";
-        for (int u = 0; u < unroll; ++ u)
-          cout<<sycl::hex<<messages[u]<<"; ";
-        cout<<sycl::endl<<sycl::flush;
-      }
-#endif
-
-      restoreData(messages);
-
-#if 1 //!defined(__SYCL_DEVICE_ONLY__)
-      using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
-      auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
-      auto arith_m = reinterpret_cast<math_t (&)[unroll]>(messages);
-#endif
-
-      if (lane_id < lastDataChannel) {  // XXX: Fixed diverge
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-#if 0// defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          v[u] = addAs<T, SubGroupSize>(v[u], messages[u]);
-#else
-//           if (lane_id == 0 && u == 0) {
-//             cout<<"["<<rank<<"]v:"<<arith_v[0]
-//               <<", m:"<<arith_m[0]
-//               <<sycl::endl<<sycl::flush;
-//           }
-          arith_v[u] += arith_m[u];
-#endif
-        }
-      }
+        retry |= recvMessages(
+            messages, localScatterSink[i] + sinkOffInType, closeScatterStep);
+      } while (sycl::any_of_group(sg, retry));
+      accumMessages(v, messages);
     }
 
-    // write back locally before shuffle data
+    insertFlags(v, localGatherStep);
+    sendMessages(farGatherSink0 + sinkOffInType, v);
+
+#   pragma unroll
+    for (int i = 0; i < NPeers; ++ i)
+      sendMessages(gatherSink[i] + sinkOffInType, v);
+
+    restoreData(v);
+
+    // write back to ioBuffer
     if (nelems < eltPerPack) {
       storeOutput(inPtr, v, nelems);
     } else {
       storeOutput(inPtr, v);
     }
-
-    shuffleData(v);
-    insertFlags(v, gatherStep);
-
-    // push to gather sink
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i)
-      sendMessages(gatherSink[i] + sinkOffInType, v);
   }
 
-  template <int unroll>
-  inline void pollGatherOutputs(
+  template <int unroll> inline void pollGatherOutputs(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
@@ -444,8 +410,6 @@ public:
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireCapacity;
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    int lane_id = sg.get_local_id();
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
@@ -454,19 +418,15 @@ public:
       message_t messages[unroll];
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages, localGatherSink[i] + sinkOffInType);
-          retry |=
-            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
-            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
-        }
+        retry |= recvMessage(
+            messages, localGatherSink[i] + sinkOffInType, localGatherStep);
       } while(sycl::any_of_group(sg, retry));
 
-      auto ptr = ioForPeers[i] + inputOffInType;
+      sendMessages(farGatherSink[i] + inputOffInType, messages);
 
       restoreData(messages);
 
+      auto* ptr = ioForPeers[i] + inputOffInType;
       if (nelems < eltPerPack)
         storeOutput(ptr, messages, nelems);
       else
@@ -474,17 +434,184 @@ public:
     }
   }
 
+  template <int unroll> inline void pollFarGatherOutput(
+      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
+  ) {
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto nelems = workLeft / sizeof(T);
+
+    constexpr auto eltPerPack = unroll * wireCapacity;
+
+#   pragma unroll
+    for (int i = 0; i < NiNRanks; ++ i) {
+      message_t messages[unroll];
+      bool retry;
+      do {
+        retry = false;
+        retry |= recvMessages(
+            messages, localFarGatherSink[i] + sinkOffInType, localGatherStep);
+      } while(sycl::any_of_group(sg, retry))
+
+      restoreData(messages);
+
+      if (nelems < eltPerPack)
+        storeOutput(ioForFar[i] + inputOffInType, messages, nelems);
+      lese
+        storeOutput(ioForFar[i] + inputOffInType, messages);
+    }
+  }
+
+  // Single thread, no coorperation
+  inline void run(
+      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
+  ) {
+    scatterFar(inputOffset, sinkOffset, workLeft);
+  }
+
 protected:
+  bisectTransmit(
+      T* input,
+      T* scatterBuf, T* gatherBuf,
+      T* const peerBuf0[], T* const peerBuf1[],
+      size_t workSize, size_t transmitSize,
+      int rank, uint32_t seqNo
+#if defined(__enable_sycl_stream__)
+      , sycl::stream cout
+#endif
+  ) : farScatterStep(seqNo), closeScatterStep(seqNo + 1), closeGatherStep(seqNo + 2),
+  rank(rank), l_rank(rank/2)
+#if defined(__enable_sycl_stream__)
+      , cout(cout)
+#endif
+  {
+    auto pairRank = rank ^ 1;
+
+    auto* pairBuf0 = peerBuf0[pairRank];
+    auto* pairBuf1 = peerBuf1[pairRank];
+
+    T* ioClosePart = [&](T* p) {
+      return (rank & 1) ? (T *)((uintptr_t)p + workSize * BiNRanks) : p;
+    }
+    T* ioFarPart = [&](T* p) {
+      return (rank & 1) ? p : (T *)((uintptr_t)p + workSize * BiNRanks);
+    }
+
+    T* ipcClosePart = [&](T *p) {
+      return p;
+    }
+    T* ipcFarPart = [&](T* p) {
+      return (T *)((uintptr_t)p + transmitSize * BiNRanks);
+    }
+
+    ioBuffer = (T *)((uintptr_t)ioCloseAjust(input) + l_rank * workSize);
+    farGatherSink0 = (T *)((uintptr_t)ipcFarPart(pairBuf1)
+        + l_rank * transmitSize);
+    localFarScatterSink0 = (T *)((uintptr_t)ipcFarPart(scatterBuf)
+        + l_rank * transmitSize);
+
+    for (int i = 0; i < NPeers; ++ i) {
+      int l_next = (l_rank + i + 1) % BiNRanks;
+      int next = (rank + i + 2) % (2 * BiNRanks);
+
+      ioForPeers[i] = (T *)((uintptr_t)ioClosePart(input)
+          + l_next * workSize);
+
+      localScatterSink[i] = (T *)((uintptr_t)ipcClosePart(scatterBuf)
+          + l_next * transmitSize);
+      localGatherSink[i] = (T *)((uintptr_t)ipcClosePart(gatherBuf)
+          + l_next * transmitSize);
+
+      scatterSink[i] = (T *)((uintptr_t)ipcClosePart(ipcBuf0[next])
+          + l_rank * transmitSize);
+      gatherSink[i] = (T *)((uintptr_t)ipcClosePart(ipcBuf1[next])
+          + l_rank * transmitSize);
+
+      farGatherSink[i] = (T *)((uintptr_t)ipcFarPart(pairBuf1)
+          + l_next * transmitSize);
+      localFarScatterSink[i] = (T *)((uintptr_t)ipcFarPart(scatterBuf)
+          + l_next * transmitSize);
+    }
+
+    for (int i = 0; i < BiNRanks; ++ i) {
+      int l_next = (l_rank + i) % BiNRanks;
+
+      ioForFar[i] = (T *)((uintptr_t)ioFarPart(input)
+          + l_next * workSize);
+      farScatterSink[i] = (T *)((uintptr_t)ipcFarPart(pairBuf0)
+          + l_next * transmitSize);
+      localFarGatherSink[i] = (T *)((uintptr_t)ipcFarPart(gatherBuf)
+          + l_next * transmitSize);
+    }
+  }
+
+  void dumpOffsets() const {
+    std::cout<<std::hex<<"IO offsets: "<<ioBuffer - input;
+
+    for (int i = 0; i < NPeers; ++ i)
+      std::cout<<", "<<ioForPeers[i] - input;
+    for (int i = 0; i < BiNRanks; ++ i)
+      std::cout<<", "<<ioForFar[i] - input;
+
+    std::cout<<"\nLocal IPC sink offsets: "<<localFarScatterSink0 - scatterBuf;
+    for (int i = 0; i < NPeers; ++ i)
+      std::cout<<", "<<localFarScatterSink[i] - scatterBuf;
+    for (int i = 0; i < BiNRanks; ++ i)
+      std::cout<<", "<<localFarGatherSink[i] - gatherBuf;
+
+    for (int i = 0; i < NPeers; ++ i)
+      std::cout<<", "<<localScatterSink[i] - scatterBuf;
+    for (int i = 0; i < NPeers; ++ i)
+      std::cout<<", "<<localGatherSink[i] - gatherBuf;
+
+    std::cout<<"\nIPC far offsets: "
+
+    for (int i = 0; i < BiNRanks; ++ i)
+      std::cout<<farScatterSink[i] - ipcBuf0[rank ^ 1]<<", ";
+
+    std::cout<<farGatherSink0 - ipcBuf1[rank ^ 1];
+    for (int i = 0; i < NPeers; ++ i)
+      std::cout<<", "<<farGatherSink[i] - ipcBuf1[rank ^ 1]<<;
+
+    std::cout<<"\nIPC close offsets: ";
+    for (int i = 0;i < NPeers; ++ i)
+      std::cout<<scatterSink[i] - ipcBuf0[(l_rank + i + 1) % BiNRanks]<<", ";
+    for (int i = 0;i < NPeers; ++ i)
+      std::cout<<gatherSink[i] - ipcBuf1[(l_rank + i + 1) % BiNRanks]<<", ";
+  }
+
+  // --------------------Input/Output buffer-------------------
+  // Partition close
+  T* ioBuffer;
+  T* ioForPeers[NPeers];
+
+  // Partition Far
+  T* ioForFar[BiNRanks];
+
+  // ---------------------IPC buffers-------------------------
+  T* farScatterSink[BiNRanks];
+
+  T* farGatherSink0;
+  T* farGatherSink[NPeers];
+
   T* scatterSink[NPeers];
   T* gatherSink[NPeers];
+
+  // ----------------Sinks, written by remotes----------------
+  T* localFarScatterSink0;
+  T* localFarScatterSink[NPeers];
+  T* localFarGatherSink[BiNRanks];
+
   T* localScatterSink[NPeers];
   T* localGatherSink[NPeers];
-  T* ioBuffer; // point to workload of self
-  T* ioForPeers[NPeers]; // point to distributed workload
 
-  uint32_t scatterStep;
-  uint32_t gatherStep;
+  uint32_t farScatterStep;
+  uint32_t closeScatterStep;
+  uint32_t closeGatherStep;
+
   int rank;
+  int l_rank;
+  uint32_t seqNo;
 
 #if defined(__enable_sycl_stream__)
   sycl::stream cout;
