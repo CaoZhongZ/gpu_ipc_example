@@ -283,22 +283,22 @@ public:
     int local_off = lid * sizeof(message_t) / sizeof(T);
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-        messages[u], ptr + local_off
+        message, ptr + local_off
     );
 #else
     (void) lid; (void) local_off;
 #endif
   }
 
-  template <int unroll> inline accumMessages(
+  template <int unroll> inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
-    auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v[i]);
-    auto arith_m = reinterpret_cast<math_t (&)[unroll]>(messages);
+    auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
+    auto arith_m = reinterpret_cast<math_t (&)[unroll]>(m);
 #   pragma unroll
-    for (u = 0; u < unroll; ++ u)
-      arith_v[u] += arith_m;
+    for (int u = 0; u < unroll; ++ u)
+      arith_v[u] += arith_m[u];
   }
 
   // Scatter local message to peers
@@ -378,7 +378,7 @@ public:
         retry = false;
 #       pragma unroll
         for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages, localScatterSink[i] + sinkOffInType);
+          recvMessage(messages[u], localScatterSink[i] + sinkOffInType);
           retry |=
             (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
             || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
@@ -456,7 +456,7 @@ public:
         retry = false;
 #       pragma unroll
         for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages, localGatherSink[i] + sinkOffInType);
+          recvMessage(messages[u], localGatherSink[i] + sinkOffInType);
           retry |=
             (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
             || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);

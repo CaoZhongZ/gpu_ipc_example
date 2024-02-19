@@ -161,16 +161,17 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   constexpr static int wireCapacity = Super::wireCapacity;
   constexpr static int wireTransSize = Super::wireTransSize;
 
-  AllReduce(
+  bisectAllReduce(
       T* input, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[]
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : Transmit<T, NPeers, SubGroupSize>(input, scatterBuf, gatherBuf,
+  ) : Super(input, scatterBuf, gatherBuf,
       peerBuf0, peerBuf1, calcWorkSize(input, nelems * sizeof(T)),
-      divUp(workSize, wireCapacity) * wireTransSize, rank, seqNo
+      divUp(calcWorkSize(input, nelems * sizeof(T)),wireCapacity) * wireTransSize,
+      rank, seqNo
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
@@ -179,12 +180,6 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
     , cout(cout)
 #endif
   {}
-
-  // Calculate which slot 'rank' take at 'peer''s sink buffer
-  static int slot(int rank, int peer) {
-    if (rank > peer) return rank -1;
-    else return rank;
-  }
 
   static int stageVerify(
       T* host, int rank, uint32_t flag, size_t nWorkElemsInInt
@@ -220,8 +215,8 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
 #endif
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
-        const_cast<AllReduce *>(this)->
-          template run<unroll>(wireOff, transOff, workLeft);
+        const_cast<bisectAllReduce *>(this)->
+          template scatterFar<unroll>(wireOff, transOff, workLeft);
       }
     }
   }
@@ -233,7 +228,7 @@ private:
     if ((uintptr_t)input % sizeof(message_t) != 0)
       throw std::logic_error("We only support aligned pointer for now");
 
-    auto nChunks = NPeers + 1;
+    auto nChunks = NRanks;
     auto octSize = divUp(size, sizeof(message_t));
     auto chunkSize = divUp(octSize, nChunks);
 

@@ -41,7 +41,7 @@ void extract_profiling(sycl::event e) {
   std::cout<<"Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
-#define test_transmit smallTransmit
+#define test_transmit bisectTransmit
 using test_type = sycl::half;
 
 int main(int argc, char* argv[]) {
