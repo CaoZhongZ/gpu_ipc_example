@@ -173,9 +173,9 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       divUp(calcWorkSize(input, nelems * sizeof(T)),wireCapacity) * wireTransSize,
       rank, seqNo
 #if defined(__enable_sycl_stream__)
-      , sycl::stream cout
+      , cout
 #endif
-  ), workSize(calcWorkSize(input, nelems * sizeof(T)))
+      ), workSize(calcWorkSize(input, nelems * sizeof(T)))
 #if defined(__enable_sycl_stream__)
     , cout(cout)
 #endif
