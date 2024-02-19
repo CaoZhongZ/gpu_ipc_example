@@ -15,8 +15,12 @@ protected:
   constexpr static int lastDataChannel = SubGroupSize -nChan8B;
   constexpr static int firstFlagChannel = SubGroupSize/2 -1;
   constexpr static int lastFlagChannel = SubGroupSize -1;
-  constexpr static size_t wireCapacity = (SubGroupSize-nChan8B)*sizeof(message_t)/sizeof(T);
-  constexpr static size_t wireTransSize = SubGroupSize*sizeof(message_t)/sizeof(T);
+
+  constexpr static int wireCapacity = (SubGroupSize-nChan8B) * sizeof(message_t);
+  constexpr static int wireTransSize = SubGroupSize * sizeof(message_t);
+
+  constexpr static size_t wireElems = wireCapacity /sizeof(T);
+  constexpr static size_t wireTransElems = wireTransSize /sizeof(T);
 
 private:
   // factor basic communication into another class
@@ -30,7 +34,7 @@ private:
     if (lid < lastDataChannel) { // TODO: diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireCapacity + local_off;
+        auto off = i * wireElems + local_off;
         if (off < nElt) {        // TODO: condition branch !
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
           lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
@@ -56,7 +60,7 @@ private:
     if (lid < lastDataChannel) { // XXX: diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireCapacity + local_off;
+        auto off = i * wireElems + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
             v[i], src + off
@@ -188,7 +192,7 @@ private:
     if (lid < lastDataChannel) { // XXX: Diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireCapacity + local_off;
+        auto off = i * wireElems + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
             dst + off, v[i]
@@ -208,7 +212,7 @@ private:
     if (lid < lastDataChannel) { // XXX: Fixed diverge
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
-        auto off = i * wireCapacity + local_off;
+        auto off = i * wireElems + local_off;
         if (off < nElt) {        // XXX: runtime condition
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
           lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
@@ -229,7 +233,7 @@ private:
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-          ptr + u * wireTransSize + local_off,
+          ptr + u * wireTransElems + local_off,
           messages[u]
       );
 #else
@@ -250,7 +254,7 @@ private:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
           messages[u],
-          ptr + u * wireTransSize + local_off
+          ptr + u * wireTransElems + local_off
       );
 #else
       (void) lid; (void) local_off;
@@ -280,7 +284,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
 
     message_t messages[BiNRanks][unroll];
 
@@ -311,7 +315,7 @@ public:
     auto inputOffInType = inputOffset / sizeof(T);
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
 
     message_t v[NPeers][unroll];
 
@@ -358,7 +362,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
 
     auto inPtr = ioBuffer + inputOffInType;
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
 
     if (nelems < eltPerPack) {
       loadInput(v, inPtr, nelems);
@@ -410,7 +414,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
@@ -441,7 +445,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < BiNRanks; ++ i) {
@@ -504,7 +508,7 @@ protected:
 
     for (int i = 0; i < NPeers; ++ i) {
       int l_next = (l_rank + i + 1) % BiNRanks;
-      int next = (rank + i + 2) % (2 * BiNRanks);
+      int next = (rank + i * 2 + 2) % (2 * BiNRanks);
 
       ioForPeers[i] = (T *)((uintptr_t)ioClosePart(input)
           + l_next * workSize);

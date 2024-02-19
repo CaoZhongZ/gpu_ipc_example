@@ -163,21 +163,21 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
 
   bisectAllReduce(
       T* input, size_t nelems, int rank, uint32_t seqNo,
-      T* scatterBuf, T* gatherBuf,
-      T* const peerBuf0[], T* const peerBuf1[]
+      T* scatterBuf, T* gatherBuf, T* const peerBuf0[], T* const peerBuf1[]
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : Super(input, scatterBuf, gatherBuf,
-      peerBuf0, peerBuf1, calcWorkSize(input, nelems * sizeof(T)),
-      divUp(calcWorkSize(input, nelems * sizeof(T)),wireCapacity) * wireTransSize,
-      rank, seqNo
+  ) :
+  Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
+      calcWorkSize(input, nelems * sizeof(T)),
+      divUp(calcWorkSize(input, nelems * sizeof(T)), wireCapacity)
+      * wireTransSize, rank, seqNo
 #if defined(__enable_sycl_stream__)
       , cout
 #endif
-      ), workSize(calcWorkSize(input, nelems * sizeof(T)))
+    ), workSize(calcWorkSize(input, nelems * sizeof(T)))
 #if defined(__enable_sycl_stream__)
-    , cout(cout)
+  , cout(cout)
 #endif
   {}
 

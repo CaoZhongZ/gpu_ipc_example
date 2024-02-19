@@ -8,8 +8,11 @@ protected:
   static constexpr int dataElem = 0;
   static constexpr int flagElem = 1;
 
-  constexpr static int wireCapacity = SubGroupSize * sizeof(message_t) / 2;
-  constexpr static int wireTransSize = SubGroupSize * sizeof(message_t);
+  constexpr static size_t wireCapacity = SubGroupSize * sizeof(message_t) / 2;
+  constexpr static size_t wireTransSize = SubGroupSize * sizeof(message_t);
+
+  constexpr static int wireElems = wireCapacity / sizeof(T);
+  constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
 public:
   smallTransmit(
@@ -34,7 +37,7 @@ public:
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireCapacity + local_off;
+      auto off = i * wireElems + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
@@ -60,7 +63,7 @@ public:
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireCapacity + local_off;
+      auto off = i * wireElems + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
@@ -115,7 +118,7 @@ public:
     int local_off = lid * sizeof(message_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireCapacity + local_off;
+      auto off = i * wireElems + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
@@ -139,7 +142,7 @@ public:
     int local_off = lid * sizeof(message_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireCapacity + local_off;
+      auto off = i * wireElems + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
@@ -167,7 +170,7 @@ public:
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-          ptr + u * wireTransSize + local_off,
+          ptr + u * wireTransElems + local_off,
           messages[u]
       );
 #else
@@ -187,7 +190,7 @@ public:
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
           messages[u],
-          ptr + u * wireTransSize + local_off
+          ptr + u * wireTransElems + local_off
       );
 #else
       (void) lid; (void) local_off;
@@ -204,7 +207,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
     //
     // register consumption:
     // 2 x unroll x NPeers;
@@ -258,7 +261,7 @@ public:
     auto inputOffInType = inputOffset / sizeof(T);
     auto sinkOffInType = sinkOffset / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
     if (nelems < eltPerPack) {
       loadInput(v, ioBuffer + inputOffInType, nelems);
     } else {
@@ -316,7 +319,7 @@ public:
     auto sinkOffInType = sinkOffset / sizeof(T);
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacity;
+    constexpr auto eltPerPack = unroll * wireElems;
 
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
