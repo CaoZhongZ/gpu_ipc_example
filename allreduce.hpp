@@ -181,9 +181,8 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
 #endif
   {}
 
-  static int stageVerify(
-      T* host, int rank, uint32_t flag, size_t nWorkElemsInInt
-  );
+  static int stage1Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage2Verify(T* host, int rank, uint32_t flag, size_t nelems);
 
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
       sycl::nd_item<1> pos
@@ -204,16 +203,16 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
         gOff < workSize; gOff += loopSize, tOff += loopTSize) {
       auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
       auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
-
+      ssize_t workLeft = workSize - wireOff;
 #if defined(__enable_sycl_stream__)
       auto local_id = pos.get_sub_group().get_local_id()[0];
       if (local_id == 0 && groupId == 0)
         cout<<"["<<groupId<<", "<<subGroupId
           <<"] loopSize:"<<loopSize
-          <<", wireOff:"<<wireOff<<"; "
-          <<", transOff:"<<transOff<<"; "<<sycl::endl;
+          <<", wireOff:"<<wireOff
+          <<", transOff:"<<transOff
+          <<", workLeft:"<<workLeft<<sycl::endl;
 #endif
-      ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
         const_cast<bisectAllReduce *>(this)->
           template scatterFar<unroll>(wireOff, transOff, workLeft);

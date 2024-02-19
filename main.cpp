@@ -94,7 +94,7 @@ int main(int argc, char* argv[]) {
   // We only need single IPC exchange
   //
   auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
-  auto* host_verify = (test_type *)sycl::malloc_host(interm_size, queue);
+  auto* host_verify = (test_type *)sycl::malloc_host(interm_size * 2, queue);
 
   auto* ipcbuf0 = (test_type *)sycl::malloc_device(interm_size * 2, queue);
   auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
@@ -145,20 +145,20 @@ int main(int argc, char* argv[]) {
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-  /*auto e =*/ testTransmit<test_type, test_transmit>(
-      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag, simd, queue
-  );
-
-  MPI_Barrier(MPI_COMM_WORLD);
-  // extract_profiling<test_type>(e);
-
-  /* auto e1 =*/ testTransmit<test_type, test_transmit>(
-      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 2, simd, queue
-  );
+//   /*auto e =*/ testTransmit<test_type, test_transmit>(
+//       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+//       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+//       nelems, rank, world, flag, simd, queue
+//   );
+// 
+//   MPI_Barrier(MPI_COMM_WORLD);
+//   // extract_profiling<test_type>(e);
+// 
+//   /* auto e1 =*/ testTransmit<test_type, test_transmit>(
+//       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+//       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+//       nelems, rank, world, flag + 2, simd, queue
+//   );
   // extract_profiling<test_type>(e1);
 
   if (rank == 0)
@@ -172,9 +172,10 @@ int main(int argc, char* argv[]) {
       nelems, rank, world, flag + 4, simd, queue
   );
   extract_profiling<test_type>(e2);
+  MPI_Barrier(MPI_COMM_WORLD);
 
-  queue.memcpy(host_verify, ipcbuf1, interm_size).wait();
+  queue.memcpy(host_verify, ipcbuf0, interm_size * 2).wait();
   return verifyTransmit<test_type, test_transmit>(
-      host_verify, flag, rank, world, simd, nelems
+      host_verify, flag + 4, rank, world, simd, nelems
   );
 }

@@ -50,6 +50,97 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::scatterVerify(
   return 0;
 }
 
+template <typename T,
+         int NRanks,
+         template <typename, int, int> class Transmit,
+         int SubGroupSize>
+int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage1Verify(
+    T* host, int rank, uint32_t flag, size_t nelems
+){
+  constexpr auto wireCapInType = wireCapacity / sizeof(T);
+  constexpr auto wireTransInType = wireTransSize / sizeof(T);
+
+  auto nWorkElems = nelems / NRanks;
+  auto nWorkElemsInInt = nWorkElems * sizeof(T) / sizeof(uint32_t);
+  size_t nChunks = divUp(nWorkElems, wireCapInType);
+  auto nTransmitElems = nChunks * wireTransInType;
+
+  T* allRanks[NRanks];
+  T* allIpcBuffers[NRanks];
+
+  for (int i = 0; i < NRanks; ++ i) {
+    allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
+    allIpcBuffers[i] = (T *)malloc(sizeof(T) * nTransmitElems * NRanks);
+  }
+
+  __scope_guard free_pointers([&] {
+    for (int i = 0; i < NRanks; ++ i) {
+      free(allRanks[i]);
+      free(allIpcBuffers[i]);
+    }
+  });
+
+  for (int i = 0; i < NRanks; ++ i)
+    fill_pattern(allRanks[i], i, nelems);
+
+  // simulate stage 1
+  auto farScatterSim  = [&](T* ipcBuffer, T* input) {
+    auto* ipcSink = reinterpret_cast<T (*)[nChunks][wireTransInType]>(ipcBuffer);
+
+    for (int r = 0; r < NRanks/2; ++ r) {
+      for (int chunk = 0; chunk < nChunks; ++ chunk) {
+        T ipcTemp[wireTransInType];
+        for (int i = 0; i < wireCapInType; ++ i)
+          ipcTemp[i]
+            = (i + chunk * wireCapInType < nWorkElems) ?
+            input[i + chunk * wireCapInType + r * nWorkElems] : (T)0;
+
+        ((uint32_t *)ipcTemp)[30] = ((uint32_t *)ipcTemp)[15];
+        ((uint32_t *)ipcTemp)[15] = flag;
+        ((uint32_t *)ipcTemp)[31] = flag;
+
+        for (int i = 0; i < wireTransInType; ++ i)
+          ipcSink[r][chunk][i] = ipcTemp[i];
+      }
+    }
+  };
+
+  T* ipcBuffer = allIpcBuffers[rank] + nTransmitElems * NRanks/2;
+  T* host_start = host + nTransmitElems * NRanks /2;
+
+  T* input = (rank & 1) ? allRanks[rank ^ 1] + nelems/2 : allRanks[rank ^ 1];
+
+  farScatterSim(ipcBuffer, input);
+
+  auto compareResult = [&](T * ipcBuffer, T* ipcHost) {
+    constexpr auto wireCapInInt = wireCapacity / sizeof(uint32_t);
+    constexpr auto wireTransInInt = wireTransSize / sizeof(uint32_t);
+
+    auto* ipcBufInt = reinterpret_cast<uint32_t *>(ipcBuffer);
+    auto* ipcHostInt = reinterpret_cast<uint32_t *>(ipcHost);
+
+    for (int chunk = 0; chunk < nChunks * NRanks /2; ++ chunk) {
+      for (int i = 0; i < wireTransInInt; ++ i) {
+        int j = i;
+        if ( i == 30 ) j = 15;
+        if ( i == 15 ) j = 30;
+
+        if ( (j < 30) && j + chunk * wireCapInInt >= nWorkElemsInInt )
+          continue;
+
+        if (ipcBufInt[i + chunk * wireTransInInt] != ipcHostInt[i + chunk * wireTransInInt]) {
+          std::cout<<"Error Compare!"<<std::endl;
+          return -1;
+        }
+      }
+    }
+
+    return 0;
+  };
+
+  return compareResult(ipcBuffer, host_start);
+}
+
 template <>
 int verifyTransmit<sycl::half, smallTransmit>(
     sycl::half* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
@@ -60,10 +151,14 @@ int verifyTransmit<sycl::half, smallTransmit>(
 
 template <>
 int verifyTransmit<sycl::half, bisectTransmit>(
-    sycl::half* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
+    sycl::half* host, uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
-  std::cout<<"Warning, not implemented, yet"<<std::endl;
-  return 0;
+  auto ret = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage1Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage1Verify(
+      host, rank, step, nelems);
+    return ret;
 }
 
 template <typename T>
@@ -270,11 +365,11 @@ sycl::event testTransmit(
   }
   } else {
     constexpr int SubGroupSize = 32;
-  switch(world) {
-  case 2:
-    return queue.submit([&](sycl::handler &cgh) {
+    switch(world) {
+    case 2:
+      return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
 #endif
         cgh.parallel_for(
           launchParam,
@@ -284,13 +379,11 @@ sycl::event testTransmit(
 #if defined(__enable_sycl_stream__)
             , cout
 #endif
-            )
-        );
-    });
-  case 4:
-    return queue.submit([&](sycl::handler &cgh) {
+      ));});
+    case 4:
+      return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
 #endif
         cgh.parallel_for(
           launchParam,
@@ -300,13 +393,11 @@ sycl::event testTransmit(
 #if defined(__enable_sycl_stream__)
             , cout
 #endif
-            )
-        );
-    });
-  case 8:
-    return queue.submit([&](sycl::handler &cgh) {
+      ));});
+    case 8:
+      return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
 #endif
         cgh.parallel_for(
           launchParam,
@@ -316,13 +407,10 @@ sycl::event testTransmit(
 #if defined(__enable_sycl_stream__)
             , cout
 #endif
-            )
-        );
-    });
-  default:
-    throw std::logic_error("Unsupported communication topology");
-  }
-
+        ));});
+    default:
+      throw std::logic_error("Unsupported communication topology");
+    }
   }
 }
 
@@ -347,9 +435,7 @@ template <> sycl::event testTransmit <sycl::half, bisectTransmit> (
 #if defined(__enable_sycl_stream__)
             , cout
 #endif
-          )
-        );
-      });
+    ));});
     default:
       throw std::logic_error("Unsupported communication topology");
     }
@@ -369,9 +455,7 @@ template <> sycl::event testTransmit <sycl::half, bisectTransmit> (
 #if defined(__enable_sycl_stream__)
             , cout
 #endif
-          )
-        );
-      });
+    ));});
     default:
       throw std::logic_error("Unsupported communication topology");
     }
