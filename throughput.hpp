@@ -273,7 +273,7 @@ private:
     auto arith_m = reinterpret_cast<math_t (&)[unroll]>(m);
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u)
-      arith_v[u] += arith_m;
+      arith_v[u] += arith_m[u];
   }
 public:
 
