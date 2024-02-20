@@ -183,6 +183,9 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
 
   static int stage1Verify(T* host, int rank, uint32_t flag, size_t nelems);
   static int stage2Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage3Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage4Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage5Verify(T* host, int rank, uint32_t flag, size_t nelems);
 
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
       sycl::nd_item<1> pos

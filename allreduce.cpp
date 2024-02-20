@@ -141,6 +141,114 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage1Verify(
   return compareResult(ipcBuffer, host_start);
 }
 
+template <typename T,
+         int NRanks,
+         template <typename, int, int> class Transmit,
+         int SubGroupSize>
+int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage2Verify(
+    T* host, int rank, uint32_t flag, size_t nelems
+){
+  constexpr auto wireCapInType = wireCapacity / sizeof(T);
+  constexpr auto wireTransInType = wireTransSize / sizeof(T);
+
+  auto nWorkElems = nelems / NRanks;
+  auto nWorkElemsInInt = nWorkElems * sizeof(T) / sizeof(uint32_t);
+  size_t nChunks = divUp(nWorkElems, wireCapInType);
+  auto nTransmitElems = nChunks * wireTransInType;
+
+  T* allRanks[NRanks];
+  T* allIpcBuffers[NRanks];
+
+  for (int i = 0; i < NRanks; ++ i) {
+    allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
+    allIpcBuffers[i] = (T *)malloc(sizeof(T) * nTransmitElems * NRanks);
+  }
+
+  __scope_guard free_pointers([&] {
+    for (int i = 0; i < NRanks; ++ i) {
+      free(allRanks[i]);
+      free(allIpcBuffers[i]);
+    }
+  });
+
+  for (int i = 0; i < NRanks; ++ i) {
+    fill_pattern(allRanks[i], i, nelems);
+    memset(allIpcBuffers[i], 0, sizeof(T) * nTransmitElems * NRanks);
+  }
+
+  // simulate stage 1
+  auto farScatterSim  = [&](T* ipcBuffer, T* input) {
+    auto* ipcSink = reinterpret_cast<T (*)[nChunks][wireTransInType]>(ipcBuffer);
+
+    for (int r = 0; r < NRanks/2; ++ r) {
+      for (int chunk = 0; chunk < nChunks; ++ chunk) {
+        T ipcTemp[wireTransInType];
+        for (int i = 0; i < wireCapInType; ++ i)
+          ipcTemp[i]
+            = (i + chunk * wireCapInType < nWorkElems) ?
+            input[i + chunk * wireCapInType + r * nWorkElems] : (T)0;
+
+        ((uint32_t *)ipcTemp)[30] = ((uint32_t *)ipcTemp)[15];
+        ((uint32_t *)ipcTemp)[15] = flag;
+        ((uint32_t *)ipcTemp)[31] = flag;
+
+        for (int i = 0; i < wireTransInType; ++ i)
+          ipcSink[r][chunk][i] = ipcTemp[i];
+      }
+    }
+  };
+
+  // run sim on all ranks
+  for (int r = 0; r < NRanks; ++ r) {
+    T* ipcBuffer = allIpcBuffers[r] + nTransmitElems * NRanks/2;
+    T* input = (r & 1) ? allRanks[r ^ 1] + nelems/2 : allRanks[r ^ 1];
+
+    farScatterSim(ipcBuffer, input);
+  }
+
+  // simulate stage 2
+  auto closeScatterSim = [&](T* ipcBuffers[], T* ipcBuffer, T* input, int rank) {
+    auto l_rank = rank /2;
+    for (int r = 0; r < NRanks/2 -1; ++ r) {
+      int l_next = (l_rank + r + 1) % (NRanks/2);
+      int next = (rank + 2 *(r + 1)) % NRanks;
+
+      for (int chunk = 0; chunk < nChunks; ++ chunk) {
+        T inputTemp[wireTransInType];
+        T ipcTemp[wireTransInType];
+
+        for (int i = 0; i < wireCapInType; ++ i) {
+          inputTemp[i]
+            = (i + chunk * wireCapInType < nWorkElems) ?
+            input[i + chunk * wireCapInType + l_next * nWorkElems] : (T)0;
+        }
+
+        for (int i = 0; i < wireTransInType; ++ i)
+          ipcTemp[i] = ipcBuffer[i + chunk * wireTransInType + l_next * nTransmitElems];
+
+        ((uint32_t *)inputTemp)[30] = ((uint32_t *)inputTemp)[15];
+        ((uint32_t *)inputTemp)[15] = 0;
+        ((uint32_t *)inputTemp)[31] = 0;
+
+        for (int i = 0; i < wireTransInType; ++ i)
+          ipcTemp[i] += inputTemp[i];
+
+        for (int i = 0; i < wireTransInType; ++ i)
+          ipcBuffers[next][l_rank * nTransmitElems + chunk * wireTransInType + i] = ipcTemp[i];
+      }
+    }
+  };
+
+  for (int r = 0; r < NRanks; ++ r) {
+    T* ipcBuffer = allIpcBuffers[r] + nTransmitElems * NRanks/2;
+    T* input2 = (r & 1) ? allRanks[r] : allRanks[r] + nelems/2;
+    closeScatterSim(allIpcBuffers, ipcBuffer, input2, r);
+  }
+
+  return 0;
+}
+
+
 template <>
 int verifyTransmit<sycl::half, smallTransmit>(
     sycl::half* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
@@ -153,12 +261,17 @@ template <>
 int verifyTransmit<sycl::half, bisectTransmit>(
     sycl::half* host, uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
-  auto ret = (simd == 16) ?
+  auto ret1 = (simd == 16) ?
     bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage1Verify(
       host, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage1Verify(
       host, rank, step, nelems);
-    return ret;
+  auto ret2 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage2Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage2Verify(
+      host, rank, step, nelems);
+    return ret1 + ret2;
 }
 
 template <typename T>
