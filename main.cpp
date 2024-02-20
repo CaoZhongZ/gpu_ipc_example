@@ -175,7 +175,8 @@ int main(int argc, char* argv[]) {
   MPI_Barrier(MPI_COMM_WORLD);
 
   queue.memcpy(host_verify, ipcbuf0, interm_size * 2).wait();
+  auto* host2 = (test_type *)((uintptr_t)host_verify + interm_size);
   return verifyTransmit<test_type, test_transmit>(
-      host_verify, flag + 4, rank, world, simd, nelems
+      host_verify, host2, flag + 4, rank, world, simd, nelems
   );
 }

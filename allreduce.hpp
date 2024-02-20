@@ -261,5 +261,6 @@ sycl::event testTransmit(
 
 template <typename T, template <typename, int, int> class Transmit>
 int verifyTransmit(
-    T* host, uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
+    T* host, T* host2,
+    uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );
