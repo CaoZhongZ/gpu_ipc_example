@@ -116,10 +116,11 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage1Verify(
     constexpr auto wireCapInInt = wireCapacity / sizeof(uint32_t);
     constexpr auto wireTransInInt = wireTransSize / sizeof(uint32_t);
 
-    auto* ipcBufInt = reinterpret_cast<uint32_t *>(ipcBuffer);
-    auto* ipcHostInt = reinterpret_cast<uint32_t *>(ipcHost);
+    auto* ipcBufInt = reinterpret_cast<uint32_t (*)[nChunks][wireTransInInt]>(ipcBuffer);
+    auto* ipcHostInt = reinterpret_cast<uint32_t (*)[nChunks][wireTransInInt]>(ipcHost);
 
-    for (int chunk = 0; chunk < nChunks * NRanks /2; ++ chunk) {
+    for (int r = 0; r < NRanks / 2; ++ r)
+    for (int chunk = 0; chunk < nChunks; ++ chunk) {
       for (int i = 0; i < wireTransInInt; ++ i) {
         int j = i;
         if ( i == 30 ) j = 15;
@@ -128,7 +129,7 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage1Verify(
         if ( (j < 30) && j + chunk * wireCapInInt >= nWorkElemsInInt )
           continue;
 
-        if (ipcBufInt[i + chunk * wireTransInInt] != ipcHostInt[i + chunk * wireTransInInt]) {
+        if (ipcBufInt[r][chunk][i] != ipcHostInt[r][chunk][i]) {
           std::cout<<"Error Compare!"<<std::endl;
           return -1;
         }
@@ -189,8 +190,8 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage2Verify(
             input[i + chunk * wireCapInType + r * nWorkElems] : (T)0;
 
         ((uint32_t *)ipcTemp)[30] = ((uint32_t *)ipcTemp)[15];
-        ((uint32_t *)ipcTemp)[15] = flag;
-        ((uint32_t *)ipcTemp)[31] = flag;
+        ((uint32_t *)ipcTemp)[15] = flag + 1;
+        ((uint32_t *)ipcTemp)[31] = flag + 1;
 
         for (int i = 0; i < wireTransInType; ++ i)
           ipcSink[r][chunk][i] = ipcTemp[i];
@@ -245,7 +246,39 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage2Verify(
     closeScatterSim(allIpcBuffers, ipcBuffer, input2, r);
   }
 
-  return 0;
+  auto compareResult = [&](T * ipcBuffer, T* ipcHost) {
+    constexpr auto wireCapInInt = wireCapacity / sizeof(uint32_t);
+    constexpr auto wireTransInInt = wireTransSize / sizeof(uint32_t);
+
+    auto* ipcBufInt = reinterpret_cast<uint32_t (*)[nChunks][wireTransInInt]>(ipcBuffer);
+    auto* ipcHostInt = reinterpret_cast<uint32_t (*)[nChunks][wireTransInInt]>(ipcHost);
+
+    for (int r = 0; r < NRanks/2; ++ r) {
+      if (r * 2 == rank)
+        continue;
+
+      for (int chunk = 0; chunk < nChunks; ++ chunk) {
+        for (int i = 0; i < wireTransInInt; ++ i) {
+          int j = i;
+          if ( i == 30 ) j = 15;
+          if ( i == 15 ) j = 30;
+
+          if ( j < 30 && j + chunk * wireCapInInt >= nWorkElemsInInt )
+            continue;
+
+          if (ipcBufInt[r][chunk][i] != ipcHostInt[r][chunk][i]) {
+            std::cout<<"Error Compare! Expect: "<<std::hex
+              <<ipcBufInt[r][chunk][i]<<", got: "
+              <<ipcHostInt[r][chunk][i]<<"@"
+              <<r<<","<<chunk<<","<<i<<std::endl;
+            return -1;
+    }}}}
+
+    return 0;
+  };
+
+  auto ipcBuffer = allIpcBuffers[rank];
+  return compareResult(ipcBuffer, host);
 }
 
 
