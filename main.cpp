@@ -33,12 +33,12 @@ size_t parse_nelems(const std::string& nelems_string) {
 }
 
 template <typename T>
-void extract_profiling(sycl::event e) {
+void extract_profiling(sycl::event e, int rank) {
   e.wait();
   auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
   auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
 
-  std::cout<<"Running time: "<<(end - start)<<"ns"<<std::endl;
+  std::cout<<"["<<rank<<"] Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
 #define test_transmit bisectTransmit
@@ -157,7 +157,7 @@ int main(int argc, char* argv[]) {
   queue.memcpy(host_verify, ipcbuf0, interm_size * 2).wait();
 
   auto* host2 = (test_type *)((uintptr_t)host_verify + interm_size);
-  return verifyTransmit<test_type, test_transmit>(
+  auto err = verifyTransmit<test_type, test_transmit>(
       host_verify, host2, flag, rank, world, simd, nelems
   );
 
@@ -167,6 +167,12 @@ int main(int argc, char* argv[]) {
       nelems, rank, world, flag + 10, simd, queue
   );
   // extract_profiling<test_type>(e1);
+  //
+  /* auto e1 =*/ testTransmit<test_type, test_transmit>(
+      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 15, simd, queue
+  );
 
   if (rank == 0)
     std::cout<<"---------last run------------------"<<std::endl;
@@ -178,6 +184,7 @@ int main(int argc, char* argv[]) {
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 20, simd, queue
   );
-  extract_profiling<test_type>(e2);
+  extract_profiling<test_type>(e2, rank);
   MPI_Barrier(MPI_COMM_WORLD);
+  return err;
 }
