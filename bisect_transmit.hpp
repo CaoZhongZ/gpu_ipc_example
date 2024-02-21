@@ -40,13 +40,7 @@ private:
         auto off = i * wireElems + local_off;
         if (off < nElt) {        // TODO: condition branch !
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
-              v[i], src + off
-          );
-#if defined(__enable_sycl_stream__)
-          // cout<<"["<<rank<<","<<lid<<"]off: "<<off
-          //   <<", src "<<src<<":"<<v[i]<<sycl::endl;
-#endif
+          lscLoad<SubGroupSize>(v[i], src + off);
 #else
           (void)off;
 #endif
@@ -65,9 +59,7 @@ private:
       for (int i = 0; i < unroll; ++ i) {
         auto off = i * wireElems + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
-            v[i], src + off
-        );
+        lscLoad<SubGroupSize>(v[i], src + off);
 #else
         (void)off;
 #endif
@@ -197,9 +189,7 @@ private:
       for (int i = 0; i < unroll; ++ i) {
         auto off = i * wireElems + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
-            dst + off, v[i]
-        );
+        lscStore<SubGroupSize>(dst + off, v[i]);
 #else
         (void)off; (void)local_off;
 #endif
@@ -218,9 +208,7 @@ private:
         auto off = i * wireElems + local_off;
         if (off < nElt) {        // XXX: runtime condition
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
-              dst + off, v[i]
-          );
+          lscStore<SubGroupSize>(dst + off, v[i]);
 #endif
     }}}
   }
@@ -235,7 +223,7 @@ private:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+      lscStore<SubGroupSize, CacheCtrl::L1UC_L3WB>(
           ptr + u * wireTransElems + local_off,
           messages[u]
       );
@@ -255,7 +243,7 @@ private:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+      lscLoad<SubGroupSize, CacheCtrl::L1UC_L3C>(
           messages[u],
           ptr + u * wireTransElems + local_off
       );

@@ -62,6 +62,8 @@ int main(int argc, char* argv[]) {
      cxxopts::value<size_t>()->default_value("0xe00f100f"))
     ("s,simd", "Transmit flag identify steps",
      cxxopts::value<uint32_t>()->default_value("16"))
+    ("v,verify", "Do verification or performance",
+     cxxopts::value<bool>()->default_value("false"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -70,6 +72,7 @@ int main(int argc, char* argv[]) {
   auto subgroups = parsed_opts["subgroups"].as<size_t>();
   auto flag = parsed_opts["flag"].as<size_t>();
   auto simd = parsed_opts["simd"].as<uint32_t>();
+  auto verify = parsed_opts["verify"].as<bool>();
 
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
@@ -158,12 +161,15 @@ int main(int argc, char* argv[]) {
   e.wait();
   MPI_Barrier(MPI_COMM_WORLD);
   // extract_profiling<test_type>(e);
-  queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
-  queue.memcpy(host_init, input, alloc_size).wait();
+  if (verify) {
+    queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
+    queue.memcpy(host_init, input, alloc_size).wait();
 
-  auto err = verifyTransmit<test_type, test_transmit>(
-      host_verify, host_init, flag, rank, world, simd, nelems
-  );
+    auto err = verifyTransmit<test_type, test_transmit>(
+        host_verify, host_init, flag, rank, world, simd, nelems
+    );
+    return err;
+  }
 
   /* auto e1 =*/ testTransmit<test_type, test_transmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
@@ -189,5 +195,5 @@ int main(int argc, char* argv[]) {
       nelems, rank, world, flag + 20, simd, queue
   );
   extract_profiling<test_type>(e3, rank);
-  return err;
+  return 0;
 }
