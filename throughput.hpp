@@ -422,11 +422,11 @@ public:
       message_t messages[unroll];
       do {
         retry = false;
-        retry |= recvMessage(
+        retry |= recvMessages(
             messages, localGatherSink[i] + sinkOffInType, closeGatherStep);
       } while(sycl::any_of_group(sg, retry));
 
-      sendMessages(farGatherSink[i] + inputOffInType, messages);
+      sendMessages(farGatherSink[i] + sinkOffInType, messages);
 
       restoreData(messages);
 
