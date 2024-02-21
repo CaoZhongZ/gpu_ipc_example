@@ -255,6 +255,112 @@ private:
 #endif
 };
 
+template <typename T,
+         int NRanks,
+         template <typename, int, int> class Transmit = bisectPTransmit,
+         int SubGroupSize = 16>
+struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
+  using Super = Transmit<T, NRanks, SubGroupSize>;
+  using message_t = typename Super::message_t;
+  constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
+  constexpr static int wireCapacity = Super::wireCapacity;
+  constexpr static int wireTransSize = Super::wireTransSize;
+  constexpr static int BiNRanks = NRanks/2;
+
+  bisectPAllReduce(
+      T* input, size_t nelems, int rank, uint32_t seqNo,
+      T* scatterBuf, T* gatherBuf, T* const peerBuf0[], T* const peerBuf1[]
+#if defined(__enable_sycl_stream__)
+      , sycl::stream cout
+#endif
+  ) :
+  Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
+      calcWorkSize(input, nelems * sizeof(T)),
+      divUp(calcWorkSize(input, nelems * sizeof(T)), wireCapacity)
+      * wireTransSize, rank, seqNo
+#if defined(__enable_sycl_stream__)
+      , cout
+#endif
+    ), workSize(calcWorkSize(input, nelems * sizeof(T)))
+#if defined(__enable_sycl_stream__)
+  , cout(cout)
+#endif
+  {}
+
+  static int stage1Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage2Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage3Verify(T* host, int rank, uint32_t flag, size_t nelems);
+
+  //
+  // We use linear group configuration because subgroup is linear only
+  // And we want to control coalescing as much as possible
+  //
+  void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
+      sycl::nd_item<1> pos
+  ) const {
+    auto groupRange = pos.get_group_range()[0];
+    int subGroupXRange = pos.get_sub_group().get_group_range()[0]/BiNRanks;
+
+    auto cableCapacity = wireCapacity * subGroupXRange;
+    auto cableTSize = wireTransSize * subGroupXRange;
+
+    // SubGroup 0, 1, 2, 3 is stacked up to the same groupXId
+    // Hence work on same offsets
+    auto subGroupXId = pos.get_sub_group().get_group_id()[0] /BiNRanks;
+    auto groupId = pos.get_group().get_group_id()[0];
+
+    auto loopSize = groupRange * cableCapacity;
+    auto loopTSize = groupRange * cableTSize;
+
+    for (size_t gOff = 0, tOff = 0;
+        gOff < workSize; gOff += loopSize, tOff += loopTSize) {
+      auto wireOff = groupId * cableCapacity + subGroupXId * wireCapacity + gOff;
+      auto transOff = groupId * cableTSize + subGroupXId * wireTransSize + tOff;
+      ssize_t workLeft = workSize - wireOff;
+#if defined(__enable_sycl_stream__)
+      auto localId = pos.get_sub_group().get_local_id()[0];
+      if (localId == 0 && groupId == 0)
+        cout<<"["<<groupId<<", "<<subGroupXId
+          <<"] loopSize:"<<loopSize
+          <<", wireOff:"<<wireOff
+          <<", transOff:"<<transOff
+          <<", workLeft:"<<workLeft<<sycl::endl;
+#endif
+      if (workLeft > 0) { // Y parallel equals bisect Ranks
+        const_cast<bisectPAllReduce *>(this)->
+          template scatterFar<unroll>(wireOff, transOff, workLeft);
+        const_cast<bisectPAllReduce *>(this)->
+          template closeUnifiedPollReduceScatterGather<unroll>(wireOff, transOff, workLeft);
+        const_cast<bisectPAllReduce *>(this)->
+          template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
+      }
+    }
+  }
+
+private:
+  // TODO: buffer plan and start point calc
+  static size_t calcWorkSize(T* input, size_t size) {
+    // Input must be message size align
+    if ((uintptr_t)input % sizeof(message_t) != 0)
+      throw std::logic_error("We only support aligned pointer for now");
+
+    auto nChunks = NRanks;
+    auto octSize = divUp(size, sizeof(message_t));
+    auto chunkSize = divUp(octSize, nChunks);
+
+    if (octSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
+      throw std::logic_error("We don't support non-even divide yet");
+
+    // TODO: Production logic needs every rank chunk
+    return chunkSize * sizeof(message_t);
+  }
+
+  ssize_t workSize;
+#if defined(__enable_sycl_stream__)
+  sycl::stream cout;
+#endif
+};
+
 template <typename T, template <typename, int, int> class Transmit>
 sycl::event testTransmit(
     sycl::nd_range<1> launchParam,

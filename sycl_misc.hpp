@@ -8,9 +8,8 @@ sycl::device getSubDevice() {
   static auto devs = sycl::device::get_devices(sycl::info::device_type::gpu);
 
   auto dev = devs[ndev];
-  int map_nsub = nsub;
-  if (ndev == 1)
-    map_nsub = nsub ^ 1;
+  // x4 xelink connection flop
+  int map_nsub = (ndev == 1) ? map_nsub = nsub ^ 1 : nsub;
 
   try {
     static auto subs = dev.template create_sub_devices<

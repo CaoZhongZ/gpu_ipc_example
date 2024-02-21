@@ -41,7 +41,7 @@ void extract_profiling(sycl::event e, int rank) {
   std::cout<<"["<<rank<<"] Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
-#define test_transmit bisectTransmit
+#define test_transmit bisectPTransmit
 using test_type = sycl::half;
 
 int main(int argc, char* argv[]) {
@@ -57,7 +57,7 @@ int main(int argc, char* argv[]) {
     ("g,groups", "Number of groups",
      cxxopts::value<size_t>()->default_value("1"))
     ("w,subgroups", "Number of sub-groups",
-     cxxopts::value<size_t>()->default_value("1"))
+     cxxopts::value<size_t>()->default_value("4"))
     ("f,flag", "Transmit flag identify steps",
      cxxopts::value<size_t>()->default_value("0xe00f100f"))
     ("s,simd", "Transmit flag identify steps",
@@ -142,6 +142,10 @@ int main(int argc, char* argv[]) {
   queue.wait();
   MPI_Barrier(MPI_COMM_WORLD);
 
+  if (subgroups % 4 != 0) {
+    throw std::logic_error("Subgroup numbers must be multiple of 4");
+  }
+
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
@@ -168,7 +172,7 @@ int main(int argc, char* argv[]) {
   );
   // extract_profiling<test_type>(e1);
   //
-  /* auto e1 =*/ testTransmit<test_type, test_transmit>(
+  /* auto e2 =*/ testTransmit<test_type, test_transmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 15, simd, queue
@@ -179,12 +183,11 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  auto e2 = testTransmit<test_type, test_transmit>(
+  auto e3 = testTransmit<test_type, test_transmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 20, simd, queue
   );
-  extract_profiling<test_type>(e2, rank);
-  MPI_Barrier(MPI_COMM_WORLD);
+  extract_profiling<test_type>(e3, rank);
   return err;
 }

@@ -512,13 +512,7 @@ template <typename T,
 int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
     T* host, int rank, uint32_t flag, size_t nelems
 ){
-  constexpr auto wireCapInType = wireCapacity / sizeof(T);
-  constexpr auto wireTransInType = wireTransSize / sizeof(T);
-
   auto nWorkElems = nelems / NRanks;
-  auto nWorkElemsInInt = nWorkElems * sizeof(T) / sizeof(uint32_t);
-  size_t nChunks = divUp(nWorkElems, wireCapInType);
-  auto nTransmitElems = nChunks * wireTransInType;
 
   T* allRanks[NRanks];
 
@@ -551,7 +545,6 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
   return 0;
 }
 
-
 template <>
 int verifyTransmit<sycl::half, smallTransmit>(
     sycl::half* host, sycl::half* host2,
@@ -563,6 +556,34 @@ int verifyTransmit<sycl::half, smallTransmit>(
 
 template <>
 int verifyTransmit<sycl::half, bisectTransmit>(
+    sycl::half* host, sycl::half* host2,
+    uint32_t step, int rank, int world, uint32_t simd, size_t nelems
+) {
+  auto ret1 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage1Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage1Verify(
+      host, rank, step, nelems);
+  auto ret2 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage2Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage2Verify(
+      host, rank, step, nelems);
+  auto ret3 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage3Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage3Verify(
+      host, rank, step, nelems);
+  auto ret4 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage4Verify(
+      host2, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage4Verify(
+      host2, rank, step, nelems);
+  return ret1 + ret2 + ret3 + ret4;
+}
+
+template <>
+int verifyTransmit<sycl::half, bisectPTransmit>(
     sycl::half* host, sycl::half* host2,
     uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
@@ -866,6 +887,54 @@ template <> sycl::event testTransmit <sycl::half, bisectTransmit> (
         cgh.parallel_for(
           launchParam,
           bisectAllReduce<sycl::half, 8, bisectTransmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+    ));});
+    default:
+      throw std::logic_error("Unsupported communication topology");
+    }
+  }
+}
+
+template <> sycl::event testTransmit <sycl::half, bisectPTransmit> (
+    sycl::nd_range<1> launchParam,
+    sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
+    sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
+  if (subgroup == 16) {
+    constexpr int SubGroupSize = 16;
+    switch(world) {
+    case 8:
+      return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          bisectPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+    ));});
+    default:
+      throw std::logic_error("Unsupported communication topology");
+    }
+  } else {
+    constexpr int SubGroupSize = 32;
+    switch(world) {
+    case 8:
+      return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          bisectPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)

@@ -12,3 +12,4 @@
 #include "small_transmit.hpp"
 #include "simple_transmit.hpp"
 #include "throughput.hpp"
+#include "bisect_transmit.hpp"
