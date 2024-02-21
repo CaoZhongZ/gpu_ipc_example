@@ -290,7 +290,7 @@ public:
     }
 
     shuffleData(messages);
-    insertFlags(messages, farScatterStep);
+    insertFlags(messages, seqNo);
     auto* dst = farScatterSink[y_id] + sinkOffInType;
     sendMessages(dst, messages);
   }
@@ -325,13 +325,13 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localFarScatterSink[y_id] + sinkOffInType, farScatterStep);
+          messages, localFarScatterSink[y_id] + sinkOffInType, seqNo);
     } while(sycl::any_of_group(sg, retry));
 
     shuffleData(v);
     accumMessages(v, messages);
 
-    insertFlags(v, closeScatterStep);
+    insertFlags(v, seqNo);
     sendMessages(scatterSink[y_id] + sinkOffInType, v);
   }
 
@@ -365,7 +365,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localFarScatterSink[y_id] + sinkOffInType, farScatterStep);
+          messages, localFarScatterSink[y_id] + sinkOffInType, seqNo);
     } while (sycl::any_of_group(sg, retry));
 
     shuffleData(v);
@@ -376,12 +376,12 @@ public:
       do {
         retry = false;
         retry |= recvMessages(
-            messages, localScatterSink[i] + sinkOffInType, closeScatterStep);
+            messages, localScatterSink[i] + sinkOffInType, seqNo);
       } while (sycl::any_of_group(sg, retry));
       accumMessages(v, messages);
     }
 
-    insertFlags(v, closeGatherStep);
+    insertFlags(v, seqNo);
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i)
@@ -418,7 +418,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localGatherSink[y_id] + sinkOffInType, closeGatherStep);
+          messages, localGatherSink[y_id] + sinkOffInType, seqNo);
     } while(sycl::any_of_group(sg, retry));
 
     sendMessages(farGatherSink[y_id] + sinkOffInType, messages);
@@ -448,7 +448,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localFarGatherSink[y_id] + sinkOffInType, closeGatherStep);
+          messages, localFarGatherSink[y_id] + sinkOffInType, seqNo);
     } while(sycl::any_of_group(sg, retry));
 
     restoreData(messages);
@@ -484,7 +484,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localFarScatterSink[y_id] + sinkOffInType, farScatterStep);
+          messages, localFarScatterSink[y_id] + sinkOffInType, seqNo);
     } while(sycl::any_of_group(sg, retry));
 
     shuffleData(v);
@@ -492,14 +492,14 @@ public:
 
     //------------------------- group diverge 3:1 -------------------
     if (y_id != l_rank) {
-      insertFlags(v, closeScatterStep);
+      insertFlags(v, seqNo);
       sendMessages(scatterSink[y_id] + sinkOffInType, v); // 1. xNPeers <scatter>
 
       bool retry;
       do {
         retry = false;
         retry |= recvMessages(
-            v, localGatherSink[y_id] + sinkOffInType, closeGatherStep);
+            v, localGatherSink[y_id] + sinkOffInType, seqNo);
       } while(sycl::any_of_group(sg, retry));             // 4. xNPeers waits for <gather>
     } else {
 #     pragma unroll
@@ -508,12 +508,12 @@ public:
         do {
           retry = false;
           retry |= recvMessages(
-              messages, localScatterSink[i] + sinkOffInType, closeScatterStep);
+              messages, localScatterSink[i] + sinkOffInType, seqNo);
         } while (sycl::any_of_group(sg, retry));          // 2. wait for <scatter> xNPeers
         accumMessages(v, messages);
       }
 
-      insertFlags(v, closeGatherStep);
+      insertFlags(v, seqNo);
 
 #     pragma unroll
       for (int i = 0; i < NPeers; ++ i)                   // 3. signal <gather>
@@ -659,11 +659,6 @@ protected:
   T* localScatterSink[NPeers];
   T* localGatherSink[BiNRanks];
 
-  uint32_t farScatterStep;
-  uint32_t closeScatterStep;
-  uint32_t closeGatherStep;
-
-  int rank;
   int l_rank;
   uint32_t seqNo;
 
