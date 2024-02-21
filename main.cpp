@@ -157,7 +157,6 @@ int main(int argc, char* argv[]) {
   queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
   queue.memcpy(host_init, input, alloc_size).wait();
 
-  auto* host2 = (test_type *)((uintptr_t)host_verify + interm_size);
   auto err = verifyTransmit<test_type, test_transmit>(
       host_verify, host_init, flag, rank, world, simd, nelems
   );

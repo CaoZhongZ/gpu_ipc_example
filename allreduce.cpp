@@ -544,7 +544,8 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
   for (int i = 0; i < nelems; ++ i) {
     if (allreduceResult[i] != host[i]) {
       std::cout<<"Error Compare! Expected: "
-        <<allreduceResult[i] <<", got: "<<host[i]<<"@"<<rank","<<i<<";"<<std::endl;
+        <<allreduceResult[i] <<", got: "<<host[i]
+        <<"@["<<rank<<"]("<<i<<");"<<std::endl;
     }
   }
   return 0;
@@ -585,7 +586,7 @@ int verifyTransmit<sycl::half, bisectTransmit>(
       host2, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage4Verify(
       host2, rank, step, nelems);
-  return ret1 + ret2 + ret3;
+  return ret1 + ret2 + ret3 + ret4;
 }
 
 template <typename T,
