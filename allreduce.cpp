@@ -502,7 +502,7 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage3Verify(
   };
 
   auto ipcBuffer = allgatherBuffers[rank];
-  return compareResult(ipcBuffer, host);
+  return compareResult(ipcBuffer, host + 16 * 1024 * 1024);
 }
 
 template <typename T,
@@ -521,13 +521,9 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
   auto nTransmitElems = nChunks * wireTransInType;
 
   T* allRanks[NRanks];
-  T* allIpcBuffers[NRanks];
-  T* allgatherBuffers[NRanks];
 
   for (int i = 0; i < NRanks; ++ i) {
     allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
-    allIpcBuffers[i] = (T *)malloc(sizeof(T) * nTransmitElems * NRanks);
-    allgatherBuffers[i] = (T *)malloc(sizeof(T) * nTransmitElems * NRanks);
   }
 
   auto* allreduceResult = (T*)malloc(sizeof(T) * nelems);
@@ -535,19 +531,22 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
   __scope_guard free_pointers([&] {
     for (int i = 0; i < NRanks; ++ i) {
       free(allRanks[i]);
-      free(allIpcBuffers[i]);
-      free(allgatherBuffers[i]);
     }
     free(allreduceResult);
   });
 
   for (int i = 0; i < NRanks; ++ i) {
     fill_pattern(allRanks[i], i, nelems);
-    memset(allIpcBuffers[i], 0, sizeof(T) * nTransmitElems * NRanks);
-    memset(allgatherBuffers[i], 0, sizeof(T) * nTransmitElems * NRanks);
   }
 
   allreduce(allreduceResult, allRanks, NRanks, nelems);
+
+  for (int i = 0; i < nelems; ++ i) {
+    if (allreduceResult[i] != host[i]) {
+      std::cout<<"Error Compare! Expected: "
+        <<allreduceResult[i] <<", got: "<<host[i]<<"@"<<rank","<<i<<";"<<std::endl;
+    }
+  }
   return 0;
 }
 
@@ -578,8 +577,13 @@ int verifyTransmit<sycl::half, bisectTransmit>(
       host, rank, step, nelems);
   auto ret3 = (simd == 16) ?
     bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage3Verify(
-      host2, rank, step, nelems) :
+      host, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage3Verify(
+      host, rank, step, nelems);
+  auto ret4 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage4Verify(
+      host2, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage4Verify(
       host2, rank, step, nelems);
   return ret1 + ret2 + ret3;
 }
