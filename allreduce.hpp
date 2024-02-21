@@ -225,6 +225,8 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
           template closePollRecvReduceBcast<unroll>(wireOff, transOff, workLeft);
         const_cast<bisectAllReduce *>(this)->
           template pollGatherOutputs<unroll>(wireOff, transOff, workLeft);
+        const_cast<bisectAllReduce *>(this)->
+          template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
       }
     }
   }

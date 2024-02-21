@@ -145,20 +145,27 @@ int main(int argc, char* argv[]) {
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-//   /*auto e =*/ testTransmit<test_type, test_transmit>(
-//       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-//       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-//       nelems, rank, world, flag, simd, queue
-//   );
-// 
-//   MPI_Barrier(MPI_COMM_WORLD);
-//   // extract_profiling<test_type>(e);
-// 
-//   /* auto e1 =*/ testTransmit<test_type, test_transmit>(
-//       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-//       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-//       nelems, rank, world, flag + 2, simd, queue
-//   );
+  auto e = testTransmit<test_type, test_transmit>(
+      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag, simd, queue
+  );
+
+  e.wait();
+  MPI_Barrier(MPI_COMM_WORLD);
+  // extract_profiling<test_type>(e);
+  queue.memcpy(host_verify, ipcbuf0, interm_size * 2).wait();
+
+  auto* host2 = (test_type *)((uintptr_t)host_verify + interm_size);
+  return verifyTransmit<test_type, test_transmit>(
+      host_verify, host2, flag, rank, world, simd, nelems
+  );
+
+  /* auto e1 =*/ testTransmit<test_type, test_transmit>(
+      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 10, simd, queue
+  );
   // extract_profiling<test_type>(e1);
 
   if (rank == 0)
@@ -169,14 +176,8 @@ int main(int argc, char* argv[]) {
   auto e2 = testTransmit<test_type, test_transmit>(
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 4, simd, queue
+      nelems, rank, world, flag + 20, simd, queue
   );
   extract_profiling<test_type>(e2);
   MPI_Barrier(MPI_COMM_WORLD);
-
-  queue.memcpy(host_verify, ipcbuf0, interm_size * 2).wait();
-  auto* host2 = (test_type *)((uintptr_t)host_verify + interm_size);
-  return verifyTransmit<test_type, test_transmit>(
-      host_verify, host2, flag + 4, rank, world, simd, nelems
-  );
 }

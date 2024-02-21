@@ -505,6 +505,53 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage3Verify(
   return compareResult(ipcBuffer, host);
 }
 
+template <typename T,
+         int NRanks,
+         template <typename, int, int> class Transmit,
+         int SubGroupSize>
+int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
+    T* host, int rank, uint32_t flag, size_t nelems
+){
+  constexpr auto wireCapInType = wireCapacity / sizeof(T);
+  constexpr auto wireTransInType = wireTransSize / sizeof(T);
+
+  auto nWorkElems = nelems / NRanks;
+  auto nWorkElemsInInt = nWorkElems * sizeof(T) / sizeof(uint32_t);
+  size_t nChunks = divUp(nWorkElems, wireCapInType);
+  auto nTransmitElems = nChunks * wireTransInType;
+
+  T* allRanks[NRanks];
+  T* allIpcBuffers[NRanks];
+  T* allgatherBuffers[NRanks];
+
+  for (int i = 0; i < NRanks; ++ i) {
+    allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
+    allIpcBuffers[i] = (T *)malloc(sizeof(T) * nTransmitElems * NRanks);
+    allgatherBuffers[i] = (T *)malloc(sizeof(T) * nTransmitElems * NRanks);
+  }
+
+  auto* allreduceResult = (T*)malloc(sizeof(T) * nelems);
+
+  __scope_guard free_pointers([&] {
+    for (int i = 0; i < NRanks; ++ i) {
+      free(allRanks[i]);
+      free(allIpcBuffers[i]);
+      free(allgatherBuffers[i]);
+    }
+    free(allreduceResult);
+  });
+
+  for (int i = 0; i < NRanks; ++ i) {
+    fill_pattern(allRanks[i], i, nelems);
+    memset(allIpcBuffers[i], 0, sizeof(T) * nTransmitElems * NRanks);
+    memset(allgatherBuffers[i], 0, sizeof(T) * nTransmitElems * NRanks);
+  }
+
+  allreduce(allreduceResult, allRanks, NRanks, nelems);
+  return 0;
+}
+
+
 template <>
 int verifyTransmit<sycl::half, smallTransmit>(
     sycl::half* host, sycl::half* host2,
