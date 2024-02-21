@@ -540,8 +540,7 @@ protected:
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : farScatterStep(seqNo), closeScatterStep(seqNo + 1), closeGatherStep(seqNo + 2),
-  rank(rank), l_rank(rank/2)
+  ) : l_rank(rank/2), seqNo(seqNo)
 #if defined(__enable_sycl_stream__)
       , cout(cout)
 #endif
@@ -606,7 +605,8 @@ protected:
   void dumpOffsets(
       T* input,
       T* scatterBuf, T* gatherBuf,
-      T* const peerBuf0[], T* const peerBuf1[]
+      T* const peerBuf0[], T* const peerBuf1[],
+      int rank
   ) const {
     std::cout<<std::hex;
 
