@@ -317,6 +317,9 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       auto wireOff = groupId * cableCapacity + subGroupXId * wireCapacity + gOff;
       auto transOff = groupId * cableTSize + subGroupXId * wireTransSize + tOff;
       ssize_t workLeft = workSize - wireOff;
+
+      auto nextOff = wireOff + gOff;
+      auto nextLeft = workSize - nextOff;
 #if defined(__enable_sycl_stream__)
       auto localId = pos.get_sub_group().get_local_id()[0];
       if (localId == 0 && groupId == 0)
@@ -327,6 +330,8 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
           <<", workLeft:"<<workLeft<<sycl::endl;
 #endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
+        if (nextLeft > cableTSize)
+          const_cast<bisectPAllReduce *>(this)-> template PreloadNext<unroll>(nextOff);
         const_cast<bisectPAllReduce *>(this)->
           template scatterFar<unroll>(wireOff, transOff, workLeft);
         const_cast<bisectPAllReduce *>(this)->

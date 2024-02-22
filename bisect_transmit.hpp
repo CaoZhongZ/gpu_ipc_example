@@ -59,8 +59,12 @@ private:
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireTransSize + local_off;
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscPrefetch<T, sizeof(message_t)/sizeof(T),
         SubGroupSize, PrefetchCacheCtrl>(ptr + off);
+#else
+      (void)off;
+#endif
     }
   }
 
@@ -279,11 +283,20 @@ private:
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
     auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
     auto arith_m = reinterpret_cast<math_t (&)[unroll]>(m);
-#   pragma unroll
     for (int u = 0; u < unroll; ++ u)
       arith_v[u] += arith_m[u];
   }
 public:
+  template <int unroll> inline void PreloadNext(
+      size_t inputOffset
+  ) {
+    // given ioForPeers vs. ioForFar is stride with multiple of 1024
+    // Presume loss of L1 for accessing each other
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto y_id = sg.get_group_id()[0] % BiNRanks;
+    preload<unroll>(ioForPeers[y_id] + inputOffset/sizeof(T));
+    preload<unroll>(ioForFar[y_id] + inputOffset/sizeof(T));
+  }
 
   template <int unroll> inline void scatterFar(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
@@ -308,7 +321,7 @@ public:
 
     // given ioForPeers vs. ioForFar is stride with multiple of 1024
     // Presume loss of L1 for accessing each other
-    preload(ioForPeers[y_id] + inputOffInType);
+    preload<unroll>(ioForPeers[y_id] + inputOffInType);
 
     shuffleData(messages);
     insertFlags(messages, seqNo);
@@ -330,7 +343,7 @@ public:
 
     // given ioForPeers vs. ioForFar is stride with multiple of 1024
     // Presume worse case, evicted L1 when accessing one another
-    preload(ioForFar[y_id] + inputOffInType);
+    preload<unroll>(ioForFar[y_id] + inputOffInType);
 
     message_t messages[unroll];
     bool retry;

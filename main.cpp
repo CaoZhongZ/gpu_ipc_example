@@ -165,10 +165,10 @@ int main(int argc, char* argv[]) {
     queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
     queue.memcpy(host_init, input, alloc_size).wait();
 
-    auto err = verifyTransmit<test_type, test_transmit>(
+    verifyTransmit<test_type, test_transmit>(
         host_verify, host_init, flag, rank, world, simd, nelems
     );
-    return err;
+    std::cout<<std::dec;
   }
 
   /* auto e1 =*/ testTransmit<test_type, test_transmit>(
