@@ -11,6 +11,10 @@ class bisectPTransmit {
   constexpr static int firstElem = 0;
   constexpr static int lastElem = nReg128B -1;
 
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto PrefetchCacheCtrl = CacheCtrl::DEFAULT;
+
 protected:
   using message_t = sycl::vec<uint32_t, nReg128B>;
   // transaction of 128-byte is not atomic across HBM channel
@@ -45,6 +49,19 @@ private:
           (void)off;
 #endif
     }}}
+  }
+
+  template <int unroll> inline void preload(T *ptr) {
+    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+
+#   pragma unroll
+    for (int i = 0; i < unroll; ++ i) {
+      auto off = i * wireTransSize + local_off;
+      lscPrefetch<T, sizeof(message_t)/sizeof(T),
+        SubGroupSize, PrefetchCacheCtrl>(ptr + off);
+    }
   }
 
   template <int unroll> inline void loadInput(
@@ -223,7 +240,7 @@ private:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscStore<SubGroupSize, CacheCtrl::L1UC_L3WB>(
+      lscStore<SubGroupSize, CommWriteCacheCtrl>(
           ptr + u * wireTransElems + local_off,
           messages[u]
       );
@@ -243,7 +260,7 @@ private:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscLoad<SubGroupSize, CacheCtrl::L1UC_L3C>(
+      lscLoad<SubGroupSize, CommReadCacheCtrl>(
           messages[u],
           ptr + u * wireTransElems + local_off
       );
@@ -289,146 +306,14 @@ public:
       loadInput(messages, ptr);
     }
 
+    // given ioForPeers vs. ioForFar is stride with multiple of 1024
+    // Presume loss of L1 for accessing each other
+    preload(ioForPeers[y_id] + inputOffInType);
+
     shuffleData(messages);
     insertFlags(messages, seqNo);
     auto* dst = farScatterSink[y_id] + sinkOffInType;
     sendMessages(dst, messages);
-  }
-
-  template <int unroll> inline void closePollReduceScatter(
-      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
-  ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto y_id = sg.get_group_id()[0] % BiNRanks;
-
-    // NPeers -1 y-group consume, left 1
-    if (y_id == l_rank)
-      return;
-
-    auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = sinkOffset / sizeof(T);
-    auto nelems = workLeft / sizeof(T);
-    constexpr auto eltPerPack = unroll * wireElems;
-
-    message_t v[unroll];
-
-    // Load all locals
-    if (nelems < eltPerPack)
-      loadInput(v, ioForPeers[y_id] + inputOffInType, nelems);
-    else
-      loadInput(v, ioForPeers[y_id] + inputOffInType);
-
-    // Poll, reduce and send to close remotes
-    message_t messages[unroll];
-
-    bool retry;
-    do {
-      retry = false;
-      retry |= recvMessages(
-          messages, localFarScatterSink[y_id] + sinkOffInType, seqNo);
-    } while(sycl::any_of_group(sg, retry));
-
-    shuffleData(v);
-    accumMessages(v, messages);
-
-    insertFlags(v, seqNo);
-    sendMessages(scatterSink[y_id] + sinkOffInType, v);
-  }
-
-  template <int unroll>
-  inline void closePollRecvReduceBcast(
-      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
-  ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto y_id = sg.get_group_id()[0] % BiNRanks;
-
-    // single y-group workthrough the reduce and broadcast
-    if (y_id != l_rank)
-      return;
-
-    message_t v[unroll];  //input
-    message_t messages[unroll];
-
-    auto nelems = workLeft / sizeof(T);
-    auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = sinkOffset / sizeof(T);
-
-    auto inPtr = ioForPeers[y_id] + inputOffInType;
-    constexpr auto eltPerPack = unroll * wireElems;
-
-    if (nelems < eltPerPack) {
-      loadInput(v, inPtr, nelems);
-    } else {
-      loadInput(v, inPtr);
-    }
-    bool retry;
-    do {
-      retry = false;
-      retry |= recvMessages(
-          messages, localFarScatterSink[y_id] + sinkOffInType, seqNo);
-    } while (sycl::any_of_group(sg, retry));
-
-    shuffleData(v);
-    accumMessages(v, messages);
-
-    for (int i =0; i < NPeers; ++ i) {
-      bool retry;
-      do {
-        retry = false;
-        retry |= recvMessages(
-            messages, localScatterSink[i] + sinkOffInType, seqNo);
-      } while (sycl::any_of_group(sg, retry));
-      accumMessages(v, messages);
-    }
-
-    insertFlags(v, seqNo);
-
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i)
-      sendMessages(gatherSink[i] + sinkOffInType, v);
-
-    sendMessages(farGatherSink[y_id] + sinkOffInType, v);
-    restoreData(v);
-
-    // write back to ioBuffer
-    if (nelems < eltPerPack) {
-      storeOutput(inPtr, v, nelems);
-    } else {
-      storeOutput(inPtr, v);
-    }
-  }
-
-  template <int unroll> inline void pollGatherOutputs(
-      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
-  ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto y_id = sg.get_group_id()[0] % BiNRanks;
-    if (y_id == l_rank)
-      return;
-
-    auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = sinkOffset / sizeof(T);
-    auto nelems = workLeft / sizeof(T);
-
-    constexpr auto eltPerPack = unroll * wireElems;
-
-    bool retry;
-    message_t messages[unroll];
-
-    do {
-      retry = false;
-      retry |= recvMessages(
-          messages, localGatherSink[y_id] + sinkOffInType, seqNo);
-    } while(sycl::any_of_group(sg, retry));
-
-    sendMessages(farGatherSink[y_id] + sinkOffInType, messages);
-    restoreData(messages);
-
-    auto* ptr = ioForPeers[y_id] + inputOffInType;
-    if (nelems < eltPerPack)
-      storeOutput(ptr, messages, nelems);
-    else
-      storeOutput(ptr, messages);
   }
 
   template <int unroll> inline void pollFarGatherOutput(
@@ -442,6 +327,10 @@ public:
     auto y_id = sg.get_group_id()[0] % BiNRanks;
 
     constexpr auto eltPerPack = unroll * wireElems;
+
+    // given ioForPeers vs. ioForFar is stride with multiple of 1024
+    // Presume worse case, evicted L1 when accessing one another
+    preload(ioForFar[y_id] + inputOffInType);
 
     message_t messages[unroll];
     bool retry;
