@@ -602,44 +602,6 @@ protected:
     }
   }
 
-  void dumpOffsets(
-      T* input,
-      T* scatterBuf, T* gatherBuf,
-      T* const peerBuf0[], T* const peerBuf1[],
-      int rank
-  ) const {
-    std::cout<<std::hex;
-
-    for (int i = 0; i < BiNRanks; ++ i)
-      std::cout<<ioForPeers[i] - input<<", ";
-    for (int i = 0; i < BiNRanks; ++ i)
-      std::cout<<ioForFar[i] - input<<", ";
-
-    std::cout<<"\nLocal IPC sink offsets: ";
-    for (int i = 0; i < BiNRanks; ++ i)
-      std::cout<<localFarScatterSink[i] - scatterBuf<<", ";
-    for (int i = 0; i < BiNRanks; ++ i)
-      std::cout<<localFarGatherSink[i] - gatherBuf<<", ";
-
-    for (int i = 0; i < NPeers; ++ i)
-      std::cout<<localScatterSink[i] - scatterBuf<<", ";
-    for (int i = 0; i < BiNRanks; ++ i)
-      std::cout<<localGatherSink[i] - gatherBuf<<", ";
-
-    std::cout<<"\nIPC far offsets: ";
-
-    for (int i = 0; i < BiNRanks; ++ i)
-      std::cout<<farScatterSink[i] - peerBuf0[rank ^ 1]<<", ";
-    for (int i = 0; i < BiNRanks; ++ i)
-      std::cout<<farGatherSink[i] - peerBuf1[rank ^ 1]<<", ";
-
-    std::cout<<"\nIPC close offsets: ";
-    for (int i = 0;i < BiNRanks; ++ i)
-      std::cout<<scatterSink[i] - peerBuf0[(l_rank + i + 1) % BiNRanks]<<", ";
-    for (int i = 0;i < NPeers; ++ i)
-      std::cout<<gatherSink[i] - peerBuf1[(l_rank + i + 1) % BiNRanks]<<", ";
-  }
-
   // --------------------Input/Output buffer-------------------
   // Input partitions
   T* ioForPeers[BiNRanks];
