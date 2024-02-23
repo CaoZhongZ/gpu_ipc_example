@@ -409,7 +409,7 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       sycl::nd_item<1> pos
   ) const {
     auto groupRange = pos.get_group_range()[0];
-    int subGroupXRange = pos.get_sub_group().get_group_range()[0]/BiNRanks;
+    int subGroupXRange = pos.get_sub_group().get_group_range()[0]/BiNRanks/2;
 
     auto cableCapacity = wireCapacity * subGroupXRange;
     auto cableTSize = wireTransSize * subGroupXRange;
@@ -441,14 +441,11 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
         if (subGroupYId < 4) {
           const_cast<bisectPPAllReduce *>(this)->
             template scatterFar<unroll>(wireOff, transOff, workLeft);
+          const_cast<bisectPPAllReduce *>(this)->
+            template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
         } else if (subGroupYId < 8) {
           const_cast<bisectPPAllReduce *>(this)->
             template closeUnifiedPollReduceScatterGather<unroll>(wireOff, transOff, workLeft);
-        }
-
-        if (subGroupYId < 4) {
-          const_cast<bisectPPAllReduce *>(this)->
-            template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
         }
       }
     }

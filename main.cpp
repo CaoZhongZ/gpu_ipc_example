@@ -169,6 +169,7 @@ int main(int argc, char* argv[]) {
         host_verify, host_init, flag, rank, world, simd, nelems
     );
     std::cout<<std::dec;
+    return 0;
   }
 
   /* auto e1 =*/ testTransmit<test_type, test_transmit>(
