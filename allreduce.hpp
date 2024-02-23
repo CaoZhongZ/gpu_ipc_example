@@ -290,6 +290,7 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   static int stage1Verify(T* host, int rank, uint32_t flag, size_t nelems);
   static int stage2Verify(T* host, int rank, uint32_t flag, size_t nelems);
   static int stage3Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage4Verify(T* host, int rank, uint32_t flag, size_t nelems);
 
   //
   // We use linear group configuration because subgroup is linear only
@@ -398,9 +399,7 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
 #endif
   {}
 
-  static int stage1Verify(T* host, int rank, uint32_t flag, size_t nelems);
-  static int stage2Verify(T* host, int rank, uint32_t flag, size_t nelems);
-  static int stage3Verify(T* host, int rank, uint32_t flag, size_t nelems);
+  static int stage4Verify(T* host, int rank, uint32_t flag, size_t nelems);
 
   //
   // We use linear group configuration because subgroup is linear only
@@ -415,19 +414,13 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
     auto cableCapacity = wireCapacity * subGroupXRange;
     auto cableTSize = wireTransSize * subGroupXRange;
 
-    // SubGroup 0, 1, 2, 3 is stacked up to the same groupXId
-    // Hence work on same offsets
-    auto subGroupXId = pos.get_sub_group().get_group_id()[0] /BiNRanks;
+    // 0, 1, 2, 3, 4, 5, 6, 7 work on same offset
+    auto subGroupXId = pos.get_sub_group().get_group_id()[0] /(BiNRanks *2);
+    auto subGroupYId = pos.get_sub_group().get_group_id()[0] %(BiNRanks *2);
     auto groupId = pos.get_group().get_group_id()[0];
 
     auto loopSize = groupRange * cableCapacity;
     auto loopTSize = groupRange * cableTSize;
-
-    // We use 3 sets of subgroups
-    // 1. one set for scatter to far side,   0, 1, 2, 3
-    // 2. one set for reduce scatter gather, 4, 5, 6, 7, 8, 9, 10, 11
-    // 3. one set for gather to far side,    12, 13, 14, 15
-    auto subGroupZId = pos.get_sub_group().get_group_id()[0] / (BiNRanks * 4);
 
     for (size_t gOff = 0, tOff = 0;
         gOff < workSize; gOff += loopSize, tOff += loopTSize) {
@@ -445,15 +438,18 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
           <<", workLeft:"<<workLeft<<sycl::endl;
 #endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
-        if (subGroupZId < 4)
-          const_cast<bisectPAllReduce *>(this)->
+        if (subGroupYId < 4) {
+          const_cast<bisectPPAllReduce *>(this)->
             template scatterFar<unroll>(wireOff, transOff, workLeft);
-        else if (subGroupZId < 12)
-          const_cast<bisectPAllReduce *>(this)->
+        } else if (subGroupYId < 8) {
+          const_cast<bisectPPAllReduce *>(this)->
             template closeUnifiedPollReduceScatterGather<unroll>(wireOff, transOff, workLeft);
-        else
-          const_cast<bisectPAllReduce *>(this)->
+        }
+
+        if (subGroupYId < 4) {
+          const_cast<bisectPPAllReduce *>(this)->
             template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
+        }
       }
     }
   }
@@ -481,7 +477,6 @@ private:
   sycl::stream cout;
 #endif
 };
-
 
 template <typename T, template <typename, int, int> class Transmit>
 sycl::event testTransmit(

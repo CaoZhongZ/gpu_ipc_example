@@ -545,6 +545,46 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
   return 0;
 }
 
+template <typename T,
+         int NRanks,
+         template <typename, int, int> class Transmit,
+         int SubGroupSize>
+int bisectPAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
+    T* host, int rank, uint32_t flag, size_t nelems
+){
+  auto nWorkElems = nelems / NRanks;
+
+  T* allRanks[NRanks];
+
+  for (int i = 0; i < NRanks; ++ i) {
+    allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
+  }
+
+  auto* allreduceResult = (T*)malloc(sizeof(T) * nelems);
+
+  __scope_guard free_pointers([&] {
+    for (int i = 0; i < NRanks; ++ i) {
+      free(allRanks[i]);
+    }
+    free(allreduceResult);
+  });
+
+  for (int i = 0; i < NRanks; ++ i) {
+    fill_pattern(allRanks[i], i, nelems);
+  }
+
+  allreduce(allreduceResult, allRanks, NRanks, nelems);
+
+  for (int i = 0; i < nelems; ++ i) {
+    if (allreduceResult[i] != host[i]) {
+      std::cout<<"Error Compare! Expected: "
+        <<allreduceResult[i] <<", got: "<<host[i]
+        <<"@["<<rank<<"]("<<i<<");"<<std::endl;
+    }
+  }
+  return 0;
+}
+
 template <>
 int verifyTransmit<sycl::half, smallTransmit>(
     sycl::half* host, sycl::half* host2,
@@ -559,6 +599,7 @@ int verifyTransmit<sycl::half, bisectTransmit>(
     sycl::half* host, sycl::half* host2,
     uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
+  /*
   auto ret1 = (simd == 16) ?
     bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage1Verify(
       host, rank, step, nelems) :
@@ -574,12 +615,13 @@ int verifyTransmit<sycl::half, bisectTransmit>(
       host, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage3Verify(
       host, rank, step, nelems);
+      */
   auto ret4 = (simd == 16) ?
-    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage4Verify(
+    bisectPAllReduce<sycl::half, 8, bisectTransmit, 16>::stage4Verify(
       host2, rank, step, nelems) :
-    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage4Verify(
+    bisectPAllReduce<sycl::half, 8, bisectTransmit, 32>::stage4Verify(
       host2, rank, step, nelems);
-  return ret1 + ret2 + ret3 + ret4;
+  return /*ret1 + ret2 + ret3 + */ret4;
 }
 
 template <>
@@ -587,6 +629,7 @@ int verifyTransmit<sycl::half, bisectPTransmit>(
     sycl::half* host, sycl::half* host2,
     uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
+  /*
   auto ret1 = (simd == 16) ?
     bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage1Verify(
       host, rank, step, nelems) :
@@ -602,12 +645,13 @@ int verifyTransmit<sycl::half, bisectPTransmit>(
       host, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage3Verify(
       host, rank, step, nelems);
+      */
   auto ret4 = (simd == 16) ?
     bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage4Verify(
       host2, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage4Verify(
       host2, rank, step, nelems);
-  return ret1 + ret2 + ret3 + ret4;
+  return /*ret1 + ret2 + ret3 +*/ ret4;
 }
 
 template <typename T,

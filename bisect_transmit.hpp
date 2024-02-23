@@ -11,8 +11,8 @@ class bisectPTransmit {
   constexpr static int firstElem = 0;
   constexpr static int lastElem = nReg128B -1;
 
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
   constexpr static auto PrefetchCacheCtrl = CacheCtrl::DEFAULT;
 
 protected:
@@ -319,10 +319,6 @@ public:
       loadInput(messages, ptr);
     }
 
-    // given ioForPeers vs. ioForFar is stride with multiple of 1024
-    // Presume loss of L1 for accessing each other
-    preload<unroll>(ioForPeers[y_id] + inputOffInType);
-
     shuffleData(messages);
     insertFlags(messages, seqNo);
     auto* dst = farScatterSink[y_id] + sinkOffInType;
@@ -341,10 +337,6 @@ public:
 
     constexpr auto eltPerPack = unroll * wireElems;
 
-    // given ioForPeers vs. ioForFar is stride with multiple of 1024
-    // Presume worse case, evicted L1 when accessing one another
-    preload<unroll>(ioForFar[y_id] + inputOffInType);
-
     message_t messages[unroll];
     bool retry;
     do {
@@ -352,6 +344,9 @@ public:
       retry |= recvMessages(
           messages, localFarGatherSink[y_id] + sinkOffInType, seqNo);
     } while(sycl::any_of_group(sg, retry));
+
+    // if (sg.get_local_id()[0] == 15)
+    //   cout<<messages[0]<<sycl::endl<<sycl::flush;
 
     restoreData(messages);
 
