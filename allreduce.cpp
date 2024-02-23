@@ -654,6 +654,36 @@ int verifyTransmit<sycl::half, bisectPTransmit>(
   return /*ret1 + ret2 + ret3 +*/ ret4;
 }
 
+template <>
+int verifyTransmit<sycl::half, bisectPPTransmit>(
+    sycl::half* host, sycl::half* host2,
+    uint32_t step, int rank, int world, uint32_t simd, size_t nelems
+) {
+  /*
+  auto ret1 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage1Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage1Verify(
+      host, rank, step, nelems);
+  auto ret2 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage2Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage2Verify(
+      host, rank, step, nelems);
+  auto ret3 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage3Verify(
+      host, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage3Verify(
+      host, rank, step, nelems);
+      */
+  auto ret4 = (simd == 16) ?
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 16>::stage4Verify(
+      host2, rank, step, nelems) :
+    bisectAllReduce<sycl::half, 8, bisectTransmit, 32>::stage4Verify(
+      host2, rank, step, nelems);
+  return /*ret1 + ret2 + ret3 +*/ ret4;
+}
+
 template <typename T,
          int NPeers,
          template <typename, int, int> class Transmit,
@@ -1017,7 +1047,7 @@ template <> sycl::event testTransmit <sycl::half, bisectPPTransmit> (
   if (subgroup == 16) {
     constexpr int SubGroupSize = 16;
 #if defined(__fix_param_passing__) && !defined(__enable_sycl_stream__)
-    bisectPPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>
+    bisectPPAllReduce<sycl::half, 8, bisectPPTransmit, SubGroupSize>
       devOp(input, nelems, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1);
     sycl::buffer params(
       const_cast<const decltype(devOp) *>(&devOp),
@@ -1041,7 +1071,7 @@ template <> sycl::event testTransmit <sycl::half, bisectPPTransmit> (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>(
+          bisectPPAllReduce<sycl::half, 8, bisectPPTransmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -1062,7 +1092,7 @@ template <> sycl::event testTransmit <sycl::half, bisectPPTransmit> (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>(
+          bisectPPAllReduce<sycl::half, 8, bisectPPTransmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)

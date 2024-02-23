@@ -804,7 +804,6 @@ public:
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireElems;
-
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto y_id = sg.get_group_id()[0] % 2;
     auto *ptr0 = ioForFar[y_id * 2] + inputOffInType;

@@ -446,7 +446,7 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
             template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
         } else if (subGroupYId < 8) {
           const_cast<bisectPPAllReduce *>(this)->
-            template closeUnifiedPollReduceScatterGather<unroll>(wireOff, transOff, workLeft);
+           template closeUnifiedPollReduceScatterGather<unroll>(wireOff, transOff, workLeft);
         }
       }
     }
