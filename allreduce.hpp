@@ -369,7 +369,7 @@ private:
 
 template <typename T,
          int NRanks,
-         template <typename, int, int> class Transmit = bisectPTransmit,
+         template <typename, int, int> class Transmit = bisectPPTransmit,
          int SubGroupSize = 16>
 struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   using Super = Transmit<T, NRanks, SubGroupSize>;
@@ -438,9 +438,10 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
           <<", workLeft:"<<workLeft<<sycl::endl;
 #endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
-        if (subGroupYId < 4) {
+        if (subGroupYId < 2) {
           const_cast<bisectPPAllReduce *>(this)->
             template scatterFar<unroll>(wireOff, transOff, workLeft);
+        } else if (subGroupYId < 4) {
           const_cast<bisectPPAllReduce *>(this)->
             template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
         } else if (subGroupYId < 8) {
