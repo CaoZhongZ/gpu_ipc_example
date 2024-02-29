@@ -387,7 +387,7 @@ public:
     shuffleData(v);
     accumMessages(v, messages);
 
-    //------------------------- group diverge 3:1 -------------------
+    //------------------------- sub-group diverge 3:1 -------------------
     if (y_id != l_rank) {
       insertFlags(v, seqNo);
       sendMessages(scatterSink[y_id] + sinkOffInType, v); // 1. xNPeers <scatter>

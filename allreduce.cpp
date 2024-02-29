@@ -993,7 +993,7 @@ template <> sycl::event testTransmit <sycl::half, bisectPTransmit> (
 #if defined(__fix_param_passing__) && !defined(__enable_sycl_stream__)
       return queue.submit([&](sycl::handler &cgh) {
         auto deviceCapture = params.template get_access<
-          sycl::access_mode::read, sycl::target::device>(cgh);
+          sycl::access_mode::read, sycl::target::constant_buffer>(cgh);
         cgh.parallel_for(launchParam, [=] (sycl::nd_item<1> pos) {
             deviceCapture[0](pos);
         });
