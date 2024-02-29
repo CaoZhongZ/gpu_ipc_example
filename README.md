@@ -8,9 +8,12 @@ This SYCL implementation of All-Reduce shows how to achieve peak performance on 
 3. MPI
 
 ## Build the Benchmark
-```git submodule update --init```
-
-```make main```
+```
+git submodule update --init
+make main
+```
 
 ## Run
-```mpirun -np 8 ./main -n \<number of elements in half\> [-w sub-group] [-g group]```
+```
+mpirun -np 8 ./main -n \<number of elements in half\> [-w sub-group] [-g group]
+```
