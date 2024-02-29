@@ -1,6 +1,6 @@
 ## Intel MLPerf Prototypes on Peak Performance Communication Collectives
 
-This SYCL implementation of All-Reduce shows how to achieve peak performance on Intel PVC system with XeLinks. The concurrent full utilization of all link bandwidth is the key to achieve designed peak performance in single launch of kernel. Implementation demonstrated in half precision at the moment.
+This SYCL implementation of All-Reduce shows how to achieve peak performance on Intel PVC system with XeLinks. A launch of single kernel that concurrently utilizes of all available internel (Cross Tile and XeLinks) bandwidth of links is the key to achieve designed peak performance. Implementation demonstrated in half precision at the moment.
 
 ## Requirements
 1. Intel SYCL Compiler
