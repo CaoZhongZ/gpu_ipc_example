@@ -1,17 +1,24 @@
-CC=icx
-CXX=icpx
+CC=clang
+CXX=clang++
 
-OPT=-O3
+OPT=-O3 -fno-strict-aliasing
+# OPT=-g -fno-strict-aliasing
+# VERBOSE=-D__enable_sycl_stream__
 
-SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc -internal_options -ze-intel-has-buffer-offset-arg -internal_options -cl-intel-greater-than-4GB-buffer-required"
-CCL_ROOT=../ccl/release/_install
+SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc"
 
-INCLUDES=-I$(CCL_ROOT)/include
-LIBRARIES=-L$(CCL_ROOT)/lib -lmpi -lze_loader
+# CCL_ROOT=../ccl/release/_install
+# INCLUDES=-I$(CCL_ROOT)/include
+# LIBRARIES=-L$(CCL_ROOT)/lib -lmpi -lze_loader
 
-CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) -Wall $(INCLUDES) $(LIBRARIES)
+INCLUDES=-Itvisa/include
+LIBRARIES=-lmpi -lze_loader
 
-all : fill_remote
+CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) $(VERBOSE) -Wall -Wno-vla-cxx-extension $(INCLUDES) $(LIBRARIES)
+
+main : main.cpp ipc_exchange.cpp sycl_misc.cpp allreduce.cpp
+
+all : main
 
 clean:
-	rm -f fill_remote
+	rm -f main
