@@ -281,10 +281,12 @@ private:
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
-    auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
-    auto arith_m = reinterpret_cast<math_t (&)[unroll]>(m);
+#   pragma unroll
     for (int u = 0; u < unroll; ++ u)
-      arith_v[u] += arith_m[u];
+      arith_v[u] = sycl::bit_cast<message_t>(
+          sycl::bit_cast<math_t>(arith_m[u])
+          + sycl::bit_cast<math_t>(arith_v[u])
+      );
   }
 public:
   template <int unroll> inline void PreloadNext(
@@ -789,10 +791,12 @@ private:
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
-    auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
-    auto arith_m = reinterpret_cast<math_t (&)[unroll]>(m);
+#   pragma unroll
     for (int u = 0; u < unroll; ++ u)
-      arith_v[u] += arith_m[u];
+      arith_v[u] = sycl::bit_cast<message_t>(
+          sycl::bit_cast<math_t>(arith_m[u])
+          + sycl::bit_cast<math_t>(arith_v[u])
+      );
   }
 public:
   // [0, 1] -> [[0, 1], [2, 3]]
