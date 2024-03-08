@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rt64_128.hpp"
+
 template <typename T, int NPeers, int SubGroupSize>
 class smallTransmit {
   // first row contains data, second row, flags
