@@ -255,6 +255,7 @@ private:
 #endif
 };
 
+// Best candidate for throughput
 template <typename T,
          int NRanks,
          template <typename, int, int> class Transmit = bisectPTransmit,
@@ -275,9 +276,7 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
 #endif
   ) :
   Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
-      calcWorkSize(input, nelems * sizeof(T)),
-      divUp(calcWorkSize(input, nelems * sizeof(T)), wireCapacity)
-      * wireTransSize, rank, seqNo
+      calcWorkSize(input, nelems * sizeof(T)), rank, seqNo
 #if defined(__enable_sycl_stream__)
       , cout
 #endif
@@ -319,8 +318,10 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       auto transOff = groupId * cableTSize + subGroupXId * wireTransSize + tOff;
       ssize_t workLeft = workSize - wireOff;
 
+#if defined(__enable_prefetch__)
       auto nextOff = wireOff + gOff;
       auto nextLeft = workSize - nextOff;
+#endif
 #if defined(__enable_sycl_stream__)
       auto localId = pos.get_sub_group().get_local_id()[0];
       if (localId == 0 && groupId == 0)
@@ -331,8 +332,10 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
           <<", workLeft:"<<workLeft<<sycl::endl;
 #endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
+#if defined(__enable_prefetch__)
         if (nextLeft > cableTSize)
           const_cast<bisectPAllReduce *>(this)-> template PreloadNext<unroll>(nextOff);
+#endif
         const_cast<bisectPAllReduce *>(this)->
           template scatterFar<unroll>(wireOff, transOff, workLeft);
         const_cast<bisectPAllReduce *>(this)->
@@ -387,9 +390,7 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
 #endif
   ) :
   Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
-      calcWorkSize(input, nelems * sizeof(T)),
-      divUp(calcWorkSize(input, nelems * sizeof(T)), wireCapacity)
-      * wireTransSize, rank, seqNo
+      calcWorkSize(input, nelems * sizeof(T)), rank, seqNo
 #if defined(__enable_sycl_stream__)
       , cout
 #endif
