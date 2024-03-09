@@ -8,7 +8,7 @@ protected:
   constexpr static auto PrefetchCacheCtrl = CacheCtrl::DEFAULT;
 
   constexpr static int nReg128B = 128 / SubGroupSize / 4;
-  using message_t = sycl::vec<uint32_t, nReg128B>;
+  typedef sycl::vec<uint32_t, nReg128B> message_t;
   constexpr static int firstElem = 0;
   constexpr static int lastElem = nReg128B -1;
 
@@ -22,7 +22,7 @@ protected:
   constexpr static size_t wireElems = wireCapacity /sizeof(T);
   constexpr static size_t wireTransElems = wireTransSize /sizeof(T);
 
-  template <int unroll> inline void loadInput(
+  template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
@@ -42,7 +42,7 @@ protected:
     }}}
   }
 
-  template <int unroll> inline void loadInput(
+  template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
@@ -61,7 +61,7 @@ protected:
     }}
   }
 
-  template <int unroll> inline void preload(T *ptr) {
+  template <int unroll> static inline void preload(T *ptr) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
@@ -109,7 +109,7 @@ protected:
   }
 
   template <int unroll>
-  inline void insertFlags(
+  static inline void insertFlags(
       message_t (& messages)[unroll], uint32_t flag
   ) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
@@ -190,7 +190,7 @@ protected:
 #endif
   }
 
-  template <int unroll> inline void storeOutput(
+  template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
@@ -208,7 +208,7 @@ protected:
     }}
   }
 
-  template <int unroll> inline void storeOutput(
+  template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
@@ -227,7 +227,7 @@ protected:
 
   // We always push 128-byte packages
   template <int unroll>
-  inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
+  static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
@@ -246,7 +246,7 @@ protected:
   }
 
   template <int unroll>
-  inline bool recvMessages(message_t (&messages)[unroll], T* ptr, uint32_t flag) {
+  static inline bool recvMessages(message_t (&messages)[unroll], T* ptr, uint32_t flag) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
@@ -268,19 +268,19 @@ protected:
     return retry;
   }
 
-  template <int unroll> inline void accumMessages(
+  template <int unroll> static inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u)
-      arith_v[u] = sycl::bit_cast<message_t>(
-          sycl::bit_cast<math_t>(arith_m[u])
-          + sycl::bit_cast<math_t>(arith_v[u])
+      v[u] = sycl::bit_cast<message_t>(
+          sycl::bit_cast<math_t>(m[u])
+          + sycl::bit_cast<math_t>(v[u])
       );
   }
 
-  inline void recvMessage(message_t &message, T* ptr) {
+  static inline void recvMessage(message_t &message, T* ptr) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);

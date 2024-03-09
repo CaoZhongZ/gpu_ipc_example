@@ -625,7 +625,7 @@ int verifyTransmit<sycl::half, bisectTransmit>(
 }
 
 template <>
-int verifyTransmit<sycl::half, bisectPTransmit>(
+int verifyTransmit<sycl::half, bisectPTransmitOpt>(
     sycl::half* host, sycl::half* host2,
     uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
@@ -973,7 +973,7 @@ template <> sycl::event testTransmit <sycl::half, bisectTransmit> (
   }
 }
 
-template <> sycl::event testTransmit <sycl::half, bisectPTransmit> (
+template <> sycl::event testTransmit <sycl::half, bisectPTransmitOpt> (
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t nelems,
@@ -981,7 +981,7 @@ template <> sycl::event testTransmit <sycl::half, bisectPTransmit> (
   if (subgroup == 16) {
     constexpr int SubGroupSize = 16;
 #if defined(__fix_param_passing__) && !defined(__enable_sycl_stream__)
-    bisectPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>
+    bisectPAllReduce<sycl::half, 8, bisectPTransmitOpt, SubGroupSize>
       devOp(input, nelems, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1);
     sycl::buffer params(
       const_cast<const decltype(devOp) *>(&devOp),
@@ -1005,7 +1005,7 @@ template <> sycl::event testTransmit <sycl::half, bisectPTransmit> (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>(
+          bisectPAllReduce<sycl::half, 8, bisectPTransmitOpt, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -1026,7 +1026,7 @@ template <> sycl::event testTransmit <sycl::half, bisectPTransmit> (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 8, bisectPTransmit, SubGroupSize>(
+          bisectPAllReduce<sycl::half, 8, bisectPTransmitOpt, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)

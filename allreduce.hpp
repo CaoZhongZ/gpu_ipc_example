@@ -261,7 +261,7 @@ template <typename T,
          int SubGroupSize = 16>
 struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   using Super = Transmit<T, NRanks, SubGroupSize>;
-  using message_t = typename Super::message_t;
+  using typename Super::message_t;
   constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
   constexpr static int wireCapacity = Super::wireCapacity;
   constexpr static int wireTransSize = Super::wireTransSize;

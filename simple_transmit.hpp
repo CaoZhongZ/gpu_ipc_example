@@ -3,7 +3,20 @@
 #include "rt64_128.hpp"
 
 template <typename T, int NPeers, int SubGroupSize>
-class SimpleTransmit : rt64_128<T, SubGroupSize> {
+class SimpleTransmit : public rt64_128<T, SubGroupSize> {
+protected:
+  using super = rt64_128<T, SubGroupSize>;
+  using super::wireElems;
+  using super::loadInput;
+  using super::storeOutput;
+  using super::shuffleData;
+  using super::restoreData;
+  using super::insertFlags;
+  using super::sendMessages;
+  using super::recvMessages;
+  using super::accumMessages;
+
+  using message_t = typename rt64_128<T, SubGroupSize>::message_t;
 public:
   SimpleTransmit(
       int rank,
@@ -84,7 +97,6 @@ public:
     }
 
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    int lane_id = sg.get_local_id();
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
@@ -92,16 +104,12 @@ public:
       bool retry;
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages[u], localScatterSink[i] + sinkOffInType);
-          retry |=
-            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
-            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
-        }
+        retry |= recvMessages(
+            messages, localScatterSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
 
 #if defined(__enable_sycl_stream__)
+      int lane_id = sg.get_local_id();
       if (lane_id == firstFlagChannel || lane_id == lastFlagChannel) {
         cout<<"["<<rank<<","<<lane_id<<"]";
         for (int u = 0; u < unroll; ++ u)
@@ -109,30 +117,8 @@ public:
         cout<<sycl::endl<<sycl::flush;
       }
 #endif
-
       restoreData(messages);
-
-#if 1 //!defined(__SYCL_DEVICE_ONLY__)
-      using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
-      auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
-      auto arith_m = reinterpret_cast<math_t (&)[unroll]>(messages);
-#endif
-
-      if (lane_id < lastDataChannel) {  // XXX: Fixed diverge
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-#if 0// defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          v[u] = addAs<T, SubGroupSize>(v[u], messages[u]);
-#else
-//           if (lane_id == 0 && u == 0) {
-//             cout<<"["<<rank<<"]v:"<<arith_v[0]
-//               <<", m:"<<arith_m[0]
-//               <<sycl::endl<<sycl::flush;
-//           }
-          arith_v[u] += arith_m[u];
-#endif
-        }
-      }
+      accumMessages(v, messages);
     }
 
     // write back locally before shuffle data
@@ -161,7 +147,6 @@ public:
 
     constexpr auto eltPerPack = unroll * wireElems;
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    int lane_id = sg.get_local_id();
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
@@ -170,13 +155,7 @@ public:
       message_t messages[unroll];
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages[u], localGatherSink[i] + sinkOffInType);
-          retry |=
-            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
-            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
-        }
+        retry |= recvMessages(messages, localGatherSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
 
       auto ptr = ioForPeers[i] + inputOffInType;

@@ -6,11 +6,15 @@
 // Requires multiple dimension launch with Y dimention equal to 'BiNRanks'
 //
 template <typename T, int NRanks, int SubGroupSize>
-class bisectPTransmit : rt64_128<T, SubGroupSize> {
+class bisectPTransmit : public rt64_128<T, SubGroupSize> {
   constexpr static int BiNRanks = NRanks / 2;
   constexpr static int NPeers = BiNRanks -1;
 
 public:
+  using rt64_128<T, SubGroupSize>::preload;
+  using rt64_128<T, SubGroupSize>::wireElems;
+  using typename rt64_128<T, SubGroupSize>::message_t;
+
   template <int unroll> inline void PreloadNext(
       size_t inputOffset
   ) {
@@ -251,9 +255,22 @@ protected:
 };
 
 template <typename T, int NRanks, int SubGroupSize>
-class bisectPTransmitOpt : rt64_128<T, SubGroupSize> {
+class bisectPTransmitOpt : public rt64_128<T, SubGroupSize> {
+protected:
   constexpr static int BiNRanks = NRanks / 2;
   constexpr static int NPeers = BiNRanks -1;
+  using super=rt64_128<T, SubGroupSize>;
+
+  using super::wireElems;
+  using super::loadInput;
+  using super::storeOutput;
+  using super::shuffleData;
+  using super::restoreData;
+  using super::insertFlags;
+  using super::sendMessages;
+  using super::recvMessages;
+  using super::accumMessages;
+  using typename super::message_t;
 
 public:
   template <int unroll> inline void PreloadNext(
@@ -265,8 +282,8 @@ public:
     auto y_id = sg.get_group_id()[0] % BiNRanks;
     auto y_off = y_id * workElems;
 
-    preload<unroll>(ioForPeers + y_off + inputOffset/sizeof(T));
-    preload<unroll>(ioForFar + y_off + inputOffset/sizeof(T));
+    super::template preload<unroll>(ioForPeers + y_off + inputOffset/sizeof(T));
+    super::template preload<unroll>(ioForFar + y_off + inputOffset/sizeof(T));
   }
 
   template <int unroll> inline void scatterFar(
@@ -411,7 +428,7 @@ protected:
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : l_rank(rank/2), seqNo(seqNo), workSize(workSize/sizeof(T))
+  ) : l_rank(rank/2), seqNo(seqNo), workElems(workSize/sizeof(T))
 #if defined(__enable_sycl_stream__)
       , cout(cout)
 #endif
@@ -502,10 +519,24 @@ protected:
 };
 
 template <typename T, int NRanks, int SubGroupSize>
-class bisectPPTransmit : rt64_128<T, SubGroupSize> {
+class bisectPPTransmit : public rt64_128<T, SubGroupSize> {
+public:
   constexpr static int BiNRanks = NRanks / 2;
   constexpr static int NPeers = BiNRanks -1;
-public:
+
+  using super = rt64_128<T, SubGroupSize>;
+  using super::wireElems;
+  using super::loadInput;
+  using super::storeOutput;
+  using super::shuffleData;
+  using super::restoreData;
+  using super::insertFlags;
+  using super::sendMessages;
+  using super::recvMessages;
+  using super::accumMessages;
+
+  using typename rt64_128<T, SubGroupSize>::message_t;
+
   // [0, 1] -> [[0, 1], [2, 3]]
   template <int unroll> inline void scatterFar(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
