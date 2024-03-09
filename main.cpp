@@ -41,7 +41,7 @@ void extract_profiling(sycl::event e, int rank) {
   std::cout<<"["<<rank<<"] Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
-#define test_transmit bisectPPTransmit
+#define test_transmit bisectPTransmit
 using test_type = sycl::half;
 
 int main(int argc, char* argv[]) {
