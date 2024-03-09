@@ -475,17 +475,13 @@ protected:
 
     // Indicated by y-id
     for (int i = 0; i < BiNRanks; ++ i) {
-
-      // Will jump over rank slot, XXX: be careful
-      if (l_rank != i) {
-        // even: 0, 2, 4, 6
-        // odd:  1, 3, 5, 7
-        auto r_index = 2 * i + (rank & 1);
-        scatterSink[i] = (T *)((uintptr_t)ipcClosePart(peerBuf0[r_index])
-            + l_rank * transmitSize);
-        localGatherSink[i] = (T *)((uintptr_t)ipcClosePart(gatherBuf)
-            + i * transmitSize);
-      }
+      // even: 0, 2, 4, 6
+      // odd:  1, 3, 5, 7
+      auto r_index = 2 * i + (rank & 1);
+      scatterSink[i] = (T *)((uintptr_t)ipcClosePart(peerBuf0[r_index])
+          + l_rank * transmitSize);
+      localGatherSink[i] = (T *)((uintptr_t)ipcClosePart(gatherBuf)
+          + i * transmitSize);
     }
 
     // Indicated by next?
