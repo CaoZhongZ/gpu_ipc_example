@@ -487,7 +487,7 @@ protected:
       return p;
     };
     auto ipcFarPart = [&](T* p) {
-      return (T *)((uintptr_t)p + sectionElems * BiNRanks);
+      return (T *)((uintptr_t)p + sectionSize * BiNRanks);
     };
 
     ioForPeers = ioClosePart(input);
