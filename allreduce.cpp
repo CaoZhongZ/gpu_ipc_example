@@ -3,6 +3,7 @@
 
 template <typename T>
 static void allreduce(T* allRanks[], int nRanks, size_t nelems) {
+# pragma omp parallel for
   for (int i = 0; i < nelems; ++ i) {
     T sum = 0.0;
     for (int r = 0; r < nRanks; ++ r)
@@ -15,6 +16,7 @@ static void allreduce(T* allRanks[], int nRanks, size_t nelems) {
 
 template <typename T>
 static void allreduce(T* result, T* allRanks[], int nRanks, size_t nelems) {
+# pragma omp parallel for
   for (int i = 0; i < nelems; ++ i) {
     T sum = 0.0;
     for (int r = 0; r < nRanks; ++ r)
