@@ -295,12 +295,14 @@ private:
   template <int unroll> static inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u)
       v[u] = sycl::bit_cast<message_t>(
           sycl::bit_cast<math_t>(m[u]) + sycl::bit_cast<math_t>(v[u])
       );
+#endif
   }
 public:
   static inline size_t adjustTransOffset(size_t sinkOffset) {
@@ -833,12 +835,14 @@ private:
   template <int unroll> inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u)
       v[u] = sycl::bit_cast<message_t>(
           sycl::bit_cast<math_t>(m[u]) + sycl::bit_cast<math_t>(v[u])
       );
+#endif
   }
 public:
   // [0, 1] -> [[0, 1], [2, 3]]
