@@ -21,7 +21,7 @@ public:
   // sectionSize will be renamed later, it represent each temporary buffer
   // section for each rank. configurable, in bytes
   //
-  constexpr static size_t sectionSize = 0x40000;
+  constexpr static size_t sectionSize = 0x100000;
   constexpr static size_t sectionElems = sectionSize / sizeof(T);
   constexpr static size_t scratchSize = alignUp(sectionSize * NRanks * 2, 0x200000);
 
@@ -567,7 +567,7 @@ public:
   // sectionSize will be renamed later, it represent each temporary buffer
   // section for each rank. configurable, in bytes
   //
-  constexpr static size_t sectionSize = 0x40000;
+  constexpr static size_t sectionSize = 0x100000;
   constexpr static size_t sectionElems = sectionSize / sizeof(T);
   constexpr static size_t scratchSize = alignUp(sectionSize * NRanks * 2, 0x200000);
 
