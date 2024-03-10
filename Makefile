@@ -14,7 +14,7 @@ SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-de
 INCLUDES=-Itvisa/include
 LIBRARIES=-lmpi -lze_loader
 
-CXXFLAGS=-std=c++17 $(SYCLFLAGS) $(OPT) $(VERBOSE) -Wall -Wno-vla-cxx-extension $(INCLUDES) $(LIBRARIES)
+CXXFLAGS=-std=c++17 -fopenmp $(SYCLFLAGS) $(OPT) $(VERBOSE) -Wall -Wno-vla-cxx-extension $(INCLUDES) $(LIBRARIES)
 
 main : main.cpp ipc_exchange.cpp sycl_misc.cpp allreduce.cpp
 
