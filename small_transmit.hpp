@@ -15,17 +15,47 @@ protected:
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
 public:
+  //
+  // sectionSize will be renamed later, it represent each temporary buffer
+  // section for each rank. configurable, in bytes
+  //
+  constexpr static size_t sectionSize = 0x100000;
+  constexpr static size_t sectionElems = sectionSize / sizeof(T);
+  constexpr static size_t scratchSize = alignUp(sectionSize * (NPeers + 1), 0x200000);
+
+public:
   smallTransmit(
+      T* input, T* scatterBuf, T* gatherBuf,
+      T* const peerBuf0[], T* const peerBuf1[],
+      ssize_t workSize,
       int rank,
       uint32_t seqNo   // Serve as flag for checking
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : scatterStep(seqNo), gatherStep(seqNo + 1), rank(rank)
+  ) : seqNo(seqNo), rank(rank)
 #if defined(__enable_sycl_stream__)
   , cout(cout)
 #endif
-  {}
+  {
+    ioBuffer = (input + rank * workSize / sizeof(T));
+
+    for (int i = 0; i < NPeers; ++ i) {
+      int next = (rank + i + 1) % (NPeers + 1);
+
+      scatterSink[i] = (T *)((uintptr_t)peerBuf0[next]
+          + sectionSize * rank);
+      gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
+          + sectionSize * rank);
+
+      localScatterSink[i] = (T *)((uintptr_t)scatterBuf
+          + next * sectionSize);
+      localGatherSink[i] = (T *)((uintptr_t)gatherBuf
+          + next * sectionSize);
+
+      ioForPeers[i] = input + next * workSize / sizeof(T);
+    }
+  }
 
   // load first row of registers
   template <int unroll> inline void loadInput(
@@ -180,22 +210,26 @@ public:
   }
 
   template <int unroll>
-  inline void recvMessages(message_t (&messages)[unroll], T* ptr) {
+  inline bool recvMessages(message_t (&messages)[unroll], T* ptr, int flag) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
+
+    bool retry = false;
 
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-          messages[u],
-          ptr + u * wireTransElems + local_off
+          messages[u], ptr + u * wireTransElems + local_off
       );
 #else
       (void) lid; (void) local_off;
 #endif
+      retry |= messages[u][flagElem] != flag;
     }
+
+    return retry;
   }
 
   // Scatter local message to peers
@@ -227,7 +261,7 @@ public:
       for (int i = 0; i < NPeers; ++ i) {
         auto* ptr = ioForPeers[i] + inputOffInType;
         loadInput(messages[i], ptr, nelems);
-        insertFlags(messages[i], scatterStep);
+        insertFlags(messages[i], seqNo);
 
         auto* dst = scatterSink[i] + sinkOffInType;
         sendMessages(dst, messages[i]);
@@ -242,7 +276,7 @@ public:
 
 #     pragma unroll
       for (int i = 0; i < NPeers; ++ i) {
-        insertFlags(messages[i], scatterStep);
+        insertFlags(messages[i], seqNo);
 
         auto* dst = scatterSink[i] + sinkOffInType;
         sendMessages(dst, messages[i]);
@@ -271,15 +305,11 @@ public:
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = scatterStep;
+      auto flag = seqNo;
       bool retry;
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessages(messages, localScatterSink[i] + sinkOffInType);
-          retry |= (messages[u][flagElem] != flag);
-        }
+        retry |= recvMessages(messages, localScatterSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
 
 #     pragma unroll
@@ -303,7 +333,7 @@ public:
       storeOutput(ioBuffer + inputOffInType, v);
     }
 
-    insertFlags(v, gatherStep);
+    insertFlags(v, seqNo);
 
     // push to gather sink
 #   pragma unroll
@@ -324,16 +354,12 @@ public:
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = gatherStep;
+      auto flag = seqNo;
       bool retry;
       message_t messages[unroll];
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessages(messages, localGatherSink[i] + sinkOffInType);
-          retry |= messages[u][flagElem] != flag;
-        }
+        retry |= recvMessages(messages, localGatherSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
 
       auto* ptr = ioForPeers[i] + inputOffInType;
@@ -353,8 +379,7 @@ protected:
   T* ioBuffer; // point to workload of self
   T* ioForPeers[NPeers]; // point to distributed workload
 
-  uint32_t scatterStep;
-  uint32_t gatherStep;
+  uint32_t seqNo;
   int rank;
 
 #if defined(__enable_sycl_stream__)
