@@ -66,7 +66,7 @@ public:
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(message_t) / sizeof(T);
+    int local_off = lid * sizeof(uint32_t) / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
@@ -82,7 +82,7 @@ public:
               "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
-        v[i][0] = src[off];
+        v[i][dataElem] = src[off];
 #endif
     }}
   }
@@ -92,7 +92,7 @@ public:
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(message_t) / sizeof(T);
+    int local_off = lid * sizeof(uint32_t) / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
@@ -107,7 +107,7 @@ public:
             "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
-      v[i][0] = src[off];
+      v[i][dataElem] = src[off];
 #endif
     }
   }
@@ -117,30 +117,9 @@ public:
   inline void insertFlags(
       message_t (& messages)[unroll], uint32_t flag
   ) {
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    if constexpr (SubGroupSize == 16) {
-#     pragma unroll
-      for (int i = 0; i < unroll; ++ i) {
-        asm volatile (
-            "mov (M1, 16) %0(0, 0)<1> %1(0, 0)<0;1,0>\n"
-            : "+rw"(messages[i][flagElem])
-            : "rw"(flag)
-        );
-      }
-    } else {
-#     pragma unroll
-      for (int i = 0; i < unroll; ++ i) {
-        asm volatile (
-            "mov (M1, 32) %0(0, 0)<1> %1(0, 0)<0;1,0>\n"
-            : "+rw"(messages[i][flagElem]) : "rw"(flag)
-        );
-      }
-    }
-#else
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i)
       messages[i][flagElem] = flag;
-#endif
   }
 
   template <int unroll> inline void storeOutput(
@@ -148,7 +127,7 @@ public:
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(message_t) / sizeof(T);
+    int local_off = lid * sizeof(uint32_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireElems + local_off;
@@ -172,7 +151,7 @@ public:
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(message_t) / sizeof(T);
+    int local_off = lid * sizeof(uint32_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireElems + local_off;
@@ -229,7 +208,7 @@ public:
 #else
       (void) lid; (void) local_off;
 #endif
-      retry |= messages[u][flagElem] != flag;
+      retry |= (messages[u][flagElem] != flag);
     }
 
     return retry;
@@ -314,19 +293,15 @@ public:
         retry = false;
         retry |= recvMessages(messages, localScatterSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
-
+#if defined(__SYCL_DEVICE_ONLY__)
+      using math_t = sycl::vec<T, sizeof(uint32_t)/sizeof(T)>;
 #     pragma unroll
       for (int u = 0; u < unroll; ++ u) {
-#if 0// defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          v[u] = addAs<T, SubGroupSize>(v[u], messages[u]);
-#else
-        auto& v_math = reinterpret_cast<
-          sycl::vec<T, sizeof(uint32_t)/sizeof(T)> &>(v[u][0]);
-        auto& m_math = reinterpret_cast<
-          sycl::vec<T, sizeof(uint32_t)/sizeof(T)> &>(messages[u][0]);
-        v_math += m_math;
-#endif
+        v[u][0] = sycl::bit_cast<uint32_t>(
+          sycl::bit_cast<math_t>(v[u][0]) + sycl::bit_cast<math_t>(messages[u][0])
+        );
       }
+#endif
     }
 
     // write back locally before shuffle data

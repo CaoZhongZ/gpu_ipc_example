@@ -507,6 +507,40 @@ int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage3Verify(
   return compareResult(ipcBuffer, host + 16 * 1024 * 1024);
 }
 
+template <typename T> int verifyAllReduce(
+    T* host, int rank, int world, size_t nelems
+){
+  T* allRanks[16];
+
+  for (int i = 0; i < world; ++ i) {
+    allRanks[i] = (T *)malloc(sizeof(T) * nelems);
+  }
+
+  auto* allreduceResult = (T*)malloc(sizeof(T) * nelems);
+
+  __scope_guard free_pointers([&] {
+    for (int i = 0; i < world; ++ i) {
+      free(allRanks[i]);
+    }
+    free(allreduceResult);
+  });
+
+  for (int i = 0; i < world; ++ i) {
+    fill_pattern(allRanks[i], i, nelems);
+  }
+
+  allreduce(allreduceResult, allRanks, world, nelems);
+
+  for (int i = 0; i < nelems; ++ i) {
+    if (allreduceResult[i] != host[i]) {
+      std::cout<<"Error Compare! Expected: "
+        <<allreduceResult[i] <<", got: "<<host[i]
+        <<"@["<<rank<<"]("<<i<<");"<<std::endl;
+    }
+  }
+  return 0;
+}
+
 template <typename T,
          int NRanks,
          template <typename, int, int> class Transmit,
@@ -514,12 +548,10 @@ template <typename T,
 int bisectAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
     T* host, int rank, uint32_t flag, size_t nelems
 ){
-  auto nWorkElems = nelems / NRanks;
-
   T* allRanks[NRanks];
 
   for (int i = 0; i < NRanks; ++ i) {
-    allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
+    allRanks[i] = (T *)malloc(sizeof(T) * nelems);
   }
 
   auto* allreduceResult = (T*)malloc(sizeof(T) * nelems);
@@ -554,12 +586,10 @@ template <typename T,
 int bisectPAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
     T* host, int rank, uint32_t flag, size_t nelems
 ){
-  auto nWorkElems = nelems / NRanks;
-
   T* allRanks[NRanks];
 
   for (int i = 0; i < NRanks; ++ i) {
-    allRanks[i] = (T *)malloc(sizeof(T) * nWorkElems * NRanks);
+    allRanks[i] = (T *)malloc(sizeof(T) * nelems);
   }
 
   auto* allreduceResult = (T*)malloc(sizeof(T) * nelems);
@@ -590,9 +620,9 @@ int bisectPAllReduce<T, NRanks, Transmit, SubGroupSize>::stage4Verify(
 template <>
 int verifyTransmit<sycl::half, SmallTransmit>(
     sycl::half* host, sycl::half* host2,
-    uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
+    uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
-  std::cout<<"Warning, not implemented, yet"<<std::endl;
+  verifyAllReduce(host2, rank, world, nelems);
   return 0;
 }
 

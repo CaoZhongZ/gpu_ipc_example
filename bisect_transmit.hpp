@@ -295,7 +295,7 @@ private:
   template <int unroll> static inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+#if defined(__SYCL_DEVICE_ONLY__)
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u)
