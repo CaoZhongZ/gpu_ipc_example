@@ -1,7 +1,7 @@
 #pragma once
 
 template <typename T, int NPeers, int SubGroupSize>
-class smallTransmit {
+class SmallTransmit {
   // first row contains data, second row, flags
 protected:
   using message_t = sycl::vec<uint32_t, 2>;
@@ -24,7 +24,7 @@ public:
   constexpr static size_t scratchSize = alignUp(sectionSize * (NPeers + 1), 0x200000);
 
 public:
-  smallTransmit(
+  SmallTransmit(
       T* input, T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[],
       ssize_t workSize,

@@ -228,7 +228,7 @@ private:
 // Best candidate for throughput
 template <typename T,
          int NRanks,
-         template <typename, int, int> class Transmit = bisectPTransmit,
+         template <typename, int, int> class Transmit = BisectPTransmit,
          int SubGroupSize = 16>
 struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   using Super = Transmit<T, NRanks, SubGroupSize>;
@@ -342,7 +342,7 @@ private:
 
 template <typename T,
          int NRanks,
-         template <typename, int, int> class Transmit = bisectPPTransmit,
+         template <typename, int, int> class Transmit = BisectPPTransmit,
          int SubGroupSize = 16>
 struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   using Super = Transmit<T, NRanks, SubGroupSize>;
@@ -460,3 +460,54 @@ int verifyTransmit(
     T* host, T* host2,
     uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
 );
+
+template <typename T>
+sycl::event testTransmit(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    T* input, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
+  if (transmitType == "small") {
+    return testTransmit<T, SmallTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else if (transmitType == "simple") {
+    return testTransmit<T, SimpleTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else if (transmitType == "bisect") {
+    return testTransmit<T, BisectPTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else {
+    throw std::logic_error("Transmit type not support");
+  }
+}
+
+template<typename T> int verifyTransmit(
+    std::string transmitType, T* host, T* host2,
+    uint32_t step, int rank, int world, uint32_t simd, size_t nelems
+) {
+  if (transmitType == "small") {
+    return verifyTransmit<T, SmallTransmit>(
+        host, host2, step, rank, world, simd, nelems
+    );
+  } else if (transmitType == "simple") {
+    return verifyTransmit<T, SimpleTransmit>(
+        host, host2, step, rank, world, simd, nelems
+    );
+  } else if (transmitType == "bisect") {
+    return verifyTransmit<T, BisectTransmit>(
+        host, host2, step, rank, world, simd, nelems
+    );
+  } else {
+    throw std::logic_error("Transmit type not support");
+  }
+}

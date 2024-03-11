@@ -41,7 +41,6 @@ void extract_profiling(sycl::event e, int rank) {
   std::cout<<"["<<rank<<"] Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
-#define test_transmit bisectPTransmit
 using test_type = sycl::half;
 
 int main(int argc, char* argv[]) {
@@ -64,6 +63,8 @@ int main(int argc, char* argv[]) {
      cxxopts::value<uint32_t>()->default_value("16"))
     ("v,verify", "Do verification or performance",
      cxxopts::value<bool>()->default_value("false"))
+    ("a,algo", "Which algorithm is tested",
+     cxxopts::value<std::string>()->default_value("small"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -73,6 +74,7 @@ int main(int argc, char* argv[]) {
   auto flag = parsed_opts["flag"].as<size_t>();
   auto simd = parsed_opts["simd"].as<uint32_t>();
   auto verify = parsed_opts["verify"].as<bool>();
+  auto algo = parsed_opts["algo"].as<std::string>();
 
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
@@ -152,37 +154,38 @@ int main(int argc, char* argv[]) {
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-  auto e = testTransmit<test_type, test_transmit>(
+  auto e = testTransmit<test_type>(
+      algo,
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag, simd, queue
   );
 
   e.wait();
-  MPI_Barrier(MPI_COMM_WORLD);
   // extract_profiling<test_type>(e);
   if (verify) {
     queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
     queue.memcpy(host_init, input, alloc_size).wait();
 
-    verifyTransmit<test_type, test_transmit>(
-        host_verify, host_init, flag, rank, world, simd, nelems
+    verifyTransmit<test_type>(
+        algo, host_verify, host_init, flag, rank, world, simd, nelems
     );
     std::cout<<std::dec;
     return 0;
   }
 
-  /* auto e1 =*/ testTransmit<test_type, test_transmit>(
+  testTransmit<test_type>(
+      algo,
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 10, simd, queue
+      nelems, rank, world, flag + 100, simd, queue
   );
-  // extract_profiling<test_type>(e1);
-  //
-  /* auto e2 =*/ testTransmit<test_type, test_transmit>(
+
+  testTransmit<test_type>(
+      algo,
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 15, simd, queue
+      nelems, rank, world, flag + 150, simd, queue
   );
 
   if (rank == 0)
@@ -190,11 +193,12 @@ int main(int argc, char* argv[]) {
 
   MPI_Barrier(MPI_COMM_WORLD);
 
-  auto e3 = testTransmit<test_type, test_transmit>(
+  e = testTransmit<test_type>(
+      algo,
       {sycl::range<1>(global_size), sycl::range<1>(local_size)},
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 20, simd, queue
+      nelems, rank, world, flag + 200, simd, queue
   );
-  extract_profiling<test_type>(e3, rank);
+  extract_profiling<test_type>(e, rank);
   return 0;
 }

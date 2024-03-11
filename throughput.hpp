@@ -1,7 +1,7 @@
 #pragma once
 
 template <typename T, int NRanks, int SubGroupSize>
-class bisectTransmit {
+class BisectTransmit {
   constexpr static int BiNRanks = NRanks / 2;
   constexpr static int NPeers = BiNRanks -1;
   constexpr static int nReg128B = 128 / SubGroupSize / 4;
@@ -467,7 +467,7 @@ public:
   }
 
 protected:
-  bisectTransmit(
+  BisectTransmit(
       T* input,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[],

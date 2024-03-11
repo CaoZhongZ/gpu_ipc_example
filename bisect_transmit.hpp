@@ -4,7 +4,7 @@
 // Requires multiple dimension launch with Y dimention equal to 'BiNRanks'
 //
 template <typename T, int NRanks, int SubGroupSize>
-class bisectPTransmit {
+class BisectPTransmit {
   constexpr static int BiNRanks = NRanks / 2;
   constexpr static int NPeers = BiNRanks -1;
   constexpr static int nReg128B = 128 / SubGroupSize / 4;
@@ -461,7 +461,7 @@ public:
   }
 
 protected:
-  bisectPTransmit(
+  BisectPTransmit(
       T* input,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[],
@@ -553,7 +553,7 @@ protected:
 };
 
 template <typename T, int NRanks, int SubGroupSize>
-class bisectPPTransmit {
+class BisectPPTransmit {
   constexpr static int BiNRanks = NRanks / 2;
   constexpr static int NPeers = BiNRanks -1;
   constexpr static int nReg128B = 128 / SubGroupSize / 4;
@@ -1000,7 +1000,7 @@ public:
   }
 
 protected:
-  bisectPPTransmit(
+  BisectPPTransmit(
       T* input,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[],
