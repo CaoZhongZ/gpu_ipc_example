@@ -18,8 +18,8 @@ class bisectPTransmit {
 
 public:
   //
-  // sectionSize will be renamed later, it represent each temporary buffer
-  // section for each rank. configurable, in bytes
+  // sectionSize represents each temporary buffer section for each rank.
+  // configurable, in bytes. Ideally > 1024 * 128 * 2
   //
   constexpr static size_t sectionSize = 0x100000;
   constexpr static size_t sectionElems = sectionSize / sizeof(T);

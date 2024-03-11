@@ -24,46 +24,18 @@ struct AllReduce : public Transmit<T, NPeers, SubGroupSize> {
       , sycl::stream cout
 #endif
   )
-  : Transmit<T, NPeers, SubGroupSize>(rank, seqNo
+  : Transmit<T, NPeers, SubGroupSize>(
+      input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
+      calcWorkSize(input, nelems * sizeof(T)),
+      rank, seqNo
 #if defined(__enable_sycl_stream__)
       , cout
 #endif
-  ), workSize(calcWorkSize(input, nelems * sizeof(T))),
-  transmitSize(divUp(workSize, wireCapacity) * wireTransSize)
+  ), workSize(calcWorkSize(input, nelems * sizeof(T)))
 #if defined(__enable_sycl_stream__)
     , cout(cout)
 #endif
-  {
-    auto slotShift = [](int rank, int peer) {
-      if (rank > peer) return rank -1;
-      else return rank;
-    };
-
-    Super::ioBuffer = (input + rank * workSize / sizeof(T));
-
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
-      int next = (rank + i + 1) % (NPeers + 1);
-
-      Super::scatterSink[i] = (T *)((uintptr_t)peerBuf0[next]
-          + transmitSize * slotShift(rank, next));
-      Super::gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
-          + transmitSize * slotShift(rank, next));
-
-      Super::localScatterSink[i] = (T *)((uintptr_t)scatterBuf
-          + slotShift(next, rank) * transmitSize);
-      Super::localGatherSink[i] = (T *)((uintptr_t)gatherBuf
-          + slotShift(next, rank) * transmitSize);
-
-      Super::ioForPeers[i] = input + next * workSize / sizeof(T);
-    }
-  }
-
-  // Calculate which slot 'rank' take at 'peer''s sink buffer
-  static int slot(int rank, int peer) {
-    if (rank > peer) return rank -1;
-    else return rank;
-  }
+  {}
 
   static int scatterVerify(
       uint32_t* host, int rank, uint32_t flag, size_t nWorkElemsInInt
@@ -142,8 +114,6 @@ private:
   }
 
   ssize_t workSize;
-  size_t transmitSize;
-
 #if defined(__enable_sycl_stream__)
   sycl::stream cout;
 #endif

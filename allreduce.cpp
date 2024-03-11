@@ -41,7 +41,7 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::scatterVerify(
 
   for (int i = 0; i < NPeers; ++ i) {
     int next = (rank + i + 1) % (NPeers + 1);
-    auto* peer_ptr = host + nTransmitElemsInInt * slot(next, rank);
+    auto* peer_ptr = host + nTransmitElemsInInt * next;
     size_t contentOff = rank * nWorkElemsInInt;
 
     // we are expecting pattern = (scale | next)
@@ -722,7 +722,7 @@ int AllReduce<T, NPeers, Transmit, SubGroupSize>::stage2Verify(
   // Check each gather buffer
   for (int i = 0; i < NPeers; ++ i) {
     int next = (rank + i + 1) % (NPeers + 1);
-    auto* peer_ptr = host + nTransmitElems * slot(next, rank);
+    auto* peer_ptr = host + nTransmitElems * next;
     auto* local_ptr = allRanks[0] + nWorkElems * next;
 
     // we are expecting pattern = (scale | next)

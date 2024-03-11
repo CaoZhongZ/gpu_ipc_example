@@ -19,17 +19,48 @@ protected:
   constexpr static size_t wireTransSizeInType = wireTransSize/ sizeof(T);
 
 public:
+  //
+  // sectionSize will be renamed later, it represent each temporary buffer
+  // section for each rank. configurable, in bytes
+  //
+  constexpr static size_t sectionSize = 0x100000;
+  constexpr static size_t sectionElems = sectionSize / sizeof(T);
+  constexpr static size_t scratchSize = alignUp(sectionSize * (NPeers + 1), 0x200000);
+
+public:
   SimpleTransmit(
+      T* input,
+      T* scatterBuf, T* gatherBuf,
+      T* const peerBuf0[], T* const peerBuf1[],
+      ssize_t workSize,
       int rank,
       uint32_t seqNo  // Serve as flag for checking
 #if defined(__enable_sycl_stream__)
       , sycl::stream cout
 #endif
-  ) : scatterStep(seqNo), gatherStep(seqNo + 1), rank(rank)
+  ) : seqNo(seqNo), rank(rank)
 #if defined(__enable_sycl_stream__)
   , cout(cout)
 #endif
-  {}
+  {
+    ioBuffer = (input + rank * workSize / sizeof(T));
+
+    for (int i = 0; i < NPeers; ++ i) {
+      int next = (rank + i + 1) % (NPeers + 1);
+
+      scatterSink[i] = (T *)((uintptr_t)peerBuf0[next]
+          + sectionSize * rank);
+      gatherSink[i] = (T *)((uintptr_t)peerBuf1[next]
+          + sectionSize * rank);
+
+      localScatterSink[i] = (T *)((uintptr_t)scatterBuf
+          + next * sectionSize);
+      localGatherSink[i] = (T *)((uintptr_t)gatherBuf
+          + next * sectionSize);
+
+      ioForPeers[i] = input + next * workSize / sizeof(T);
+    }
+  }
 
   //
   // Process of pack messages
@@ -279,28 +310,17 @@ public:
     return retry;
   }
 
-  inline void recvMessage(message_t &message, T* ptr) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(message_t) / sizeof(T);
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
-        message, ptr + local_off
-    );
-#else
-    (void) lid; (void) local_off;
-#endif
-  }
-
   template <int unroll> inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
   ) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
-    auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
-    auto arith_m = reinterpret_cast<math_t (&)[unroll]>(m);
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u)
-      arith_v[u] += arith_m[u];
+      v[u] = sycl::bit_cast<message_t>(
+          sycl::bit_cast<math_t>(m[u]) + sycl::bit_cast<math_t>(v[u])
+      );
+#endif
   }
 
   // Scatter local message to peers
@@ -342,7 +362,7 @@ public:
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       shuffleData(messages[i]);
-      insertFlags(messages[i], scatterStep);
+      insertFlags(messages[i], seqNo);
 
       auto* dst = scatterSink[i] + sinkOffInType;
       sendMessages(dst, messages[i]);
@@ -370,21 +390,14 @@ public:
     }
 
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    int lane_id = sg.get_local_id();
+    auto flag = seqNo;
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = scatterStep;
       bool retry;
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages[u], localScatterSink[i] + sinkOffInType);
-          retry |=
-            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
-            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
-        }
+        retry |= recvMessages(messages, localScatterSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
 
 #if defined(__enable_sycl_stream__)
@@ -397,28 +410,7 @@ public:
 #endif
 
       restoreData(messages);
-
-#if 1 //!defined(__SYCL_DEVICE_ONLY__)
-      using math_t = sycl::vec<T, sizeof(message_t)/sizeof(T)>;
-      auto arith_v = reinterpret_cast<math_t (&)[unroll]>(v);
-      auto arith_m = reinterpret_cast<math_t (&)[unroll]>(messages);
-#endif
-
-      if (lane_id < lastDataChannel) {  // XXX: Fixed diverge
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-#if 0// defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          v[u] = addAs<T, SubGroupSize>(v[u], messages[u]);
-#else
-//           if (lane_id == 0 && u == 0) {
-//             cout<<"["<<rank<<"]v:"<<arith_v[0]
-//               <<", m:"<<arith_m[0]
-//               <<sycl::endl<<sycl::flush;
-//           }
-          arith_v[u] += arith_m[u];
-#endif
-        }
-      }
+      accumMessages(v, messages);
     }
 
     // write back locally before shuffle data
@@ -429,9 +421,9 @@ public:
     }
 
     shuffleData(v);
-    insertFlags(v, gatherStep);
+    insertFlags(v, seqNo);
 
-    // push to gather sink
+    // push to gather sinks
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i)
       sendMessages(gatherSink[i] + sinkOffInType, v);
@@ -447,22 +439,15 @@ public:
 
     constexpr auto eltPerPack = unroll * wireCapacityInType;
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    int lane_id = sg.get_local_id();
+    auto flag = seqNo;
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = gatherStep;
       bool retry;
       message_t messages[unroll];
       do {
         retry = false;
-#       pragma unroll
-        for (int u = 0; u < unroll; ++ u) {
-          recvMessage(messages[u], localGatherSink[i] + sinkOffInType);
-          retry |=
-            (lane_id == firstFlagChannel && messages[u][lastElem] != flag)
-            || (lane_id == lastFlagChannel && messages[u][lastElem] != flag);
-        }
+        retry |= recvMessages(messages, localGatherSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
 
       auto ptr = ioForPeers[i] + inputOffInType;
@@ -484,8 +469,7 @@ protected:
   T* ioBuffer; // point to workload of self
   T* ioForPeers[NPeers]; // point to distributed workload
 
-  uint32_t scatterStep;
-  uint32_t gatherStep;
+  uint32_t seqNo;
   int rank;
 
 #if defined(__enable_sycl_stream__)
