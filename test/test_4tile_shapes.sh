@@ -14,7 +14,7 @@ do
     for subgroup in $subgroups
     do
       echo "Run $shape $group $subgroup"
-      . ./script/run_4tile.sh -n $shape -g$group -w$subgroup || exit 1
+      . ./script/run_4tile.sh -v -n $shape -g$group -w$subgroup || exit 1
     done
   done
 done
