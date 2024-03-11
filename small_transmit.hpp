@@ -14,6 +14,9 @@ protected:
   constexpr static int wireElems = wireCapacity / sizeof(T);
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+
 public:
   //
   // sectionSize will be renamed later, it represent each temporary buffer
@@ -199,7 +202,7 @@ public:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscStore<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+      lscStore<SubGroupSize, CommReadCacheCtrl>(
           ptr + u * wireTransElems + local_off,
           messages[u]
       );
@@ -220,7 +223,7 @@ public:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscLoad<SubGroupSize, CacheCtrl::L1UC_L3UC>(
+      lscLoad<SubGroupSize, CommWriteCacheCtrl>(
           messages[u], ptr + u * wireTransElems + local_off
       );
 #else
