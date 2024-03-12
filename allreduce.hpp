@@ -274,7 +274,7 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
     auto cableCapacity = wireCapacity * subGroupXRange;
     auto cableTSize = wireTransSize * subGroupXRange;
 
-    // SubGroup 0, 1, 2, 3 is stacked up to the same groupXId
+    // SubGroup 0 ~ BiNRanks -1 is stacked up to the same groupXId
     // Hence work on same offsets
     auto subGroupXId = pos.get_sub_group().get_group_id()[0] /BiNRanks;
     auto groupId = pos.get_group().get_group_id()[0];
