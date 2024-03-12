@@ -661,6 +661,7 @@ int verifyTransmit<sycl::half, BisectPTransmit>(
     sycl::half* host, sycl::half* host2,
     uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
+  auto ret4 = verifyAllReduce(host2, rank, world, nelems);
   /*
   auto ret1 = (simd == 16) ?
     bisectAllReduce<sycl::half, 8, BisectTransmit, 16>::stage1Verify(
@@ -677,12 +678,12 @@ int verifyTransmit<sycl::half, BisectPTransmit>(
       host, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, BisectTransmit, 32>::stage3Verify(
       host, rank, step, nelems);
-      */
   auto ret4 = (simd == 16) ?
     bisectAllReduce<sycl::half, 8, BisectTransmit, 16>::stage4Verify(
       host2, rank, step, nelems) :
     bisectAllReduce<sycl::half, 8, BisectTransmit, 32>::stage4Verify(
       host2, rank, step, nelems);
+      */
   return /*ret1 + ret2 + ret3 +*/ ret4;
 }
 
