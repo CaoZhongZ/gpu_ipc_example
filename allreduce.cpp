@@ -1016,25 +1016,22 @@ template <> sycl::event testTransmit <sycl::half, BisectPTransmit> (
     int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
   if (subgroup == 16) {
     constexpr int SubGroupSize = 16;
-#if defined(__fix_param_passing__) && !defined(__enable_sycl_stream__)
-    bisectPAllReduce<sycl::half, 8, BisectPTransmit, SubGroupSize>
-      devOp(input, nelems, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1);
-    sycl::buffer params(
-      const_cast<const decltype(devOp) *>(&devOp),
-      sycl::range<1>(1)
-    );
-#endif
     switch(world) {
-    case 8:
-#if defined(__fix_param_passing__) && !defined(__enable_sycl_stream__)
+    case 4:
       return queue.submit([&](sycl::handler &cgh) {
-        auto deviceCapture = params.template get_access<
-          sycl::access_mode::read, sycl::target::constant_buffer>(cgh);
-        cgh.parallel_for(launchParam, [=] (sycl::nd_item<1> pos) {
-            deviceCapture[0](pos);
-        });
-      });
-#else
+#if defined(__enable_sycl_stream__)
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          bisectPAllReduce<sycl::half, 4, BisectPTransmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+      ));});
+    case 8:
       return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
         sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
@@ -1047,14 +1044,27 @@ template <> sycl::event testTransmit <sycl::half, BisectPTransmit> (
 #if defined(__enable_sycl_stream__)
             , cout
 #endif
-    ));});
-#endif
+      ));});
     default:
       throw std::logic_error("Unsupported communication topology");
     }
   } else {
     constexpr int SubGroupSize = 32;
     switch(world) {
+    case 4:
+      return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          bisectPAllReduce<sycl::half, 4, BisectPTransmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+      ));});
     case 8:
       return queue.submit([&](sycl::handler &cgh) {
 #if defined(__enable_sycl_stream__)
