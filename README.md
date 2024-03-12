@@ -15,5 +15,5 @@ make main
 
 ## Run
 ```
-mpirun -np 8 ./main -n \<number of elements in half\> [-w sub-group] [-g group]
+mpirun -np 8 ./main -n \<number of elements in half\> [-w sub-group] [-g group] [-a small | simple | bisect]
 ```
