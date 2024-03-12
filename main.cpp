@@ -116,7 +116,7 @@ int main(int argc, char* argv[]) {
 
   void *peer_bases[world];
   size_t offsets[world];
-  auto ipc_handle = open_peer_ipc_mems(ipcbuf0, rank, world, peer_bases, offsets);
+  auto ipc_handle = open_all_ipc_mems(queue, ipcbuf0, rank, world, peer_bases, offsets);
 
   test_type *peerbuf0[world];
   test_type *peerbuf1[world];
