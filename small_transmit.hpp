@@ -22,7 +22,7 @@ public:
   // sectionSize will be renamed later, it represent each temporary buffer
   // section for each rank. configurable, in bytes
   //
-  constexpr static size_t sectionSize = 0x100000;
+  constexpr static size_t sectionSize = 0x200000;
   constexpr static size_t sectionElems = sectionSize / sizeof(T);
   constexpr static size_t scratchSize = alignUp(sectionSize * (NPeers + 1), 0x200000);
 
@@ -181,7 +181,7 @@ public:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscStore<SubGroupSize, CommReadCacheCtrl>(
+      lscStore<SubGroupSize, CommWriteCacheCtrl>(
           ptr + u * wireTransElems + local_off,
           messages[u]
       );
@@ -202,7 +202,7 @@ public:
 #   pragma unroll
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      lscLoad<SubGroupSize, CommWriteCacheCtrl>(
+      lscLoad<SubGroupSize, CommReadCacheCtrl>(
           messages[u], ptr + u * wireTransElems + local_off
       );
 #else

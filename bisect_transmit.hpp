@@ -19,9 +19,9 @@ class BisectPTransmit {
 public:
   //
   // sectionSize represents each temporary buffer section for each rank.
-  // configurable, in bytes. Ideally > 1024 * 128 * 2
+  // configurable, in bytes. Ideally > 4096 * 128 * 2
   //
-  constexpr static size_t sectionSize = 0x100000;
+  constexpr static size_t sectionSize = 0x200000;
   constexpr static size_t sectionElems = sectionSize / sizeof(T);
   constexpr static size_t scratchSize = alignUp(sectionSize * NRanks * 2, 0x200000);
 
@@ -562,7 +562,7 @@ class BisectPPTransmit {
 
   constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
   constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
-  constexpr static auto PrefetchCacheCtrl = CacheCtrl::DEFAULT;
+  constexpr static auto PrefetchCacheCtrl = CacheCtrl::L1UC_L3C;
 
 public:
   //
