@@ -504,7 +504,7 @@ template<typename T> int verifyTransmit(
         host, host2, step, rank, world, simd, nelems
     );
   } else if (transmitType == "bisect") {
-    return verifyTransmit<T, BisectTransmit>(
+    return verifyTransmit<T, BisectPTransmit>(
         host, host2, step, rank, world, simd, nelems
     );
   } else {
