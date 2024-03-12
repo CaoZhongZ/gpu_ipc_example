@@ -305,7 +305,7 @@ private:
 #endif
   }
 public:
-  static inline size_t adjustTransOffset(size_t sinkOffset) {
+  static inline size_t ringOffset(size_t sinkOffset) {
     return sinkOffset % sectionSize;
   }
 
@@ -328,7 +328,7 @@ public:
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = adjustTransOffset(sinkOffset) / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
@@ -356,7 +356,7 @@ public:
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = adjustTransOffset(sinkOffset) / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
@@ -392,7 +392,7 @@ public:
     auto y_id = sg.get_group_id()[0] % BiNRanks;
 
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = adjustTransOffset(sinkOffset) / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
     constexpr auto eltPerPack = unroll * wireElems;
@@ -592,7 +592,7 @@ public:
     return divUp(workSize, wireCapacity) * wireTransSize / sectionSize;
   }
 
-  static inline size_t adjustTransOffset(size_t sinkOffset) {
+  static inline size_t ringOffset(size_t sinkOffset) {
     return sinkOffset % sectionSize;
   }
 
@@ -850,7 +850,7 @@ public:
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = adjustTransOffset(sinkOffset) / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
@@ -887,7 +887,7 @@ public:
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = adjustTransOffset(sinkOffset) / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
@@ -934,7 +934,7 @@ public:
     auto y_id = sg.get_group_id()[0] % BiNRanks;
 
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = adjustTransOffset(sinkOffset) / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
     constexpr auto eltPerPack = unroll * wireElems;

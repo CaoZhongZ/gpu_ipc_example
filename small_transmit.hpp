@@ -214,13 +214,22 @@ public:
     return retry;
   }
 
+  static inline size_t ringOffset(size_t sinkOffset) {
+    return sinkOffset % sectionSize;
+  }
+
+  static inline int seqDelta(size_t sinkOffset) {
+    return sinkOffset / sectionSize;
+  }
+
   // Scatter local message to peers
   template <int unroll>
   inline void scatter(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
+    auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireElems;
@@ -243,7 +252,7 @@ public:
       for (int i = 0; i < NPeers; ++ i) {
         auto* ptr = ioForPeers[i] + inputOffInType;
         loadInput(messages[i], ptr, nelems);
-        insertFlags(messages[i], seqNo);
+        insertFlags(messages[i], flag);
 
         auto* dst = scatterSink[i] + sinkOffInType;
         sendMessages(dst, messages[i]);
@@ -258,7 +267,7 @@ public:
 
 #     pragma unroll
       for (int i = 0; i < NPeers; ++ i) {
-        insertFlags(messages[i], seqNo);
+        insertFlags(messages[i], flag);
 
         auto* dst = scatterSink[i] + sinkOffInType;
         sendMessages(dst, messages[i]);
@@ -275,7 +284,8 @@ public:
 
     auto nelems = workLeft / sizeof(T);
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
+    auto flag = seqNo + seqDelta(sinkOffset);
 
     constexpr auto eltPerPack = unroll * wireElems;
     if (nelems < eltPerPack) {
@@ -287,7 +297,6 @@ public:
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = seqNo;
       bool retry;
       do {
         retry = false;
@@ -311,7 +320,7 @@ public:
       storeOutput(ioBuffer + inputOffInType, v);
     }
 
-    insertFlags(v, seqNo);
+    insertFlags(v, flag);
 
     // push to gather sink
 #   pragma unroll
@@ -324,7 +333,8 @@ public:
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = sinkOffset / sizeof(T);
+    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
+    auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireElems;
@@ -332,7 +342,6 @@ public:
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
-      auto flag = seqNo;
       bool retry;
       message_t messages[unroll];
       do {
