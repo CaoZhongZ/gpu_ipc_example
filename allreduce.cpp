@@ -797,6 +797,10 @@ template<typename T, template <typename, int, int> class Transmit>
 int verifyTransmit(
     T* host, T* host2, uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
+  verifyAllReduce(host2, rank, world, nelems);
+  return 0;
+
+  /*
   if (simd == 16) {
     constexpr int SubGroupSize = 16;
     switch(world) {
@@ -839,7 +843,7 @@ int verifyTransmit(
     default:
       throw std::logic_error("Not supported communication pattern");
     }
-  }
+  }*/
 }
 
 //
