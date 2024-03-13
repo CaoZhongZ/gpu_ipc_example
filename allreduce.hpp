@@ -269,17 +269,12 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       sycl::nd_item<1> pos
   ) const {
     auto nWires = pos.get_global_range(0)/SubGroupSize;
-    auto nWiresIO = nWires / BiNRanks;
-
-    auto loopSize = nWiresIO * wireCapacity;
-    auto loopTSize = nWiresIO * wireTransSize;
-
+    auto loopSize = nWires / BiNRanks * wireCapacity;
     auto wireId_x = pos.get_global_id(0)/SubGroupSize/BiNRanks;
 
     for (size_t gOff = 0, tOff = 0;
-        gOff < workSize; gOff += loopSize, tOff += loopTSize) {
+        gOff < workSize; gOff += loopSize, ++ tOff) {
       auto wireOff = wireId_x * wireCapacity + gOff;
-      auto transOff = wireId_x * wireTransSize + tOff;
       ssize_t workLeft = workSize - wireOff;
 
 #if defined(__enable_prefetch__)
@@ -292,7 +287,6 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
         cout<<"["<<groupId<<", "<<subGroupXId
           <<"] loopSize:"<<loopSize
           <<", wireOff:"<<wireOff
-          <<", transOff:"<<transOff
           <<", workLeft:"<<workLeft<<sycl::endl;
 #endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
@@ -301,11 +295,11 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
           const_cast<bisectPAllReduce *>(this)-> template PreloadNext<unroll>(nextOff);
 #endif
         const_cast<bisectPAllReduce *>(this)->
-          template scatterFar<unroll>(wireOff, transOff, workLeft);
+          template scatterFar<unroll>(wireOff, tOff, workLeft);
         const_cast<bisectPAllReduce *>(this)->
-          template closeUnifiedPollReduceScatterGather<unroll>(wireOff, transOff, workLeft);
+          template closeUnifiedPollReduceScatterGather<unroll>(wireOff, tOff, workLeft);
         const_cast<bisectPAllReduce *>(this)->
-          template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
+          template pollFarGatherOutput<unroll>(wireOff, tOff, workLeft);
       }
     }
   }

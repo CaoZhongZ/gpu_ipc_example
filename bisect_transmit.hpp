@@ -16,15 +16,6 @@ class BisectPTransmit {
   constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
   constexpr static auto PrefetchCacheCtrl = CacheCtrl::DEFAULT;
 
-public:
-  //
-  // sectionSize represents each temporary buffer section for each rank.
-  // configurable, in bytes.
-  //
-  constexpr static size_t sectionSize = 0x200000;
-  constexpr static size_t sectionElems = sectionSize / sizeof(T);
-  constexpr static size_t scratchSize = alignUp(sectionSize * NRanks * 2, 0x200000);
-
 protected:
   using message_t = sycl::vec<uint32_t, nReg128B>;
   // transaction of 128-byte is not atomic across HBM channel
@@ -40,9 +31,15 @@ protected:
   constexpr static size_t wireTransElems = wireTransSize /sizeof(T);
 
 public:
-  static int getNextSequenceNo(size_t workSize, int currSeq) {
-    return divUp(workSize, wireCapacity) * wireTransSize / sectionSize;
-  }
+  //
+  // sectionSize represents each temporary buffer section for each rank.
+  // configurable, in bytes.
+  //
+  constexpr static size_t nSlot = 4;
+  constexpr static size_t ringSize = wireTransSize * nSlot;
+  constexpr static size_t ringElems = ringSize / sizeof(T);
+
+  typedef T (* ringPtr)[nSlot][wireTransElems];
 
 private:
   // factor basic communication into another class
@@ -305,14 +302,6 @@ private:
 #endif
   }
 public:
-  static inline size_t ringOffset(size_t sinkOffset) {
-    return sinkOffset % sectionSize;
-  }
-
-  static inline int seqDelta(size_t sinkOffset) {
-    return sinkOffset / sectionSize;
-  }
-
   template <int unroll> inline void PreloadNext(
       size_t inputOffset
   ) {
@@ -326,11 +315,10 @@ public:
   }
 
   template <int unroll> inline void scatterFar(
-      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
+      size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
-    auto flag = seqNo + seqDelta(sinkOffset);
+    auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireElems;
@@ -350,16 +338,15 @@ public:
 
     shuffleData(messages);
     insertFlags(messages, flag);
-    auto* dst = farScatterSink[y_id] + sinkOffInType;
+    auto* dst = farScatterSink[wireId][tStep % nSlot];
     sendMessages(dst, messages);
   }
 
   template <int unroll> inline void pollFarGatherOutput(
-      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
+      size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
-    auto flag = seqNo + seqDelta(sinkOffset);
+    auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
 
     auto wireId = sycl::ext::oneapi::experimental::
@@ -373,7 +360,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localFarGatherSink[y_id] + sinkOffInType, flag
+          messages, localFarGatherSink[wireId][tStep % nSlot], flag
       );
     } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));
 
@@ -389,15 +376,15 @@ public:
   }
 
   template <int unroll> inline void closeUnifiedPollReduceScatterGather(
-      size_t inputOffset, size_t sinkOffset, ssize_t workLeft
+      size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
     auto wireId = sycl::ext::oneapi::experimental::
       this_nd_item<1>().get_global_id(0) / SubGroupSize;
     auto y_id = wireId % BiNRanks;
+    auto wireId_g = wireId / BiNRanks * BiNRanks;
 
     auto inputOffInType = inputOffset / sizeof(T);
-    auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
-    auto flag = seqNo + seqDelta(sinkOffset);
+    auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
     constexpr auto eltPerPack = unroll * wireElems;
 
@@ -415,7 +402,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localFarScatterSink[y_id] + sinkOffInType, flag
+          messages, localFarScatterSink[wireId][tStep%nSlot], flag
       );
     } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));
 
@@ -425,14 +412,16 @@ public:
     //------------------------- sub-group diverge 3:1 -------------------
     if (y_id != l_rank) {
       insertFlags(v, flag);
-      sendMessages(scatterSink[y_id] + sinkOffInType, v); // 1. xNPeers <scatter>
+      sendMessages(scatterSink[y_id][wireId_g][tStep%nSlot], v); // 1. xNPeers <scatter>
 
       bool retry;
       do {
         retry = false;
         retry |= recvMessages(
-            v, localGatherSink[y_id] + sinkOffInType, flag);
-      } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));             // 4. xNPeers waits for <gather>
+            v, localGatherSink[y_id][wireId_g][tStep%nSlot], flag);
+      } while(sycl::any_of_group(
+            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+        );                                          // 4. xNPeers waits for <gather>
     }
 
     if (y_id == l_rank) {
@@ -442,20 +431,22 @@ public:
         do {
           retry = false;
           retry |= recvMessages(
-              messages, localScatterSink[i] + sinkOffInType, flag);
-        } while (sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));          // 2. wait for <scatter> xNPeers
+              messages, localScatterSink[i][wireId_g][tStep%nSlot], flag);
+        } while (sycl::any_of_group(
+              sycl::ext::oneapi::experimental::this_sub_group(), retry)
+          );                                        // 2. wait for <scatter> xNPeers
         accumMessages(v, messages);
       }
 
       insertFlags(v, flag);
 
 #     pragma unroll
-      for (int i = 0; i < NPeers; ++ i)                   // 3. signal <gather>
-        sendMessages(gatherSink[i] + sinkOffInType, v);
+      for (int i = 0; i < NPeers; ++ i)             // 3. signal <gather>
+        sendMessages(gatherSink[i][wireId_g][tStep%nSlot], v);
     }
     //-------------------------group converge-------------------
 
-    sendMessages(farGatherSink[y_id] + sinkOffInType, v);
+    sendMessages(farGatherSink[wireId][tStep%nSlot], v);
     restoreData(v);
 
     if (nelems < eltPerPack)
@@ -493,27 +484,29 @@ protected:
       return p;
     };
     auto ipcFarPart = [&](T* p) {
-      return (T *)((uintptr_t)p + sectionSize * BiNRanks);
+      return (T *)((uintptr_t)p + ringSize * 4096 * BiNRanks);
     };
 
     ioForPeers = ioClosePart(input);
     ioForFar = ioFarPart(input);
 
-    farScatterSink = reinterpret_cast<T (*)[sectionElems]>(ipcFarPart(pairBuf0));
-    farGatherSink = reinterpret_cast<T (*)[sectionElems]>(ipcFarPart(pairBuf1));
+    farScatterSink = reinterpret_cast<ringPtr>(ipcFarPart(pairBuf0));
+    farGatherSink = reinterpret_cast<ringPtr>(ipcFarPart(pairBuf1));
 
-    localFarScatterSink = reinterpret_cast<T (*)[sectionElems]>(ipcFarPart(scatterBuf));
-    localFarGatherSink = reinterpret_cast<T (*)[sectionElems]>(ipcFarPart(gatherBuf));
+    localFarScatterSink = reinterpret_cast<ringPtr>(ipcFarPart(scatterBuf));
+    localFarGatherSink = reinterpret_cast<ringPtr>(ipcFarPart(gatherBuf));
 
     // Indicated by y-id
     for (int i = 0; i < BiNRanks; ++ i) {
       // even: 0, 2, 4, 6
       // odd:  1, 3, 5, 7
       auto r_index = 2 * i + (rank & 1);
-      scatterSink[i] = (T *)((uintptr_t)ipcClosePart(peerBuf0[r_index])
-          + l_rank * sectionSize);
-      localGatherSink[i] = (T *)((uintptr_t)ipcClosePart(gatherBuf)
-          + i * sectionSize);
+
+      scatterSink[i] = reinterpret_cast<ringPtr>(
+          (uintptr_t)ipcClosePart(peerBuf0[r_index]) + l_rank * ringSize);
+
+      localGatherSink[i] = reinterpret_cast<ringPtr>(
+          (uintptr_t)ipcClosePart(gatherBuf) + i * ringSize);
     }
 
     // Indicated by next?
@@ -521,10 +514,11 @@ protected:
       int l_next = (l_rank + i + 1) % BiNRanks;
       int next = (rank + i * 2 + 2) % (2 * BiNRanks);
 
-      localScatterSink[i] = (T *)((uintptr_t)ipcClosePart(scatterBuf)
-          + l_next * sectionSize);
-      gatherSink[i] = (T *)((uintptr_t)ipcClosePart(peerBuf1[next])
-          + l_rank * sectionSize);
+      localScatterSink[i] = reinterpret_cast<ringPtr>(
+          (uintptr_t)ipcClosePart(scatterBuf) + l_next * ringSize);
+
+      gatherSink[i] = reinterpret_cast<ringPtr>(
+          (uintptr_t)ipcClosePart(peerBuf1[next]) + l_rank * ringSize);
     }
   }
 
@@ -535,21 +529,21 @@ protected:
   ssize_t workElems;
 
   // ---------------------IPC buffers-------------------------
-  T (* farScatterSink)[sectionElems];
-  T (* farGatherSink)[sectionElems];
+  ringPtr farScatterSink;
+  ringPtr farGatherSink;
 
   // ----------------Sinks, written by remotes----------------
-  T (* localFarScatterSink)[sectionElems];
-  T (* localFarGatherSink)[sectionElems];
+  ringPtr localFarScatterSink;
+  ringPtr localFarGatherSink;
 
   int l_rank;
   uint32_t seqNo;
 
-  T* scatterSink[BiNRanks];
-  T* gatherSink[NPeers];
+  ringPtr scatterSink[BiNRanks];
+  ringPtr gatherSink[NPeers];
 
-  T* localScatterSink[NPeers];
-  T* localGatherSink[BiNRanks];
+  ringPtr localScatterSink[NPeers];
+  ringPtr localGatherSink[BiNRanks];
 
 #if defined(__enable_sycl_stream__)
   sycl::stream cout;
