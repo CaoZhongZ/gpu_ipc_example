@@ -274,12 +274,12 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
     auto loopSize = nWiresIO * wireCapacity;
     auto loopTSize = nWiresIO * wireTransSize;
 
-    auto wireId = pos.get_global_id()[0] / SubGroupSize / BiNRanks;
+    auto wireId_x = pos.get_global_id()[0] / SubGroupSize / BiNRanks;
 
     for (size_t gOff = 0, tOff = 0;
         gOff < workSize; gOff += loopSize, tOff += loopTSize) {
-      auto wireOff = wireId * wireCapacity + gOff;
-      auto transOff = wireId * wireTransSize + tOff;
+      auto wireOff = wireId_x * wireCapacity + gOff;
+      auto transOff = wireId_x * wireTransSize + tOff;
       ssize_t workLeft = workSize - wireOff;
 
 #if defined(__enable_prefetch__)

@@ -318,8 +318,9 @@ public:
   ) {
     // given ioForPeers vs. ioForFar is stride with multiple of 1024
     // Presume loss of L1 for accessing each other
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto y_id = sg.get_group_id()[0] % BiNRanks;
+    auto wireId = sycl::ext::oneapi::experimental::
+      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto y_id = wireId % BiNRanks;
     preload<unroll>(ioForPeers + y_id * workElems + inputOffset/sizeof(T));
     preload<unroll>(ioForFar + y_id * workElems + inputOffset/sizeof(T));
   }
@@ -334,8 +335,9 @@ public:
 
     constexpr auto eltPerPack = unroll * wireElems;
 
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto y_id = sg.get_group_id()[0] % BiNRanks;
+    auto wireId = sycl::ext::oneapi::experimental::
+      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto y_id = wireId % BiNRanks;
     auto *ptr = ioForFar + y_id * workElems + inputOffInType;
 
     message_t messages[unroll];
@@ -360,8 +362,9 @@ public:
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto y_id = sg.get_group_id()[0] % BiNRanks;
+    auto wireId = sycl::ext::oneapi::experimental::
+      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto y_id = wireId % BiNRanks;
 
     constexpr auto eltPerPack = unroll * wireElems;
 
@@ -372,7 +375,7 @@ public:
       retry |= recvMessages(
           messages, localFarGatherSink[y_id] + sinkOffInType, flag
       );
-    } while(sycl::any_of_group(sg, retry));
+    } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));
 
     // if (sg.get_local_id()[0] == 15)
     //   cout<<messages[0]<<sycl::endl<<sycl::flush;
@@ -388,8 +391,9 @@ public:
   template <int unroll> inline void closeUnifiedPollReduceScatterGather(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-    auto y_id = sg.get_group_id()[0] % BiNRanks;
+    auto wireId = sycl::ext::oneapi::experimental::
+      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto y_id = wireId % BiNRanks;
 
     auto inputOffInType = inputOffset / sizeof(T);
     auto sinkOffInType = ringOffset(sinkOffset) / sizeof(T);
@@ -413,7 +417,7 @@ public:
       retry |= recvMessages(
           messages, localFarScatterSink[y_id] + sinkOffInType, flag
       );
-    } while(sycl::any_of_group(sg, retry));
+    } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));
 
     shuffleData(v);
     accumMessages(v, messages);
@@ -428,7 +432,7 @@ public:
         retry = false;
         retry |= recvMessages(
             v, localGatherSink[y_id] + sinkOffInType, flag);
-      } while(sycl::any_of_group(sg, retry));             // 4. xNPeers waits for <gather>
+      } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));             // 4. xNPeers waits for <gather>
     }
 
     if (y_id == l_rank) {
@@ -439,7 +443,7 @@ public:
           retry = false;
           retry |= recvMessages(
               messages, localScatterSink[i] + sinkOffInType, flag);
-        } while (sycl::any_of_group(sg, retry));          // 2. wait for <scatter> xNPeers
+        } while (sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));          // 2. wait for <scatter> xNPeers
         accumMessages(v, messages);
       }
 
