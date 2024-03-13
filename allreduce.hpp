@@ -268,24 +268,18 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
       sycl::nd_item<1> pos
   ) const {
-    auto groupRange = pos.get_group_range()[0];
-    int subGroupXRange = pos.get_sub_group().get_group_range()[0]/BiNRanks;
+    auto nWires = pos.get_global_range()[0]/SubGroupSize;
+    auto nWiresIO = nWires / BiNRanks;
 
-    auto cableCapacity = wireCapacity * subGroupXRange;
-    auto cableTSize = wireTransSize * subGroupXRange;
+    auto loopSize = nWiresIO * wireCapacity;
+    auto loopTSize = nWiresIO * wireTransSize;
 
-    // SubGroup 0 ~ BiNRanks -1 is stacked up to the same groupXId
-    // Hence work on same offsets
-    auto subGroupXId = pos.get_sub_group().get_group_id()[0] /BiNRanks;
-    auto groupId = pos.get_group().get_group_id()[0];
-
-    auto loopSize = groupRange * cableCapacity;
-    auto loopTSize = groupRange * cableTSize;
+    auto wireId = pos.get_global_id()[0] / SubGroupSize / BiNRanks;
 
     for (size_t gOff = 0, tOff = 0;
         gOff < workSize; gOff += loopSize, tOff += loopTSize) {
-      auto wireOff = groupId * cableCapacity + subGroupXId * wireCapacity + gOff;
-      auto transOff = groupId * cableTSize + subGroupXId * wireTransSize + tOff;
+      auto wireOff = wireId * wireCapacity + gOff;
+      auto transOff = wireId * wireTransSize + tOff;
       ssize_t workLeft = workSize - wireOff;
 
 #if defined(__enable_prefetch__)
