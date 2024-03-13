@@ -166,6 +166,8 @@ void un_allgather(exchange_contents* send_buf, exchange_contents recv_buf[], int
       if ( fdarray[i].fd != -1 )
         sysCheck(close(fdarray[i].fd));
     }
+
+    unlink(server_name);
   });
 
   // connect to all ranks
@@ -185,6 +187,8 @@ void un_allgather(exchange_contents* send_buf, exchange_contents recv_buf[], int
       fdarray[i].fd = client_connect(peer_name, client_name);
       fdarray[i].events = POLLOUT;
       fdarray[i].revents = 0;
+
+      unlink(client_name);
     }
   }
 
