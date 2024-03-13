@@ -268,13 +268,13 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
       sycl::nd_item<1> pos
   ) const {
-    auto nWires = pos.get_global_range()[0]/SubGroupSize;
+    auto nWires = pos.get_global_range(0)/SubGroupSize;
     auto nWiresIO = nWires / BiNRanks;
 
     auto loopSize = nWiresIO * wireCapacity;
     auto loopTSize = nWiresIO * wireTransSize;
 
-    auto wireId_x = pos.get_global_id()[0] / SubGroupSize / BiNRanks;
+    auto wireId_x = pos.get_global_id(0)/SubGroupSize/BiNRanks;
 
     for (size_t gOff = 0, tOff = 0;
         gOff < workSize; gOff += loopSize, tOff += loopTSize) {
