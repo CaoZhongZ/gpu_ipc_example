@@ -143,7 +143,9 @@ int client_connect(const char *server, const char *client) {
   return sock;
 }
 
-void un_allgather(exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world) {
+void un_allgather(
+    exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world, MPI_Comm comm
+) {
   const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
   const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
   char server_name[64];
@@ -151,7 +153,7 @@ void un_allgather(exchange_contents* send_buf, exchange_contents recv_buf[], int
   unlink(server_name);
   auto s_listen = server_listen(server_name);
 
-  MPI_Barrier(MPI_COMM_WORLD);
+  MPI_Barrier(comm);
 
   pollfd fdarray[world];
   int recv_socks[world-1];
@@ -231,7 +233,8 @@ void un_allgather(exchange_contents* send_buf, exchange_contents recv_buf[], int
 }
 
 ze_ipc_mem_handle_t open_all_ipc_mems(
-    sycl::queue queue, void* ptr, int rank, int world, void *peer_bases[], size_t offsets[]
+    sycl::queue queue, void* ptr, int rank, int world,
+    void *peer_bases[], size_t offsets[], MPI_comm comm
 ) {
   // Step 1: Get base address of the pointer
   sycl::context ctx = queue.get_context();
@@ -253,7 +256,7 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
   // Step 3: Exchange the handles and offsets
   memset(recv_buf, 0, sizeof(recv_buf));
 
-  un_allgather(&send_buf, recv_buf, rank, world);
+  un_allgather(&send_buf, recv_buf, rank, world, comm);
 
   for (int i = 0; i < world; ++ i) {
     if (i == rank) {
