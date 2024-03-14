@@ -37,7 +37,7 @@ public:
   //
   constexpr static size_t nSlot = 4;
   constexpr static size_t ringSize = wireTransSize * nSlot;
-  constexpr static size_t ringElems = ringSize / sizeof(T);
+  constexpr static size_t maxLaunch = 64 * 64; // 64 wire, 64 SS
 
   typedef T (* ringPtr)[nSlot][wireTransElems];
 
@@ -417,8 +417,7 @@ public:
       bool retry;
       do {
         retry = false;
-        retry |= recvMessages(
-            v, localGatherSink[y_id][wireId_g][tStep%nSlot], flag);
+        retry |= recvMessages(v, localGatherSink[wireId][tStep%nSlot], flag);
       } while(sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );                                          // 4. xNPeers waits for <gather>
@@ -484,7 +483,7 @@ protected:
       return p;
     };
     auto ipcFarPart = [&](T* p) {
-      return (T *)((uintptr_t)p + ringSize * 4096 * BiNRanks);
+      return (T *)((uintptr_t)p + ringSize * maxLaunch * BiNRanks);
     };
 
     ioForPeers = ioClosePart(input);
@@ -492,9 +491,9 @@ protected:
 
     farScatterSink = reinterpret_cast<ringPtr>(ipcFarPart(pairBuf0));
     farGatherSink = reinterpret_cast<ringPtr>(ipcFarPart(pairBuf1));
-
     localFarScatterSink = reinterpret_cast<ringPtr>(ipcFarPart(scatterBuf));
     localFarGatherSink = reinterpret_cast<ringPtr>(ipcFarPart(gatherBuf));
+    localGatherSink = reinterpret_cast<ringPtr>(ipcClosePart(gatherBuf));
 
     // Indicated by y-id
     for (int i = 0; i < BiNRanks; ++ i) {
@@ -504,9 +503,6 @@ protected:
 
       scatterSink[i] = reinterpret_cast<ringPtr>(
           (uintptr_t)ipcClosePart(peerBuf0[r_index]) + l_rank * ringSize);
-
-      localGatherSink[i] = reinterpret_cast<ringPtr>(
-          (uintptr_t)ipcClosePart(gatherBuf) + i * ringSize);
     }
 
     // Indicated by next?
@@ -543,7 +539,7 @@ protected:
   ringPtr gatherSink[NPeers];
 
   ringPtr localScatterSink[NPeers];
-  ringPtr localGatherSink[BiNRanks];
+  ringPtr localGatherSink;
 
 #if defined(__enable_sycl_stream__)
   sycl::stream cout;
