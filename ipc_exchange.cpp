@@ -139,7 +139,13 @@ int client_connect(const char *server, const char *client) {
   sun.sun_family = AF_UNIX;
   strcpy(sun.sun_path, server);
   auto len = offsetof(sockaddr_un, sun_path) + strlen(server);
-  sysCheck(connect(sock, (sockaddr *)&sun, len));
+  while (connect(sock, (sockaddr *)&sun, len) == -1) {
+    if (errno == ECONNREFUSED) {
+      asm volatile ("pause\n");
+      continue;
+    }
+    sysCheck(-1);
+  }
   return sock;
 }
 
@@ -152,8 +158,6 @@ void un_allgather(
   snprintf(server_name, sizeof(server_name), "%s%d", servername_prefix, rank);
   unlink(server_name);
   auto s_listen = server_listen(server_name);
-
-  MPI_Barrier(comm);
 
   pollfd fdarray[world];
   int recv_socks[world-1];
