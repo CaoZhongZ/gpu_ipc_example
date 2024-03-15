@@ -13,7 +13,6 @@
 #include <string>
 #include <random>
 
-#include <mpi.h>
 #include <sycl/sycl.hpp>
 #include <level_zero/ze_api.h>
 
@@ -282,59 +281,6 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
     }
   }
   return send_buf.ipc_handle;
-}
-
-std::tuple<void*, size_t, ze_ipc_mem_handle_t> open_peer_ipc_mem(
-    sycl::queue queue, void* ptr, int rank, int world
-) {
-  // Step 1: Get base address of the pointer
-  sycl::context ctx = queue.get_context();
-  auto l0_ctx = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(ctx);
-
-  void *base_addr;
-  size_t base_size;
-  zeCheck(zeMemGetAddressRange(l0_ctx, ptr, &base_addr, &base_size));
-
-  // Step 2: Get IPC mem handle from base address
-  alignas(64) exchange_contents send_buf;
-  alignas(64) exchange_contents recv_buf[world];
-
-  // fill in the exchange info
-  zeCheck(zeMemGetIpcHandle(l0_ctx, base_addr, &send_buf.ipc_handle));
-  send_buf.offset = (char*)ptr - (char*)base_addr;
-  send_buf.pid = getpid();
-
-  // Step 3: Exchange the handles and offsets
-  memset(recv_buf, 0, sizeof(recv_buf));
-  // Overkill if we don't really needs all peer's handles
-  MPI_Allgather(
-      &send_buf, sizeof(send_buf), MPI_BYTE, recv_buf, sizeof(send_buf), MPI_BYTE, MPI_COMM_WORLD);
-
-  // Step 4: Prepare pid file descriptor of next process
-  int next_peer = rank + 1;
-  if (next_peer >= world) next_peer = next_peer - world;
-
-  auto* peer = recv_buf + next_peer;
-  auto pid_fd = syscall(__NR_pidfd_open, peer->pid, 0);
-  sysCheck(pid_fd);
-
-  //
-  // Step 5: Duplicate GEM object handle to local process
-  // and overwrite original file descriptor number
-  //
-  peer->fd = syscall(__NR_pidfd_getfd, pid_fd, peer->fd, 0);
-  sysCheck(peer->fd);
-
-  // Step 6: Open IPC handle of remote peer
-  auto l0_device
-    = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(queue.get_device());
-  void* peer_base;
-
-  zeCheck(zeMemOpenIpcHandle(
-        l0_ctx, l0_device, peer->ipc_handle, ZE_IPC_MEMORY_FLAG_BIAS_CACHED, &peer_base));
-
-  return std::make_tuple(
-      (char*)peer_base + peer->offset, peer->offset, send_buf.ipc_handle);
 }
 
 static size_t align_up(size_t size, size_t align_sz) {
