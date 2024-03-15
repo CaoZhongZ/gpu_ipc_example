@@ -140,7 +140,7 @@ int client_connect(const char *server, const char *client) {
   strcpy(sun.sun_path, server);
   auto len = offsetof(sockaddr_un, sun_path) + strlen(server);
   while (connect(sock, (sockaddr *)&sun, len) == -1) {
-    if (errno == ECONNREFUSED) {
+    if (errno == ECONNREFUSED || errno == ENOENT) {
       asm volatile ("pause\n");
       continue;
     }
@@ -150,7 +150,7 @@ int client_connect(const char *server, const char *client) {
 }
 
 void un_allgather(
-    exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world, MPI_Comm comm
+    exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world
 ) {
   const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
   const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
@@ -238,7 +238,7 @@ void un_allgather(
 
 ze_ipc_mem_handle_t open_all_ipc_mems(
     sycl::queue queue, void* ptr, int rank, int world,
-    void *peer_bases[], size_t offsets[], MPI_Comm comm
+    void *peer_bases[], size_t offsets[]
 ) {
   // Step 1: Get base address of the pointer
   sycl::context ctx = queue.get_context();
@@ -260,7 +260,7 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
   // Step 3: Exchange the handles and offsets
   memset(recv_buf, 0, sizeof(recv_buf));
 
-  un_allgather(&send_buf, recv_buf, rank, world, comm);
+  un_allgather(&send_buf, recv_buf, rank, world);
 
   for (int i = 0; i < world; ++ i) {
     if (i == rank) {
