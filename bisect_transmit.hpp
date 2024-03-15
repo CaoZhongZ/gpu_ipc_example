@@ -35,7 +35,7 @@ public:
   // sectionSize represents each temporary buffer section for each rank.
   // configurable, in bytes.
   //
-  constexpr static size_t nSlot = 4;
+  constexpr static size_t nSlot = 8;
   constexpr static size_t ringSize = wireTransSize * nSlot;
   constexpr static size_t maxLaunch = 64 * 64; // 64 wire, 64 SS
 
@@ -483,7 +483,7 @@ protected:
       return p;
     };
     auto ipcFarPart = [&](T* p) {
-      return (T *)((uintptr_t)p + ringSize * maxLaunch * BiNRanks);
+      return (T *)((uintptr_t)p + ringSize * maxLaunch);
     };
 
     ioForPeers = ioClosePart(input);

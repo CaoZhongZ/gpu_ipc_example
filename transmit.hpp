@@ -9,7 +9,10 @@
 #define alignUp(x, c) \
   (divUp(x, c) * c)
 
-#include "small_transmit.hpp"
+#include "rt64.hpp"
+#include "rt64_128.hpp"
+
+#include "parallel_transmit.hpp"
 #include "simple_transmit.hpp"
 #include "throughput.hpp"
 #include "bisect_transmit.hpp"

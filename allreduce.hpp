@@ -6,11 +6,12 @@
 #include "transmit.hpp"
 
 template <typename T,
-         int NPeers,
-         template <typename, int, int> class Transmit,
+         int NRanks,
+         template <typename, int> Proto,
+         template <typename, int, template <typename, int>, int> class Transmit,
          int SubGroupSize = 16>
-struct AllReduce : public Transmit<T, NPeers, SubGroupSize> {
-  using Super = Transmit<T, NPeers, SubGroupSize>;
+struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
+  using Super = Transmit<T, NRanks, Proto, SubGroupSize>;
   using message_t = typename Super::message_t;
   constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
   constexpr static int wireCapacity = Super::wireCapacity;
@@ -51,23 +52,17 @@ struct AllReduce : public Transmit<T, NPeers, SubGroupSize> {
   //
   // Total cables will deliver the full capacity of single loop.
   //
-  inline void stage2Test(sycl::nd_item<1> pos) const {
-    auto groupRange = pos.get_group_range()[0];
-    int subGroupRange = pos.get_sub_group().get_group_range()[0];
+  void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
+      sycl::nd_item<1> pos
+  ) const {
+    auto nWires = pos.get_global_range(0) / SubGroupSize;
+    auto wireId_x = pos.get_global_id(0) / SubGroupSize / NRanks;
 
-    auto cableCapacity = wireCapacity * subGroupRange;
-    auto cableTSize = wireTransSize * subGroupRange;
-
-    auto groupId = pos.get_group().get_group_id()[0];
-    auto subGroupId = pos.get_sub_group().get_group_id()[0];
-
-    auto loopSize = groupRange * cableCapacity;
-    auto loopTSize = groupRange * cableTSize;
+    auto loopSize = nWires / NRanks * wireCapacity;
 
     for (size_t gOff = 0, tOff = 0;
-        gOff < workSize; gOff += loopSize, tOff += loopTSize) {
-      auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
-      auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
+        gOff < workSize; gOff += loopSize, ++ tOff) {
+      auto wireOff = wireId_x * wireCapacity + gOff;
 
 #if defined(__enable_sycl_stream__)
       auto local_id = pos.get_sub_group().get_local_id()[0];
@@ -80,19 +75,9 @@ struct AllReduce : public Transmit<T, NPeers, SubGroupSize> {
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0) {
         const_cast<AllReduce *>(this)->
-          template scatter<unroll>(wireOff, transOff, workLeft);
-        const_cast<AllReduce *>(this)->
-          template pollRecvReduceBcast<unroll>(wireOff, transOff, workLeft);
-        const_cast<AllReduce *>(this)->
-          template pollGatherOutputs<unroll>(wireOff, transOff, workLeft);
+          template run<unroll>(wireOff, tOff, workLeft);
       }
     }
-  }
-
-  void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
-      sycl::nd_item<1> pos
-  ) const {
-    stage2Test(pos);
   }
 
 private:
@@ -102,7 +87,7 @@ private:
     if ((uintptr_t)input % sizeof(message_t) != 0)
       throw std::logic_error("We only support aligned pointer for now");
 
-    auto nChunks = NPeers + 1;
+    auto nChunks = NRanks;
     auto octSize = divUp(size, sizeof(message_t));
     auto chunkSize = divUp(octSize, nChunks);
 
