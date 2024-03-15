@@ -1,6 +1,6 @@
 #pragma once
 
-template <typename, int SubGroupSize> struct Rt64_128 {
+template <typename T, int SubGroupSize> struct Rt64_128 {
   constexpr static int nReg128B = 128 / SubGroupSize / 4;
   constexpr static int firstElem = 0;
   constexpr static int lastElem = nReg128B -1;
@@ -14,7 +14,7 @@ template <typename, int SubGroupSize> struct Rt64_128 {
   constexpr static size_t wireCapacity = (SubGroupSize-nChan8B) * sizeof(message_t);
   constexpr static size_t wireTransSize = SubGroupSize * sizeof(message_t);
   constexpr static size_t wireCapacityInType = wireCapacity / sizeof(T);
-  constexpr static size_t wireTransSizeInType = wireTransSize/ sizeof(T);
+  constexpr static size_t wireTransElems = wireTransSize/ sizeof(T);
 
   constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
   constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
@@ -234,7 +234,7 @@ template <typename, int SubGroupSize> struct Rt64_128 {
     for (int u = 0; u < unroll; ++ u) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscStore<SubGroupSize, CommWriteCacheCtrl>(
-          ptr + u * wireTransSizeInType + local_off,
+          ptr + u * wireTransElems + local_off,
           messages[u]
       );
 #else
@@ -256,7 +256,7 @@ template <typename, int SubGroupSize> struct Rt64_128 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscLoad<SubGroupSize, CommReadCacheCtrl>(
           messages[u],
-          ptr + u * wireTransSizeInType + local_off
+          ptr + u * wireTransElems + local_off
       );
 #else
       (void) lid; (void) local_off;

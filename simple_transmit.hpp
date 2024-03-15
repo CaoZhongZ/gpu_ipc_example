@@ -1,10 +1,8 @@
 #pragma once
 
 template <typename T, int NPeers, int SubGroupSize,
-         template <typename, int> Proto = Rt64_128>
+         template <typename, int> class Proto = Rt64_128>
 class SimpleTransmit : public Proto<T, SubGroupSize> {
-protected:
-
 public:
   //
   // sectionSize will be renamed later, it represent each temporary buffer

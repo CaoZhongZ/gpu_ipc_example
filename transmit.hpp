@@ -13,6 +13,5 @@
 #include "rt64_128.hpp"
 
 #include "parallel_transmit.hpp"
-#include "simple_transmit.hpp"
-#include "throughput.hpp"
+// #include "simple_transmit.hpp"
 #include "bisect_transmit.hpp"

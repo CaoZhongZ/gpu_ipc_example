@@ -1,6 +1,6 @@
 #pragma once
 
-template <T, int SubGroupSize> struct Rt64 {
+template <typename T, int SubGroupSize> struct Rt64 {
   using message_t = sycl::vec<uint32_t, 2>;
   static constexpr int dataElem = 0;
   static constexpr int flagElem = 1;
@@ -8,7 +8,7 @@ template <T, int SubGroupSize> struct Rt64 {
   constexpr static size_t wireCapacity = SubGroupSize * sizeof(message_t) / 2;
   constexpr static size_t wireTransSize = SubGroupSize * sizeof(message_t);
 
-  constexpr static int wireElems = wireCapacity / sizeof(T);
+  constexpr static int wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
   constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
@@ -24,7 +24,7 @@ template <T, int SubGroupSize> struct Rt64 {
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireElems + local_off;
+      auto off = i * wireCapacityInType + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
@@ -50,7 +50,7 @@ template <T, int SubGroupSize> struct Rt64 {
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireElems + local_off;
+      auto off = i * wireCapacityInType + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
@@ -102,7 +102,7 @@ template <T, int SubGroupSize> struct Rt64 {
     int local_off = lid * sizeof(uint32_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireElems + local_off;
+      auto off = i * wireCapacityInType + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
@@ -126,7 +126,7 @@ template <T, int SubGroupSize> struct Rt64 {
     int local_off = lid * sizeof(uint32_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
-      auto off = i * wireElems + local_off;
+      auto off = i * wireCapacityInType + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)

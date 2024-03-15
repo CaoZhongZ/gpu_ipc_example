@@ -3,10 +3,26 @@
 // sub-group level parallel transmit, minimum latency expected
 
 template <typename T, int NRanks,
-         template <typename, int> Proto = Rt64, int SubGroupSize = 16>
-class parallelTransmit : public Proto<T, SubGroupSize> {
+         template <typename, int> class Proto, int SubGroupSize = 16>
+class ParallelTransmit : public Proto<T, SubGroupSize> {
 protected:
   static constexpr int NPeers = NRanks -1;
+  using ProtoT = Proto<T, SubGroupSize>;
+
+  using typename ProtoT::message_t;
+  using ProtoT::wireCapacityInType;
+
+  using ProtoT::wireTransSize;
+  using ProtoT::wireTransElems;
+
+  using ProtoT::loadInput;
+  using ProtoT::shuffleData;
+  using ProtoT::insertFlags;
+  using ProtoT::sendMessages;
+  using ProtoT::recvMessages;
+  using ProtoT::accumMessages;
+  using ProtoT::restoreData;
+  using ProtoT::storeOutput;
 
 public:
   constexpr static size_t nSlot = 8;
@@ -16,7 +32,7 @@ public:
   typedef T (* ringPtr)[nSlot][wireTransElems];
 
 public:
-  SmallTransmit(
+  ParallelTransmit(
       T* input, T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[],
       ssize_t workSize,
@@ -32,11 +48,11 @@ public:
   {
     ioForPeers = input;
 
-    localGatherSink = reinterpret_cast<ringPtr>(ipcClosePart(gatherBuf));
+    localGatherSink = reinterpret_cast<ringPtr>(gatherBuf);
 
     for (int i = 0; i < NRanks; ++ i)
       scatterSink[i] = reinterpret_cast<ringPtr>(
-          (uintptr_t)peerBuf0[rank] + ringSize * rank);
+          (uintptr_t)peerBuf0[i] + rank * ringSize);
 
     for (int i = 0; i < NPeers; ++ i) {
       int next = (rank + i + 1) % NRanks;
@@ -45,7 +61,7 @@ public:
           (uintptr_t)scatterBuf + next * ringSize);
 
       gatherSink[i] = reinterpret_cast<ringPtr>(
-          (uintptr_t)peerBuf1[next] + ringSize * rank);
+          (uintptr_t)peerBuf1[next] + rank * ringSize);
     }
   }
 
@@ -63,7 +79,8 @@ public:
     auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireElems;
+    constexpr auto eltPerPack = unroll * wireCapacityInType;
+
     message_t v[unroll];
 
     auto* ptr = ioForPeers + y_id * workElems + inputOffInType;
@@ -77,7 +94,7 @@ public:
 
     if (y_id != rank) { // scatter and gather
       insertFlags(v, flag);
-      sendMessages(scatterSink[y_id][x_id][tStep%nSlot], v[i]);
+      sendMessages(scatterSink[y_id][x_id][tStep%nSlot], v);
 
       bool retry;
       do {
@@ -89,6 +106,7 @@ public:
     }
 
     if (y_id == rank) { // wait reduce bcast
+      message_t messages[unroll];
       for (int i = 0; i < NPeers; ++ i) {
         bool retry;
         do {
@@ -118,6 +136,8 @@ public:
 
 protected:
   T* ioForPeers;
+
+  ssize_t workElems;
 
   int rank;
   uint32_t seqNo;

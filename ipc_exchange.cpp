@@ -234,7 +234,7 @@ void un_allgather(
 
 ze_ipc_mem_handle_t open_all_ipc_mems(
     sycl::queue queue, void* ptr, int rank, int world,
-    void *peer_bases[], size_t offsets[], MPI_comm comm
+    void *peer_bases[], size_t offsets[], MPI_Comm comm
 ) {
   // Step 1: Get base address of the pointer
   sycl::context ctx = queue.get_context();

@@ -27,9 +27,9 @@ OFFLOAD=sycl-spir64_gen-unknown-unknown
 endif
 
 V=
-CXXFLAGS=-std=c++17 $(OPT_FLAGS) -Wall -Wno-deprecated-declarations -Wno-unused-variable -Wno-vla-cxx-extension -Iinclude
+CXXFLAGS=-std=c++17 $(OPT_FLAGS) -Wall -Wno-deprecated-declarations -Wno-unused-variable -Wno-vla-cxx-extension -Iinclude -Itvisa/include
 SYCLFLAGS=-fsycl -fsycl-id-queries-fit-in-int -fsycl-default-sub-group-size=16 -D__SYCL_INTERNAL_API -fsycl-targets=$(TARGET)
-LINKFLAGS=$(OPT_FLAGS) -fsycl -fsycl-max-parallel-link-jobs=8 -fsycl-targets=$(TARGET) $(LINKTARGET)
+LINKFLAGS=$(OPT_FLAGS) -fsycl -fsycl-max-parallel-link-jobs=8 -fsycl-targets=$(TARGET) $(LINKTARGET) -lmpi -lze_loader
 
 .PRECIOUS : %-xe.o %.host.o %.dev.bc %.footer.hpp
 
@@ -81,8 +81,8 @@ spirv_ext=-all,+SPV_EXT_shader_atomic_float_add,+SPV_EXT_shader_atomic_float_min
 	llvm-foreach --in-file-list=./tmp/$<-list.txt --in-replace=./tmp/$<-list.txt --out-ext=spv --out-file-list=./tmp/$<-list1.txt --out-replace=./tmp/$<-list1.txt --out-dir=./tmp --jobs=8 -- llvm-spirv -o ./tmp/$<-list1.txt -spirv-max-version=1.4 -spirv-debug-info-version=ocl-100 -spirv-allow-extra-diexpressions -spirv-allow-unknown-intrinsics=llvm.genx. -spirv-ext=$(spirv_ext) ./tmp/$<-list.txt
 	llvm-foreach --out-ext=out --in-file-list=./tmp/$<-list1.txt --in-replace=./tmp/$<-list1.txt  --out-file-list=./tmp/$<.out --out-replace=./tmp/$<.out --jobs=8 -- ocloc -output ./tmp/$<.out -file ./tmp/$<-list1.txt -output_no_suffix -spirv_input -device pvc
 
-main : main.cpp ipc_exchange.cpp sycl_misc.cpp allreduce.cpp
-	$(CXX) $(V) $(SYCLFLAGS) -c -o $@ $<
+main : ipc_exchange.o sycl_misc.o allreduce.o main.o
+	$(CXX) $(V) $(LINKFLAGS) -o $@ $^
 
 all : main
 

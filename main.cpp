@@ -170,7 +170,7 @@ int main(int argc, char* argv[]) {
     queue.memcpy(host_init, input, alloc_size).wait();
 
     verifyTransmit<test_type>(
-        algo, host_verify, host_init, flag, rank, world, simd, nelems
+        host_verify, host_init, flag, rank, world, simd, nelems
     );
     std::cout<<std::dec;
     return 0;

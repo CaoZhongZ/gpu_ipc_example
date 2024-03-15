@@ -7,8 +7,8 @@
 
 template <typename T,
          int NRanks,
-         template <typename, int> Proto,
-         template <typename, int, template <typename, int>, int> class Transmit,
+         template <typename, int> class Proto,
+         template <typename, int, template <typename, int> class, int> class Transmit,
          int SubGroupSize = 16>
 struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
   using Super = Transmit<T, NRanks, Proto, SubGroupSize>;
@@ -25,7 +25,7 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
       , sycl::stream cout
 #endif
   )
-  : Transmit<T, NPeers, SubGroupSize>(
+  : Transmit<T, NRanks, Proto, SubGroupSize>(
       input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
       calcWorkSize(input, nelems * sizeof(T)),
       rank, seqNo
@@ -104,7 +104,6 @@ private:
 #endif
 };
 
-// New AllReduce API will be here
 template <typename T,
          int NRanks,
          template <typename, int, int> class Transmit,
@@ -420,7 +419,9 @@ private:
 #endif
 };
 
-template <typename T, template <typename, int, int> class Transmit>
+template <typename T,
+         template <typename, int> class Proto,
+         template <typename, int, template<typename, int> class, int> class Transmit>
 sycl::event testTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,
@@ -429,9 +430,11 @@ sycl::event testTransmit(
 );
 
 template <typename T, template <typename, int, int> class Transmit>
-int verifyTransmit(
-    T* host, T* host2,
-    uint32_t step, int rank, int world, uint32_t simd, size_t nWorkElems
+sycl::event testBisectTransmit(
+    sycl::nd_range<1> launchParam,
+    T* input, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue
 );
 
 template <typename T>
@@ -440,47 +443,9 @@ sycl::event testTransmit(
     sycl::nd_range<1> launchParam,
     T* input, T* ipcbuf0, T* ipcbuf1,
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
-    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
-  if (transmitType == "small") {
-    return testTransmit<T, SmallTransmit>(
-        launchParam,
-        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-        nelems, rank, world, step, subgroup, queue
-    );
-  } else if (transmitType == "simple") {
-    return testTransmit<T, SimpleTransmit>(
-        launchParam,
-        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-        nelems, rank, world, step, subgroup, queue
-    );
-  } else if (transmitType == "bisect") {
-    return testTransmit<T, BisectPTransmit>(
-        launchParam,
-        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-        nelems, rank, world, step, subgroup, queue
-    );
-  } else {
-    throw std::logic_error("Transmit type not support");
-  }
-}
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue);
 
 template<typename T> int verifyTransmit(
-    std::string transmitType, T* host, T* host2,
+    T* host, T* host2,
     uint32_t step, int rank, int world, uint32_t simd, size_t nelems
-) {
-  if (transmitType == "small") {
-    return verifyTransmit<T, SmallTransmit>(
-        host, host2, step, rank, world, simd, nelems
-    );
-  } else if (transmitType == "simple") {
-    return verifyTransmit<T, SimpleTransmit>(
-        host, host2, step, rank, world, simd, nelems
-    );
-  } else if (transmitType == "bisect") {
-    return verifyTransmit<T, BisectPTransmit>(
-        host, host2, step, rank, world, simd, nelems
-    );
-  } else {
-    throw std::logic_error("Transmit type not support");
-  }
-}
+);
