@@ -44,6 +44,32 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
   static int stage2Verify(
       T* host, int rank, uint32_t flag, size_t nWorkElemsInInt
   );
+
+  sycl::nd_range<1> getLaunchParam(uint32_t& updateSeqNo) const {
+    constexpr uint32_t nThreads = 64; /* TODO: get EU/thread config */
+    constexpr size_t maxSS = 64;
+    int w = NRanks;
+    size_t wirePerSS = nThreads  / w;
+    size_t nWire = divUp(workSize, wireCapacity);
+    size_t nSS = divUp(nWire, wirePerSS);
+    auto actualSS = std::min(nSS, maxSS);
+    auto nSteps = divUp(nWire, actualSS * wirePerSS);
+    updateSeqNo += nSteps;
+
+    return sycl::nd_range<1>(actualSS, wirePerSS * w * SubGroupSize);
+  }
+
+  static void launch(
+      T* input, T* ipcbuf0, T* ipcbuf1, T* const peerbuf0[], T* const peerbuf1[],
+      size_t nelems, int rank, uint32_t& step, sycl::queue queue) {
+    AllReduce offload(input, nelems, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1);
+
+    queue.submit([&](sycl::handler &cgh) {
+        cgh.parallel_for(
+          offload.getLaunchParam(step), offload
+        );
+    });
+  }
   //
   // Found this analogy fascinating:
   //
@@ -73,10 +99,8 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
           <<", transOff:"<<transOff<<"; "<<sycl::endl;
 #endif
       ssize_t workLeft = workSize - wireOff;
-      if (workLeft > 0) {
-        const_cast<AllReduce *>(this)->
-          template run<unroll>(wireOff, tOff, workLeft);
-      }
+      if (workLeft > 0)
+        const_cast<AllReduce *>(this)-> template run<unroll>(wireOff, tOff, workLeft);
     }
   }
 
@@ -244,6 +268,32 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   static int stage2Verify(T* host, int rank, uint32_t flag, size_t nelems);
   static int stage3Verify(T* host, int rank, uint32_t flag, size_t nelems);
   static int stage4Verify(T* host, int rank, uint32_t flag, size_t nelems);
+
+  sycl::nd_range<1> getLaunchParam(uint32_t& updateSeqNo) const {
+    constexpr uint32_t nThreads = 64; /* TODO: get EU/thread config */
+    constexpr size_t maxSS = 64;
+    int w = BiNRanks;
+    size_t wirePerSS = nThreads  / w;
+    size_t nWire = divUp(workSize, wireCapacity);
+    size_t nSS = divUp(nWire, wirePerSS);
+    auto actualSS = std::min(nSS, maxSS);
+    auto nSteps = divUp(nWire, actualSS * wirePerSS);
+    updateSeqNo += nSteps;
+
+    return sycl::nd_range<1>(actualSS, wirePerSS * w * SubGroupSize);
+  }
+
+  static void launch(
+      T* input, T* ipcbuf0, T* ipcbuf1, T* const peerbuf0[], T* const peerbuf1[],
+      size_t nelems, int rank, uint32_t& step, sycl::queue queue) {
+    bisectPAllReduce offload(input, nelems, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1);
+
+    queue.submit([&](sycl::handler &cgh) {
+        cgh.parallel_for(
+          offload.getLaunchParam(step), offload
+        );
+    });
+  }
 
   //
   // We use linear group configuration because subgroup is linear only
