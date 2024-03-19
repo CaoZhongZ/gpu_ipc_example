@@ -55,8 +55,15 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
     auto actualSS = std::min(nSS, maxSS);
     auto nSteps = divUp(nWire, actualSS * wirePerSS);
     updateSeqNo += nSteps;
+    //
+    // XXX: we over updated sequence number. Should be nSteps / nSlot
+    // No harm, but not nice.
+    //
 
-    return sycl::nd_range<1>(actualSS, wirePerSS * w * SubGroupSize);
+    return sycl::nd_range<1>(
+      actualSS * wirePerSS * w * SubGroupSize,
+      wirePerSS * w * SubGroupSize
+    );
   }
 
   static void launch(
@@ -272,15 +279,22 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   sycl::nd_range<1> getLaunchParam(uint32_t& updateSeqNo) const {
     constexpr uint32_t nThreads = 64; /* TODO: get EU/thread config */
     constexpr size_t maxSS = 64;
-    int w = BiNRanks;
+    int w = NRanks;
     size_t wirePerSS = nThreads  / w;
     size_t nWire = divUp(workSize, wireCapacity);
     size_t nSS = divUp(nWire, wirePerSS);
     auto actualSS = std::min(nSS, maxSS);
     auto nSteps = divUp(nWire, actualSS * wirePerSS);
     updateSeqNo += nSteps;
+    //
+    // XXX: we over updated sequence number. Should be nSteps / nSlot
+    // No harm, but not nice.
+    //
 
-    return sycl::nd_range<1>(actualSS, wirePerSS * w * SubGroupSize);
+    return sycl::nd_range<1>(
+      actualSS * wirePerSS * w * SubGroupSize,
+      wirePerSS * w * SubGroupSize
+    );
   }
 
   static void launch(
