@@ -44,3 +44,5 @@ print("result:", y)
 x = x + 1
 dist.all_reduce(x)
 print("second:", x)
+
+dist.destroy_process_group()
