@@ -13,6 +13,8 @@
 
 #include "allreduce.hpp"
 
+using sycl::ext::oneapi::bfloat16;
+
 size_t parse_nelems(const std::string& nelems_string) {
   size_t base = 1;
   size_t pos = nelems_string.rfind("K");
@@ -41,7 +43,8 @@ void extract_profiling(sycl::event e, int rank) {
   std::cout<<"["<<rank<<"] Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
-using test_type = sycl::half;
+// using test_type = sycl::half;
+using test_type = bfloat16;
 
 int main(int argc, char* argv[]) {
   cxxopts::Options opts(
