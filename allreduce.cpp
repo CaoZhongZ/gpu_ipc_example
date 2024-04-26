@@ -995,6 +995,20 @@ sycl::event testBisectTransmit (
             , cout
 #endif
       ));});
+    case 16:
+      return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          bisectPAllReduce<sycl::half, 16, Transmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+      ));});
     default:
       throw std::logic_error("Unsupported communication topology");
     }
@@ -1023,6 +1037,20 @@ sycl::event testBisectTransmit (
         cgh.parallel_for(
           launchParam,
           bisectPAllReduce<sycl::half, 8, Transmit, SubGroupSize>(
+            input, nelems, rank, step,
+            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+#if defined(__enable_sycl_stream__)
+            , cout
+#endif
+    ));});
+    case 16:
+      return queue.submit([&](sycl::handler &cgh) {
+#if defined(__enable_sycl_stream__)
+        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
+#endif
+        cgh.parallel_for(
+          launchParam,
+          bisectPAllReduce<sycl::half, 16, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
