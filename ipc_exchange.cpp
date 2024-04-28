@@ -12,6 +12,7 @@
 #include <initializer_list>
 #include <string>
 #include <random>
+#include <future>
 
 #include <sycl/sycl.hpp>
 #include <level_zero/ze_api.h>
@@ -139,7 +140,7 @@ int client_connect(const char *server, const char *client) {
   strcpy(sun.sun_path, server);
   auto len = offsetof(sockaddr_un, sun_path) + strlen(server);
   while (connect(sock, (sockaddr *)&sun, len) == -1) {
-    if (errno == ECONNREFUSED || errno == ENOENT) {
+    if (errno == ECONNREFUSED || errno == ENOENT || errno == EAGAIN) {
       asm volatile ("pause\n");
       continue;
     }
@@ -148,26 +149,43 @@ int client_connect(const char *server, const char *client) {
   return sock;
 }
 
+static const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
+static const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
+
+void launch_connect(pollfd fdarray[], int slot, int peer, int rank) {
+  char peer_name[64];
+  char client_name[64];
+
+  snprintf(client_name, sizeof(client_name), "%s%d-%d", clientname_prefix, rank, peer);
+  unlink(client_name);
+
+  snprintf(peer_name, sizeof(peer_name), "%s%d", servername_prefix, peer);
+  fdarray[slot].fd = client_connect(peer_name, client_name);
+  fdarray[slot].events = POLLOUT;
+  fdarray[slot].revents = 0;
+
+  unlink(client_name);
+}
+
 void un_allgather(
     exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world
+    , int batch = 1
 ) {
-  const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
-  const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
   char server_name[64];
   snprintf(server_name, sizeof(server_name), "%s%d", servername_prefix, rank);
   unlink(server_name);
   auto s_listen = server_listen(server_name);
 
   pollfd fdarray[world];
-  int recv_socks[world-1];
+  // int recv_socks[world-1];
 
   for (auto& pollfd : fdarray) pollfd.fd = -1;
-  std::fill(recv_socks, recv_socks + world -1, -1);
+  // std::fill(recv_socks, recv_socks + world -1, -1);
 
   __scope_guard free_fd([&]() {
-    for (int i = 0, j = 0; i < world; ++ i) {
-      if ( i != rank && recv_socks[j] != -1)
-        sysCheck(close(recv_socks[j++]));
+    for (int i = 0/*, j = 0*/; i < world; ++ i) {
+      // if ( i != rank && recv_socks[j] != -1)
+      //   sysCheck(close(recv_socks[j++]));
       if ( fdarray[i].fd != -1 )
         sysCheck(close(fdarray[i].fd));
     }
@@ -175,59 +193,56 @@ void un_allgather(
     unlink(server_name);
   });
 
-  // connect to all ranks
-  for (int i = 0; i < world; ++ i) {
-    if (rank == i) {
-      fdarray[i].fd = s_listen;
-      fdarray[i].events = POLLIN;
-      fdarray[i].revents = 0;
-    } else {
-      char peer_name[64];
-      char client_name[64];
+  // slot 0 used for accept
+  fdarray[0].fd = s_listen;
+  fdarray[0].events = POLLIN;
+  fdarray[0].revents = 0;
 
-      snprintf(client_name, sizeof(client_name), "%s%d-%d", clientname_prefix, rank, i);
-      unlink(client_name);
+  auto fdarray_sz = 1;
+  auto peer = rank + 1;
 
-      snprintf(peer_name, sizeof(peer_name), "%s%d", servername_prefix, i);
-      fdarray[i].fd = client_connect(peer_name, client_name);
-      fdarray[i].events = POLLOUT;
-      fdarray[i].revents = 0;
+  auto n_conns = std::min(batch, world -1);
 
-      unlink(client_name);
-    }
-  }
+  // connect to next peers
+  for (int i = 0; i < n_conns; ++ i)
+    launch_connect(fdarray, fdarray_sz ++, peer ++ % world, rank);
 
-  // std::future<std::tuple<int, int, size_t>> future_fds[world -1];
   int slot = 0;
-  uint32_t send_progress = 1<<rank;
+  uint32_t send_progress = 0;
 
-  while (slot < world-1 || send_progress != (1<<world) -1) {
-    sysCheck(ppoll(fdarray, world, nullptr, nullptr));
+  std::future<std::tuple<int, int, size_t>> future_fds[world -1];
 
-    for (int i = 0; i < world; ++ i) {
-      if (i == rank && (fdarray[i].revents & POLLIN)) {
-        // auto accept_sock = serv_accept(fdarray[i].fd);
-        // future_fds[slot ++] = std::async(
-        //     std::launch::async, [=]() {
-        //     struct sock_guard{
-        //       int sock;
-        //       sock_guard(int sock) : sock(sock) {}
-        //       ~guard_sock() {sysCheck(close(sock));}
-        //     } release(accept_sock);
-        //     auto ret = un_recv_fd(accept_sock);
-        //     return ret;});
-        recv_socks[slot ++] = serv_accept(fdarray[i].fd);
-      } else if ((send_progress & (1<<i)) == 0 && fdarray[i].revents & POLLOUT) {
+  while (slot < world -1 || send_progress < world -1) {
+    sysCheck(ppoll(fdarray, fdarray_sz, nullptr, nullptr));
+
+    for (int i = 0; i < fdarray_sz; ++ i) {
+      if (i == 0 && (fdarray[i].revents & POLLIN)) {
+        auto accept_sock = serv_accept(fdarray[i].fd);
+        future_fds[slot ++] = std::async(
+            std::launch::async, [accept_sock]() {
+              __scope_guard release([accept_sock]() {
+                sysCheck(close(accept_sock));
+              });
+              auto ret = un_recv_fd(accept_sock);
+              return ret;
+            });
+        // recv_socks[slot ++] = serv_accept(fdarray[i].fd);
+      } else if (fdarray[i].revents & POLLOUT) {
         un_send_fd(fdarray[i].fd, send_buf->fd, rank, send_buf->offset);
-        send_progress |= 1<<i;
+        send_progress ++;
+        close(fdarray[i].fd);
+        fdarray[i].fd = -1;
+        // for each accept of connect request, we launch a new connect
+        if (peer % world != rank)
+          launch_connect(fdarray, i, peer ++ % world, rank);
       }
     }
   }
 
   for (int i = 0; i < world -1; ++i) {
-    // future_fds[i].wait();
-    // auto [fd, peer, offset] = future_fds[i].get();
-    auto [fd, peer, offset] = un_recv_fd(recv_socks[i]);
+    future_fds[i].wait();
+    auto [fd, peer, offset] = future_fds[i].get();
+    // auto [fd, peer, offset] = un_recv_fd(recv_socks[i]);
     recv_buf[peer].fd = fd;
     recv_buf[peer].offset = offset;
   }
