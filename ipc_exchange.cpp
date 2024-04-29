@@ -34,7 +34,8 @@ struct exchange_contents {
 #define sysCheck(x) \
   if (x == -1) {  \
     throw std::system_error(  \
-        std::make_error_code(std::errc(errno)));  \
+        std::make_error_code(std::errc(errno)), \
+        std::string(__FILE__) + ":" + std::to_string(__LINE__));  \
   }
 
 // We can't inherit it from cmsghdr because flexible array member
@@ -219,18 +220,19 @@ void un_allgather(
       if (i == 0 && (fdarray[i].revents & POLLIN)) {
         auto accept_sock = serv_accept(fdarray[i].fd);
         future_fds[slot ++] = std::async(
-            std::launch::async, [accept_sock]() {
-              __scope_guard release([accept_sock]() {
+            std::launch::async, [=]() {
+              __scope_guard release([=]() {
                 sysCheck(close(accept_sock));
               });
               auto ret = un_recv_fd(accept_sock);
+              release.release();
               return ret;
             });
         // recv_socks[slot ++] = serv_accept(fdarray[i].fd);
       } else if (fdarray[i].revents & POLLOUT) {
         un_send_fd(fdarray[i].fd, send_buf->fd, rank, send_buf->offset);
         send_progress ++;
-        close(fdarray[i].fd);
+        sysCheck(close(fdarray[i].fd));
         fdarray[i].fd = -1;
         // for each accept of connect request, we launch a new connect
         if (peer % world != rank)

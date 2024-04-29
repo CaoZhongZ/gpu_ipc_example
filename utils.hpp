@@ -5,9 +5,11 @@
 template <typename F>
 class __scope_guard {
   F f;
+  bool todo {true};
 public:
   __scope_guard(const F &f) : f(f) {}
-  ~__scope_guard() { f(); }
+  void release() { f(); todo=false; }
+  ~__scope_guard() { if (todo) release(); }
 };
 
 template <typename T>
