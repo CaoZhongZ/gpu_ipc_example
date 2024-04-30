@@ -141,11 +141,11 @@ int client_connect(const char *server, const char *client) {
   strcpy(sun.sun_path, server);
   auto len = offsetof(sockaddr_un, sun_path) + strlen(server);
   while (connect(sock, (sockaddr *)&sun, len) == -1) {
-    if (errno == ECONNREFUSED || errno == ENOENT || errno == EAGAIN) {
+    if (errno == ECONNREFUSED || errno == ENOENT) {
       asm volatile ("pause\n");
       continue;
     }
-    sysCheck(-1);
+    return -1;
   }
   return sock;
 }
@@ -153,7 +153,7 @@ int client_connect(const char *server, const char *client) {
 static const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
 static const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
 
-void launch_connect(pollfd fdarray[], int slot, int peer, int rank) {
+int launch_connect(pollfd fdarray[], int slot, int peer, int rank) {
   char peer_name[64];
   char client_name[64];
 
@@ -166,6 +166,7 @@ void launch_connect(pollfd fdarray[], int slot, int peer, int rank) {
   fdarray[slot].revents = 0;
 
   unlink(client_name);
+  return fdarray[slot].fd;
 }
 
 void un_allgather(
@@ -216,27 +217,37 @@ void un_allgather(
   while (slot < world -1 || send_progress < world -1) {
     sysCheck(ppoll(fdarray, fdarray_sz, nullptr, nullptr));
 
-    for (int i = 0; i < fdarray_sz; ++ i) {
-      if (i == 0 && (fdarray[i].revents & POLLIN)) {
-        auto accept_sock = serv_accept(fdarray[i].fd);
-        future_fds[slot ++] = std::async(
-            std::launch::async, [=]() {
-              __scope_guard release([=]() {
-                sysCheck(close(accept_sock));
-              });
-              auto ret = un_recv_fd(accept_sock);
-              release.release();
-              return ret;
+    if (fdarray[0].revents & POLLIN) {
+      auto accept_sock = serv_accept(fdarray[0].fd);
+      future_fds[slot ++] = std::async(
+          std::launch::async, [=]() {
+            __scope_guard release([=]() {
+              sysCheck(close(accept_sock));
             });
-        // recv_socks[slot ++] = serv_accept(fdarray[i].fd);
-      } else if (fdarray[i].revents & POLLOUT) {
+            auto ret = un_recv_fd(accept_sock);
+            return ret;
+          });
+      // recv_socks[slot ++] = serv_accept(fdarray[0].fd);
+      // Increase the priority of accept and receive
+      continue;
+    }
+
+    // connected and send
+    for (int i = 1; i < fdarray_sz; ++ i) {
+      if (fdarray[i].revents & POLLOUT) {
         un_send_fd(fdarray[i].fd, send_buf->fd, rank, send_buf->offset);
         send_progress ++;
         sysCheck(close(fdarray[i].fd));
         fdarray[i].fd = -1;
         // for each accept of connect request, we launch a new connect
-        if (peer % world != rank)
-          launch_connect(fdarray, i, peer ++ % world, rank);
+        if (peer % world != rank &&
+            -1 != launch_connect(fdarray, i, peer % world, rank))
+          ++peer;
+      } else if (fdarray[i].fd == -1) {
+        // for each accept of connect request, we launch a new connect
+        if (peer % world != rank &&
+            -1 != launch_connect(fdarray, i, peer % world, rank))
+          ++peer;
       }
     }
   }
