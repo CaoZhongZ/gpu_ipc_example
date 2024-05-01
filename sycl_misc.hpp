@@ -9,7 +9,7 @@ sycl::device getSubDevice() {
 
   auto dev = devs[ndev];
   // x4 xelink connection flop
-  int map_nsub = (ndev == 1) ? map_nsub = nsub ^ 1 : nsub;
+  int map_nsub = nsub;
 
   try {
     static auto subs = dev.template create_sub_devices<
