@@ -961,8 +961,8 @@ sycl::event testTransmit(
 template <typename T, template <typename, int, int> class Transmit>
 sycl::event testBisectTransmit (
     sycl::nd_range<1> launchParam,
-    T* input, T* ipcbuf0, T* ipcbuf1,
-    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
+    sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
   if (subgroup == 16) {
     constexpr int SubGroupSize = 16;
@@ -974,7 +974,7 @@ sycl::event testBisectTransmit (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<T, 4, Transmit, SubGroupSize>(
+          bisectPAllReduce<sycl::half, 4, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -988,7 +988,7 @@ sycl::event testBisectTransmit (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<T, 8, Transmit, SubGroupSize>(
+          bisectPAllReduce<sycl::half, 8, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -1008,7 +1008,7 @@ sycl::event testBisectTransmit (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<T, 4, Transmit, SubGroupSize>(
+          bisectPAllReduce<sycl::half, 4, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -1022,7 +1022,7 @@ sycl::event testBisectTransmit (
 #endif
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<T, 8, Transmit, SubGroupSize>(
+          bisectPAllReduce<sycl::half, 8, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
 #if defined(__enable_sycl_stream__)
@@ -1130,36 +1130,6 @@ sycl::event testTransmit(
     throw std::logic_error("Transmit type not support");
   }
 }
-
-using sycl::ext::oneapi::bfloat16;
-
-template sycl::event testTransmit<bfloat16, Rt64, ParallelTransmit>(
-    sycl::nd_range<1> launchParam,
-    bfloat16* input, bfloat16* ipcbuf0, bfloat16* ipcbuf1,
-    bfloat16* const peerbuf0[], bfloat16* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
-
-template sycl::event testTransmit<bfloat16, Rt64_128, ParallelTransmit>(
-    sycl::nd_range<1> launchParam,
-    bfloat16* input, bfloat16* ipcbuf0, bfloat16* ipcbuf1,
-    bfloat16* const peerbuf0[], bfloat16* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
-
-template sycl::event testBisectTransmit<bfloat16, BisectPTransmit>(
-    sycl::nd_range<1> launchParam,
-    bfloat16* input, bfloat16* ipcbuf0, bfloat16* ipcbuf1,
-    bfloat16* const peerbuf0[], bfloat16* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
-
-template int verifyTransmit<bfloat16>(
-    bfloat16 *, bfloat16 *, uint32_t, int, int, uint32_t, size_t);
-
-template sycl::event testTransmit<bfloat16>(
-    std::string transmitType,
-    sycl::nd_range<1> launchParam,
-    bfloat16* input, bfloat16* ipcbuf0, bfloat16* ipcbuf1,
-    bfloat16* const peerbuf0[], bfloat16* const peerbuf1[], size_t nelems,
-    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue);
 
 template sycl::event testTransmit<sycl::half, Rt64, ParallelTransmit>(
     sycl::nd_range<1> launchParam,
