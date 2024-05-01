@@ -153,14 +153,14 @@ int client_connect(const char *server, const char *client) {
 static const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
 static const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
 
-int launch_connect(pollfd fdarray[], int slot, int peer, int rank) {
+int launch_connect(pollfd fdarray[], int slot, int peer, int rank, int instance) {
   char peer_name[64];
   char client_name[64];
 
   snprintf(client_name, sizeof(client_name), "%s%d-%d", clientname_prefix, rank, peer);
   unlink(client_name);
 
-  snprintf(peer_name, sizeof(peer_name), "%s%d", servername_prefix, peer);
+  snprintf(peer_name, sizeof(peer_name), "%s%d%d", servername_prefix, peer, instance);
   fdarray[slot].fd = client_connect(peer_name, client_name);
   fdarray[slot].events = POLLOUT;
   fdarray[slot].revents = 0;
@@ -171,10 +171,10 @@ int launch_connect(pollfd fdarray[], int slot, int peer, int rank) {
 
 void un_allgather(
     exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world
-    , int batch = 1
+    , int instance, int batch = 1
 ) {
   char server_name[64];
-  snprintf(server_name, sizeof(server_name), "%s%d", servername_prefix, rank);
+  snprintf(server_name, sizeof(server_name), "%s%d%d", servername_prefix, rank, instance);
   unlink(server_name);
   auto s_listen = server_listen(server_name);
 
@@ -207,7 +207,7 @@ void un_allgather(
 
   // connect to next peers
   for (int i = 0; i < n_conns; ++ i)
-    launch_connect(fdarray, fdarray_sz ++, peer ++ % world, rank);
+    launch_connect(fdarray, fdarray_sz ++, peer ++ % world, rank, instance);
 
   int slot = 0;
   uint32_t send_progress = 0;
@@ -241,12 +241,12 @@ void un_allgather(
         fdarray[i].fd = -1;
         // for each accept of connect request, we launch a new connect
         if (peer % world != rank &&
-            -1 != launch_connect(fdarray, i, peer % world, rank))
+            -1 != launch_connect(fdarray, i, peer % world, rank, instance))
           ++peer;
       } else if (fdarray[i].fd == -1) {
         // for each accept of connect request, we launch a new connect
         if (peer % world != rank &&
-            -1 != launch_connect(fdarray, i, peer % world, rank))
+            -1 != launch_connect(fdarray, i, peer % world, rank, instance))
           ++peer;
       }
     }
@@ -265,7 +265,7 @@ void un_allgather(
 
 ze_ipc_mem_handle_t open_all_ipc_mems(
     sycl::queue queue, void* ptr, int rank, int world,
-    void *peer_bases[], size_t offsets[]
+    void *peer_bases[], size_t offsets[], int instance
 ) {
   // Step 1: Get base address of the pointer
   sycl::context ctx = queue.get_context();
@@ -287,7 +287,7 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
   // Step 3: Exchange the handles and offsets
   memset(recv_buf, 0, sizeof(recv_buf));
 
-  un_allgather(&send_buf, recv_buf, rank, world);
+  un_allgather(&send_buf, recv_buf, rank, world, instance);
 
   for (int i = 0; i < world; ++ i) {
     if (i == rank) {
