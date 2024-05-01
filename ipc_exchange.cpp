@@ -149,12 +149,13 @@ int client_connect(const char *server, const char *client) {
 }
 
 void un_allgather(
-    exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world
+    exchange_contents* send_buf, exchange_contents recv_buf[], int rank, int world, int instance
 ) {
   const char* servername_prefix = "open-peer-ipc-mem-server-rank_";
   const char* clientname_prefix = "open-peer-ipc-mem-client-rank_";
+
   char server_name[64];
-  snprintf(server_name, sizeof(server_name), "%s%d", servername_prefix, rank);
+  snprintf(server_name, sizeof(server_name), "%s%d%d", servername_prefix, rank, instance);
   unlink(server_name);
   auto s_listen = server_listen(server_name);
 
@@ -185,10 +186,10 @@ void un_allgather(
       char peer_name[64];
       char client_name[64];
 
-      snprintf(client_name, sizeof(client_name), "%s%d-%d", clientname_prefix, rank, i);
+      snprintf(client_name, sizeof(client_name), "%s%d-%d%d", clientname_prefix, rank, i, instance);
       unlink(client_name);
 
-      snprintf(peer_name, sizeof(peer_name), "%s%d", servername_prefix, i);
+      snprintf(peer_name, sizeof(peer_name), "%s%d%d", servername_prefix, i, instance);
       fdarray[i].fd = client_connect(peer_name, client_name);
       fdarray[i].events = POLLOUT;
       fdarray[i].revents = 0;
@@ -237,7 +238,7 @@ void un_allgather(
 
 ze_ipc_mem_handle_t open_all_ipc_mems(
     sycl::queue queue, void* ptr, int rank, int world,
-    void *peer_bases[], size_t offsets[]
+    void *peer_bases[], size_t offsets[], int instance
 ) {
   // Step 1: Get base address of the pointer
   sycl::context ctx = queue.get_context();
@@ -259,7 +260,7 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
   // Step 3: Exchange the handles and offsets
   memset(recv_buf, 0, sizeof(recv_buf));
 
-  un_allgather(&send_buf, recv_buf, rank, world);
+  un_allgather(&send_buf, recv_buf, rank, world, instance);
 
   for (int i = 0; i < world; ++ i) {
     if (i == rank) {
