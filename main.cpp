@@ -65,6 +65,8 @@ int main(int argc, char* argv[]) {
      cxxopts::value<bool>()->default_value("false"))
     ("a,algo", "Which algorithm is tested",
      cxxopts::value<std::string>()->default_value("small"))
+    ("i,instance", "Instance offset, used for multiple instances",
+     cxxopts::value<uint32_t>()->default_value("0"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -75,6 +77,7 @@ int main(int argc, char* argv[]) {
   auto simd = parsed_opts["simd"].as<uint32_t>();
   auto verify = parsed_opts["verify"].as<bool>();
   auto algo = parsed_opts["algo"].as<std::string>();
+  auto instance = parsed_opts["instance"].as<uint32_t>();
 
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
@@ -117,7 +120,7 @@ int main(int argc, char* argv[]) {
   void *peer_bases[world];
   size_t offsets[world];
   auto ipc_handle = open_all_ipc_mems(
-      queue, ipcbuf0, rank, world, peer_bases, offsets
+      queue, ipcbuf0, rank, world, peer_bases, offsets, instance
   );
 
   test_type *peerbuf0[world];
