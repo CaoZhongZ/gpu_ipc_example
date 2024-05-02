@@ -67,6 +67,8 @@ int main(int argc, char* argv[]) {
      cxxopts::value<std::string>()->default_value("small"))
     ("i,instance", "Instance offset, used for multiple instances",
      cxxopts::value<uint32_t>()->default_value("0"))
+    ("d,devices", "Device lists for communication",
+     cxxopts::value<std::string>()->default_value("012345678"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -78,6 +80,7 @@ int main(int argc, char* argv[]) {
   auto verify = parsed_opts["verify"].as<bool>();
   auto algo = parsed_opts["algo"].as<std::string>();
   auto instance = parsed_opts["instance"].as<uint32_t>();
+  auto devices = parsed_opts["devices"].as<std::string>();
 
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
@@ -93,8 +96,8 @@ int main(int argc, char* argv[]) {
 
   size_t alloc_size = nelems * sizeof(test_type);
   size_t interm_size = 32 * 1024 * 1024; // fix at 32M for now.
-
-  auto queue = currentQueue(rank / 2, rank & 1);
+  int device = devices[rank] - '0';
+  auto queue = currentQueue(device / 2, device & 1);
 
   auto* input = (test_type *)sycl::malloc_device(alloc_size, queue);
   //
