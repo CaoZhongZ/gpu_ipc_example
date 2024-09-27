@@ -4,17 +4,8 @@
 template <int ndev, int nsub>
 sycl::device getSubDevice() {
   static auto devs = sycl::device::get_devices(sycl::info::device_type::gpu);
-  auto dev = devs[ndev];
-  try {
-    static auto subs = dev.template create_sub_devices<
-      sycl::info::partition_property::partition_by_affinity_domain>(
-          sycl::info::partition_affinity_domain::numa);
-
-    return subs[nsub];
-  } catch (sycl::exception &e) {
-    std::cout<<e.what()<<std::endl;
-    return dev;
-  };
+  static auto dev = devs[2 * ndev + nsub];
+  return dev;
 }
 
 template <int ndev, int nsub>

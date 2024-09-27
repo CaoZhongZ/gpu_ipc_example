@@ -5,6 +5,7 @@
 #include <system_error>
 
 #include <iostream>
+#include <chrono>
 
 #include <mpi.h>
 #include <sycl/sycl.hpp>
@@ -246,8 +247,15 @@ int main(int argc, char* argv[]) {
   void* buffer = sycl::malloc_device(alloc_size, queue);
   void* host_buf = sycl::malloc_host(alloc_size, queue);
 
-  // XXX: gain access to remote pointers
+   MPI_Barrier(MPI_COMM_WORLD);
+
+ // XXX: gain access to remote pointers
+
+  auto start = std::chrono::high_resolution_clock::now();
   auto [peer_ptr, offset, ipc_handle] = open_peer_ipc_mem_drm(buffer, rank, world);
+  auto delta = std::chrono::high_resolution_clock::now() - start;
+  auto elapse = std::chrono::duration_cast<std::chrono::microseconds>(delta).count();
+  printf("Exchange time is %ldus\n", elapse);
 
   // run fill kernel to fill remote GPU memory
   if (dtype == "fp16")
