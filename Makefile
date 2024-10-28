@@ -1,8 +1,11 @@
+CXX=icpx
+CC=icx
+
 OPT=-O3 -fno-strict-aliasing
 # OPT=-g -fno-strict-aliasing
 # VERBOSE=-D__enable_sycl_stream__
 
-SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc"
+SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device ats-m150"
 
 .PRECIOUS: %.o
 

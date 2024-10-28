@@ -16,8 +16,8 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
   constexpr static size_t wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static size_t wireTransElems = wireTransSize/ sizeof(T);
 
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
 
   //
   // Process of pack messages
@@ -38,7 +38,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
         auto off = i * wireCapacityInType + local_off;
         if (off < nElt) {        // TODO: condition branch !
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
+          lscLoad<SubGroupSize>(
               v[i], src + off
           );
 #if defined(__enable_sycl_stream__)
@@ -58,12 +58,12 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
-    if (lid < lastDataChannel) { // XXX: diverge
+    if (lid < lastDataChannel) {
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
         auto off = i * wireCapacityInType + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
+        lscLoad<SubGroupSize>(
             v[i], src + off
         );
 #else
@@ -90,25 +90,9 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
         asm volatile (
-            "mov (M1, 1) %0(1, 15)<1> %1(0, 0)<0;1,0>\n"
+            "mov (M1, 1) %0(3, 7)<1> %1(0, 0)<0;1,0>\n"
             : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
             : "rw"(flag)
-        );
-      }
-    } else {
-#     pragma unroll
-      for (int i = 0; i < unroll; ++ i) {
-        asm volatile (
-            "mov (M1, 1) %0(0, 15)<1> %1(0, 0)<0;1,0>\n"
-            : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i])) : "rw"(flag)
-        );
-      }
-
-#     pragma unroll
-      for (int i = 0; i < unroll; ++ i) {
-        asm volatile (
-            "mov (M1, 1) %0(0, 31)<1> %1(0, 0)<0;1,0>\n"
-            : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i])) : "rw"(flag)
         );
       }
     }
@@ -131,13 +115,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
     for (int i = 0; i < unroll; ++ i) {
       if constexpr (SubGroupSize == 16) {
         asm volatile ("\n"
-            "mov (M1, 1) %0(0, 15)<1> %0(1, 7)<0;1,0>\n"
-            : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
-            :
-        );
-      } else {
-        asm volatile ("\n"
-            "mov (M1, 1) %0(0, 30)<1> %0(0, 15)<0;1,0>\n"
+            "mov (M1, 1) %0(1, 7)<1> %0(2, 7)<0;1,0>\n"
             : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
             :
         );
@@ -161,13 +139,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
     for (int i = 0; i < unroll; ++ i) {
       if constexpr (SubGroupSize == 16) {
         asm volatile ("\n"
-            "mov (M1, 1) %0(1, 7)<1> %0(0, 15)<0;1,0>\n"
-            : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
-            :
-        );
-      } else {
-        asm volatile ("\n"
-            "mov (M1, 1) %0(0, 15)<1> %0(0, 30)<0;1,0>\n"
+            "mov (M1, 1) %0(2, 7)<1> %0(1, 7)<0;1,0>\n"
             : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
             :
         );

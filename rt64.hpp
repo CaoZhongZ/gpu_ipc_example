@@ -11,8 +11,8 @@ template <typename T, int SubGroupSize> struct Rt64 {
   constexpr static int wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
 
   // load first row of registers
   template <int unroll> static inline void loadInput(
@@ -27,13 +27,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
       auto off = i * wireCapacityInType + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        if constexpr (SubGroupSize == 16)
-          asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+        if constexpr (SubGroupSize == 8)
+          asm volatile ("\n"
+              "lsc_load.ugm.df.df (M1, 8) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
-        else
-          asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+        if constexpr (SubGroupSize == 16)
+          asm volatile ("\n"
+              "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
         v[i][dataElem] = src[off];
@@ -52,13 +52,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireCapacityInType + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-      if constexpr (SubGroupSize == 16)
-        asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+      if constexpr (SubGroupSize == 8)
+        asm volatile ("\n"
+            "lsc_load.ugm.df.df (M1, 8) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
-      else
-        asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+      if constexpr (SubGroupSize == 16)
+        asm volatile ("\n"
+            "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
       v[i][dataElem] = src[off];
@@ -104,13 +104,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireCapacityInType + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+      if constexpr (SubGroupSize == 8)
+        asm volatile ("\n"
+            "lsc_store.ugm.df.df (M1, 8) flat[%0]:a64 %1:d32\n"
+            :: "rw"(dst + off), "rw"(v[i][dataElem]));
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
             "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
-            :: "rw"(dst + off), "rw"(v[i][dataElem]));
-      else
-        asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[i][dataElem]));
 #else
       dst[off] = v[i][0];
@@ -129,13 +129,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
       auto off = i * wireCapacityInType + local_off;
       if (off < nElt) {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+        if constexpr (SubGroupSize == 8)
+          asm volatile ("\n"
+              "lsc_store.ugm.df.df (M1, 8) flat[%0]:a64 %1:d32\n"
+              :: "rw"(dst + off), "rw"(v[i][dataElem]));
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n"
               "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
-              :: "rw"(dst + off), "rw"(v[i][dataElem]));
-        else
-          asm volatile ("\n"
-              "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
               :: "rw"(dst + off), "rw"(v[i][dataElem]));
 #else
       dst[off] = v[i][dataElem];

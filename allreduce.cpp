@@ -805,8 +805,7 @@ sycl::event testTransmit(
     T* input, T* ipcbuf0, T* ipcbuf1,
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
-  if (subgroup == 16) {
-    constexpr int SubGroupSize = 16;
+  constexpr int SubGroupSize = 16;
   switch(world) {
   case 2:
     return queue.submit([&](sycl::handler &cgh) {
@@ -859,55 +858,6 @@ sycl::event testTransmit(
   default:
     throw std::logic_error("Unsupported communication topology");
   }
-  } else {
-    constexpr int SubGroupSize = 32;
-    switch(world) {
-    case 2:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          AllReduce<T, 2, Proto, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-      ));});
-    case 4:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          AllReduce<T, 4, Proto, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-      ));});
-    case 8:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          AllReduce<T, 8, Proto, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-        ));});
-    default:
-      throw std::logic_error("Unsupported communication topology");
-    }
-  }
 }
 
 // template <> sycl::event testTransmit <sycl::half, BisectTransmit> (
@@ -957,111 +907,6 @@ sycl::event testTransmit(
 //     }
 //   }
 // }
-
-template <typename T, template <typename, int, int> class Transmit>
-sycl::event testBisectTransmit (
-    sycl::nd_range<1> launchParam,
-    sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
-    sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t nelems,
-    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
-  if (subgroup == 16) {
-    constexpr int SubGroupSize = 16;
-    switch(world) {
-    case 4:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          bisectPAllReduce<sycl::half, 4, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-      ));});
-    case 8:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          bisectPAllReduce<sycl::half, 8, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-      ));});
-    case 16:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          bisectPAllReduce<sycl::half, 16, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-      ));});
-    default:
-      throw std::logic_error("Unsupported communication topology");
-    }
-  } else {
-    constexpr int SubGroupSize = 32;
-    switch(world) {
-    case 4:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          bisectPAllReduce<sycl::half, 4, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-      ));});
-    case 8:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          bisectPAllReduce<sycl::half, 8, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-    ));});
-    case 16:
-      return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-        sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
-        cgh.parallel_for(
-          launchParam,
-          bisectPAllReduce<sycl::half, 16, Transmit, SubGroupSize>(
-            input, nelems, rank, step,
-            ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-    ));});
-    default:
-      throw std::logic_error("Unsupported communication topology");
-    }
-  }
-}
 
 // template <> sycl::event testTransmit <sycl::half, BisectPPTransmit> (
 //     sycl::nd_range<1> launchParam,
@@ -1148,12 +993,6 @@ sycl::event testTransmit(
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
     );
-  } else if (transmitType == "bisect") {
-    return testBisectTransmit<T, BisectPTransmit>(
-        launchParam,
-        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-        nelems, rank, world, step, subgroup, queue
-    );
   } else {
     throw std::logic_error("Transmit type not support");
   }
@@ -1166,12 +1005,6 @@ template sycl::event testTransmit<sycl::half, Rt64, ParallelTransmit>(
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 
 template sycl::event testTransmit<sycl::half, Rt64_128, ParallelTransmit>(
-    sycl::nd_range<1> launchParam,
-    sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
-    sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
-    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
-
-template sycl::event testBisectTransmit<sycl::half, BisectPTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
