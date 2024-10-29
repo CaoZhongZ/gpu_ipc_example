@@ -107,7 +107,8 @@ int main(int argc, char* argv[]) {
   auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
   auto* host_verify = (test_type *)sycl::malloc_host(interm_size * 2, queue);
 
-  auto* ipcbuf0 = (test_type *)sycl::malloc_device(interm_size * 2, queue);
+  // On system without switch and Xe-link, we use host pages for communication
+  auto* ipcbuf0 = (test_type *)sycl::malloc_host(interm_size * 2, queue);
   auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
 
   __scope_guard free_pointers([&]{
