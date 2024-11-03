@@ -170,14 +170,6 @@ private:
         );
       }
     }
-#else
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-#   pragma unroll
-    for (int i = 0; i < unroll; ++ i) {
-      auto data = sg.shuffle(messages[i][lastElem], SubGroupSize /2 -1);
-      if (sg.get_local_id() == lastDataChannel)
-        messages[i][firstElem] = data;
-    }
 #endif
   }
 
@@ -199,14 +191,6 @@ private:
             :
         );
       }
-    }
-#else
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-#   pragma unroll
-    for (int i = 0; i < unroll; ++ i) {
-      auto data = sg.shuffle(messages[i][firstElem], lastDataChannel);
-      if (sg.get_local_id() == SubGroupSize / 2 -1)
-        messages[i][lastElem] = data;
     }
 #endif
   }
@@ -707,14 +691,6 @@ private:
         );
       }
     }
-#else
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-#   pragma unroll
-    for (int i = 0; i < unroll; ++ i) {
-      auto data = sg.shuffle(messages[i][lastElem], SubGroupSize /2 -1);
-      if (sg.get_local_id() == lastDataChannel)
-        messages[i][firstElem] = data;
-    }
 #endif
   }
 
@@ -736,14 +712,6 @@ private:
             :
         );
       }
-    }
-#else
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
-#   pragma unroll
-    for (int i = 0; i < unroll; ++ i) {
-      auto data = sg.shuffle(messages[i][firstElem], lastDataChannel);
-      if (sg.get_local_id() == SubGroupSize / 2 -1)
-        messages[i][lastElem] = data;
     }
 #endif
   }

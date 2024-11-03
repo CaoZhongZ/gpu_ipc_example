@@ -69,6 +69,8 @@ int main(int argc, char* argv[]) {
      cxxopts::value<uint32_t>()->default_value("0"))
     ("d,devices", "Device lists for communication",
      cxxopts::value<std::string>()->default_value("012345678"))
+    ("p,pcie", "Use PCIE to do the communication",
+     cxxopts::value<bool>()->default_value("false"))
     ;
 
   auto parsed_opts = opts.parse(argc, argv);
@@ -81,6 +83,7 @@ int main(int argc, char* argv[]) {
   auto algo = parsed_opts["algo"].as<std::string>();
   auto instance = parsed_opts["instance"].as<uint32_t>();
   auto devices = parsed_opts["devices"].as<std::string>();
+  auto pcie = parsed_opts["pcie"].as<bool>();
 
   auto ret = MPI_Init(&argc, &argv);
   if (ret == MPI_ERR_OTHER) {
@@ -107,7 +110,8 @@ int main(int argc, char* argv[]) {
   auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
   auto* host_verify = (test_type *)sycl::malloc_host(interm_size * 2, queue);
 
-  auto* ipcbuf0 = (test_type *)sycl::malloc_device(interm_size * 2, queue);
+  auto* ipcbuf0 = pcie ? (test_type *)sycl::malloc_host(interm_size * 2, queue)
+	  : (test_type *)sycl::malloc_device(interm_size * 2, queue);
   auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
 
   __scope_guard free_pointers([&]{
