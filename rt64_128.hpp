@@ -81,7 +81,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
 #     pragma unroll
       for (int i = 0; i < unroll; ++ i) {
         asm volatile (
-            "mov (M1, 1) %0(1, 7)<1> %1(0, 0)<0;1,0>\n"
+            "mov (M1, 1) %0(2, 7)<1> %1(0, 0)<0;1,0>\n"
             : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
             : "rw"(flag)
         );
