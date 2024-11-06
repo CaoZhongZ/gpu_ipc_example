@@ -41,10 +41,6 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
           lscLoad<SubGroupSize>(
               v[i], src + off
           );
-#if defined(__enable_sycl_stream__)
-          // cout<<"["<<rank<<","<<lid<<"]off: "<<off
-          //   <<", src "<<src<<":"<<v[i]<<sycl::endl;
-#endif
 #else
           (void)off;
 #endif

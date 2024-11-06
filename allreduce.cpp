@@ -533,7 +533,7 @@ template <typename T> int verifyAllReduce(
 
   for (int i = 0; i < nelems; ++ i) {
     if (allreduceResult[i] != host[i]) {
-      std::cout<<"Error Compare! Expected: "
+      std::cout<<"["<<rank<<"] Error Compare! Expected: "
         <<allreduceResult[i] <<", got: "<<host[i]
         <<"@["<<rank<<"]("<<i<<");"<<std::endl;
     }
@@ -809,50 +809,32 @@ sycl::event testTransmit(
   switch(world) {
   case 2:
     return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
         cgh.parallel_for(
           launchParam,
           AllReduce<T, 2, Proto, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-            )
+          )
         );
     });
   case 4:
     return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
         cgh.parallel_for(
           launchParam,
           AllReduce<T, 4, Proto, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-            )
+          )
         );
     });
   case 8:
     return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
         cgh.parallel_for(
           launchParam,
           AllReduce<T, 8, Proto, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
-            )
+          )
         );
     });
   default:

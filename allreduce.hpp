@@ -21,21 +21,12 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
       T* input, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[]
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   )
   : Transmit<T, NRanks, Proto, SubGroupSize>(
       input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
       calcWorkSize(input, nelems * sizeof(T)),
       rank, seqNo
-#if defined(__enable_sycl_stream__)
-      , cout
-#endif
   ), workSize(calcWorkSize(input, nelems * sizeof(T)))
-#if defined(__enable_sycl_stream__)
-    , cout(cout)
-#endif
   {}
 
   static int scatterVerify(
@@ -90,22 +81,19 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
   ) const {
     auto nWires = pos.get_global_range(0) / SubGroupSize;
     auto wireId = pos.get_global_id(0) / SubGroupSize;
-
-    auto loopSize = nWires / NRanks * wireCapacity;
+    auto loopSize = nWires * wireCapacity;
 
     for (size_t gOff = 0, tOff = 0;
         gOff < workSize; gOff += loopSize, ++ tOff) {
       auto wireOff = wireId * wireCapacity + gOff;
 
-#if defined(__enable_sycl_stream__)
-      auto local_id = pos.get_sub_group().get_local_id()[0];
-      if (local_id == 0 && groupId == 0)
-        cout<<"["<<groupId<<", "<<subGroupId
-          <<"] loopSize:"<<loopSize
-          <<", wireOff:"<<wireOff<<"; "
-          <<", transOff:"<<transOff<<"; "<<sycl::endl;
-#endif
       ssize_t workLeft = workSize - wireOff;
+#if defined(__enable_device_verbose__)
+      auto local_id = pos.get_sub_group().get_local_id()[0];
+      if (local_id == 0)
+        sycl::ext::oneapi::experimental::printf(
+          "wireOff %d, workLeft %ld, wireId %d\n", wireOff, workLeft, wireId);
+#endif
       if (workLeft > 0)
         const_cast<AllReduce *>(this)-> template run<unroll>(wireOff, tOff, workLeft);
     }

@@ -72,7 +72,7 @@ public:
     auto wireId = sycl::ext::oneapi::experimental::
       this_nd_item<1>().get_global_id(0) / SubGroupSize;
 
-    auto wireId_xrank = wireId / NRanks * NRanks;
+    auto wireId_xrank = wireId;
     auto inputOffInType = inputOffset / sizeof(T);
     auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
@@ -108,6 +108,13 @@ public:
       loadInput(in, ioBuffer + inputOffInType);
 
     shuffleData(in);
+#if defined(__enable_device_verbose__)
+    if (sycl::ext::oneapi::experimental::this_nd_item<1>().get_global_id(0)
+         % SubGroupSize == (SubGroupSize -1))
+      sycl::ext::oneapi::experimental::printf("%#x,%#x\n", in[0][0], in[0][1]);
+    else
+      sycl::ext::oneapi::experimental::printf("%#x,%#x; ", in[0][0], in[0][1]);
+#endif
 
     for (int i = 0; i < NPeers; ++ i) {
       bool retry;
@@ -118,6 +125,13 @@ public:
       } while (sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );
+#if defined(__enable_device_verbose__)
+      if (sycl::ext::oneapi::experimental::
+          this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
+        sycl::ext::oneapi::experimental::printf("%#x,%#x\n", messages[0][0], messages[0][1]);
+      else
+        sycl::ext::oneapi::experimental::printf("%#x,%#x; ", messages[0][0], messages[0][1]);
+#endif
       accumMessages(in, messages);
     }
 
@@ -144,7 +158,6 @@ public:
       } while(sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );
-
       auto ptr = ioForPeers[i] + inputOffInType;
       restoreData(in);
 
