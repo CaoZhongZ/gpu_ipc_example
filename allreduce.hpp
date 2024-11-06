@@ -240,6 +240,7 @@ private:
 #endif
 };
 
+#if 0
 // Best candidate for throughput
 template <typename T,
          int NRanks,
@@ -482,6 +483,7 @@ private:
   sycl::stream cout;
 #endif
 };
+#endif
 
 template <typename T,
          template <typename, int> class Proto,
