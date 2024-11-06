@@ -982,13 +982,13 @@ sycl::event testTransmit(
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
   if (transmitType == "small") {
-    return testTransmit<T, Rt64, ParallelTransmit>(
+    return testTransmit<T, Rt64, SequentialTransmit>(
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
     );
   } else if (transmitType == "simple") {
-    return testTransmit<T, Rt64_128, ParallelTransmit>(
+    return testTransmit<T, Rt64_128, SequentialTransmit>(
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
@@ -998,13 +998,13 @@ sycl::event testTransmit(
   }
 }
 
-template sycl::event testTransmit<sycl::half, Rt64, ParallelTransmit>(
+template sycl::event testTransmit<sycl::half, Rt64, SequentialTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 
-template sycl::event testTransmit<sycl::half, Rt64_128, ParallelTransmit>(
+template sycl::event testTransmit<sycl::half, Rt64_128, SequentialTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
