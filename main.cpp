@@ -156,10 +156,6 @@ int main(int argc, char* argv[]) {
   queue.wait();
   MPI_Barrier(MPI_COMM_WORLD);
 
-  if (subgroups % 4 != 0) {
-    throw std::logic_error("Subgroup numbers must be multiple of 4");
-  }
-
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 

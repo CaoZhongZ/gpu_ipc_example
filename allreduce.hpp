@@ -89,13 +89,13 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
       sycl::nd_item<1> pos
   ) const {
     auto nWires = pos.get_global_range(0) / SubGroupSize;
-    auto wireId_x = pos.get_global_id(0) / SubGroupSize / NRanks;
+    auto wireId = pos.get_global_id(0) / SubGroupSize;
 
     auto loopSize = nWires / NRanks * wireCapacity;
 
     for (size_t gOff = 0, tOff = 0;
         gOff < workSize; gOff += loopSize, ++ tOff) {
-      auto wireOff = wireId_x * wireCapacity + gOff;
+      auto wireOff = wireId * wireCapacity + gOff;
 
 #if defined(__enable_sycl_stream__)
       auto local_id = pos.get_sub_group().get_local_id()[0];
