@@ -11,8 +11,8 @@ template <typename T, int SubGroupSize> struct Rt64 {
   constexpr static int wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
 
   // load first row of registers
   template <int unroll> static inline void loadInput(
