@@ -2,6 +2,9 @@
 
 template <typename T, int SubGroupSize> struct Rt64_PCIE {
   using message_t = sycl::vec<uint32_t, 4>;
+#if defined(__SYCL_DEVICE_ONLY__)
+  using inner_t = message_t::vector_t;
+#endif
 
   constexpr static size_t wireCapacity = SubGroupSize * sizeof(message_t) / 2;
   constexpr static size_t wireTransSize = SubGroupSize * sizeof(message_t);
@@ -28,11 +31,11 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n" // Add this partial load to tvisa
               "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
-              : "=rw"(v[i][0]) : "rw"(src + off));
+              : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
         if constexpr (SubGroupSize == 32)
           asm volatile ("\n" // Add this partial load to tvisa
               "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
-              : "=rw"(v[i][0]) : "rw"(src + off));
+              : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
 #endif
     }}
   }
@@ -51,11 +54,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
             "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
-            : "=rw"(v[i][0]) : "rw"(src + off));
+            : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
       if constexpr (SubGroupSize == 32)
         asm volatile ("\n" // Add this partial load to tvisa
             "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
-            : "=rw"(v[i][0]) : "rw"(src + off));
+            : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
+#else
+      (void)off;
 #endif
     }
   }
@@ -105,11 +110,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
             "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
-            :: "rw"(dst + off), "rw"(v[i][0]));
+            :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
       if constexpr (SubGroupSize == 32)
         asm volatile ("\n"
             "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
-            :: "rw"(dst + off), "rw"(v[i][0]));
+            :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
+#else
+      (void)off;
 #endif
     }
   }
@@ -128,11 +135,11 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n"
               "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
-              :: "rw"(dst + off), "rw"(v[i][0]));
+              :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
         if constexpr (SubGroupSize == 32)
           asm volatile ("\n"
               "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
-              :: "rw"(dst + off), "rw"(v[i][0]));
+              :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
 #endif
     }}
   }
@@ -151,6 +158,8 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
           ptr + u * wireTransElems + local_off,
           messages[u]
       );
+#else
+      (void)local_off;
 #endif
     }
   }
@@ -169,6 +178,8 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
       lscLoad<SubGroupSize, CommReadCacheCtrl>(
           messages[u], ptr + u * wireTransElems + local_off
       );
+#else
+      (void)local_off;
 #endif
       retry |= (messages[u][2] != flag) || (messages[u][3] != flag);
     }
