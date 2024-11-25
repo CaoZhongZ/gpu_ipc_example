@@ -21,21 +21,12 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
       T* input, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[]
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   )
   : Transmit<T, NRanks, Proto, SubGroupSize>(
       input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
       calcWorkSize(input, nelems * sizeof(T)),
       rank, seqNo
-#if defined(__enable_sycl_stream__)
-      , cout
-#endif
   ), workSize(calcWorkSize(input, nelems * sizeof(T)))
-#if defined(__enable_sycl_stream__)
-    , cout(cout)
-#endif
   {}
 
   static int scatterVerify(
@@ -97,14 +88,6 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
         gOff < workSize; gOff += loopSize, ++ tOff) {
       auto wireOff = wireId_x * wireCapacity + gOff;
 
-#if defined(__enable_sycl_stream__)
-      auto local_id = pos.get_sub_group().get_local_id()[0];
-      if (local_id == 0 && groupId == 0)
-        cout<<"["<<groupId<<", "<<subGroupId
-          <<"] loopSize:"<<loopSize
-          <<", wireOff:"<<wireOff<<"; "
-          <<", transOff:"<<transOff<<"; "<<sycl::endl;
-#endif
       ssize_t workLeft = workSize - wireOff;
       if (workLeft > 0)
         const_cast<AllReduce *>(this)-> template run<unroll>(wireOff, tOff, workLeft);
@@ -130,9 +113,6 @@ private:
   }
 
   ssize_t workSize;
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };
 
 template <typename T,
@@ -149,21 +129,12 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   bisectAllReduce(
       T* input, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf, T* const peerBuf0[], T* const peerBuf1[]
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   ) :
   Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
       calcWorkSize(input, nelems * sizeof(T)),
       divUp(calcWorkSize(input, nelems * sizeof(T)), wireCapacity)
       * wireTransSize, rank, seqNo
-#if defined(__enable_sycl_stream__)
-      , cout
-#endif
     ), workSize(calcWorkSize(input, nelems * sizeof(T)))
-#if defined(__enable_sycl_stream__)
-  , cout(cout)
-#endif
   {}
 
   static int stage1Verify(T* host, int rank, uint32_t flag, size_t nelems);
@@ -192,15 +163,6 @@ struct bisectAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       auto wireOff = groupId * cableCapacity + subGroupId * wireCapacity + gOff;
       auto transOff = groupId * cableTSize + subGroupId * wireTransSize + tOff;
       ssize_t workLeft = workSize - wireOff;
-#if defined(__enable_sycl_stream__)
-      auto local_id = pos.get_sub_group().get_local_id()[0];
-      if (local_id == 0 && groupId == 0)
-        cout<<"["<<groupId<<", "<<subGroupId
-          <<"] loopSize:"<<loopSize
-          <<", wireOff:"<<wireOff
-          <<", transOff:"<<transOff
-          <<", workLeft:"<<workLeft<<sycl::endl;
-#endif
       if (workLeft > 0) {
         const_cast<bisectAllReduce *>(this)->
           template scatterFar<unroll>(wireOff, transOff, workLeft);
@@ -235,9 +197,6 @@ private:
   }
 
   ssize_t workSize;
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };
 
 // Best candidate for throughput
@@ -256,19 +215,10 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   bisectPAllReduce(
       T* input, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf, T* const peerBuf0[], T* const peerBuf1[]
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   ) :
   Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
       calcWorkSize(input, nelems * sizeof(T)), rank, seqNo
-#if defined(__enable_sycl_stream__)
-      , cout
-#endif
     ), workSize(calcWorkSize(input, nelems * sizeof(T)))
-#if defined(__enable_sycl_stream__)
-  , cout(cout)
-#endif
   {}
 
   static int stage1Verify(T* host, int rank, uint32_t flag, size_t nelems);
@@ -329,14 +279,6 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       auto nextOff = wireOff + gOff;
       auto nextLeft = workSize - nextOff;
 #endif
-#if defined(__enable_sycl_stream__)
-      auto localId = pos.get_sub_group().get_local_id()[0];
-      if (localId == 0 && groupId == 0)
-        cout<<"["<<groupId<<", "<<subGroupXId
-          <<"] loopSize:"<<loopSize
-          <<", wireOff:"<<wireOff
-          <<", workLeft:"<<workLeft<<sycl::endl;
-#endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
 #if defined(__enable_prefetch__)
         if (nextLeft > cableTSize)
@@ -371,9 +313,6 @@ private:
   }
 
   ssize_t workSize;
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };
 
 template <typename T,
@@ -391,19 +330,10 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
   bisectPPAllReduce(
       T* input, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf, T* const peerBuf0[], T* const peerBuf1[]
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   ) :
   Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
       calcWorkSize(input, nelems * sizeof(T)), rank, seqNo
-#if defined(__enable_sycl_stream__)
-      , cout
-#endif
     ), workSize(calcWorkSize(input, nelems * sizeof(T)))
-#if defined(__enable_sycl_stream__)
-  , cout(cout)
-#endif
   {}
 
   static int stage4Verify(T* host, int rank, uint32_t flag, size_t nelems);
@@ -435,15 +365,6 @@ struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       auto transOff = groupId * cableTSize + subGroupXId * wireTransSize + tOff;
       ssize_t workLeft = workSize - wireOff;
 
-#if defined(__enable_sycl_stream__)
-      auto localId = pos.get_sub_group().get_local_id()[0];
-      if (localId == 0 && groupId == 0)
-        cout<<"["<<groupId<<", "<<subGroupXId
-          <<"] loopSize:"<<loopSize
-          <<", wireOff:"<<wireOff
-          <<", transOff:"<<transOff
-          <<", workLeft:"<<workLeft<<sycl::endl;
-#endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
         if (subGroupYId < 2) {
           const_cast<bisectPPAllReduce *>(this)->
@@ -478,9 +399,6 @@ private:
   }
 
   ssize_t workSize;
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };
 
 template <typename T,

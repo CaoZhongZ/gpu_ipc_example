@@ -810,49 +810,31 @@ sycl::event testTransmit(
   switch(world) {
   case 2:
     return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
         cgh.parallel_for(
           launchParam,
           AllReduce<T, 2, Proto, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
             )
         );
     });
   case 4:
     return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
         cgh.parallel_for(
           launchParam,
           AllReduce<T, 4, Proto, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
             )
         );
     });
   case 8:
     return queue.submit([&](sycl::handler &cgh) {
-#if defined(__enable_sycl_stream__)
-      sycl::stream cout(1024 * 1024, 16 * 1024, cgh);
-#endif
         cgh.parallel_for(
           launchParam,
           AllReduce<T, 8, Proto, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
-#if defined(__enable_sycl_stream__)
-            , cout
-#endif
             )
         );
     });
@@ -1150,6 +1132,12 @@ sycl::event testTransmit(
     );
   } else if (transmitType == "bisect") {
     return testBisectTransmit<T, BisectPTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else if (transmitType == "small_pcie") {
+    return testTransmit<T, Rt64_PCIE, ParallelTransmit>(
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
