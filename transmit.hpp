@@ -12,6 +12,7 @@
 #include "rt64.hpp"
 #include "rt64_128.hpp"
 
+#include "sequential_transmit.hpp"
 #include "parallel_transmit.hpp"
 // #include "simple_transmit.hpp"
 #include "bisect_transmit.hpp"
