@@ -444,13 +444,7 @@ protected:
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[],
       size_t workSize, int rank, uint32_t seqNo
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   ) : workElems(workSize/sizeof(T)), l_rank(rank/2), seqNo(seqNo)
-#if defined(__enable_sycl_stream__)
-      , cout(cout)
-#endif
   {
     auto pairRank = rank ^ 1;
 
@@ -524,10 +518,6 @@ protected:
 
   ringPtr localScatterSink[NPeers];
   ringPtr localGatherSink;
-
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };
 
 template <typename T, int NRanks, int SubGroupSize>
@@ -967,13 +957,7 @@ protected:
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[],
       size_t workSize, int rank, uint32_t seqNo
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   ) : l_rank(rank/2), seqNo(seqNo)
-#if defined(__enable_sycl_stream__)
-      , cout(cout)
-#endif
   {
     auto pairRank = rank ^ 1;
 
@@ -1053,8 +1037,4 @@ protected:
 
   int l_rank;
   uint32_t seqNo;
-
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };

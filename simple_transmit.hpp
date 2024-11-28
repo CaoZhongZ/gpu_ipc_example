@@ -20,13 +20,7 @@ public:
       ssize_t workSize,
       int rank,
       uint32_t seqNo  // Serve as flag for checking
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   ) : seqNo(seqNo), rank(rank)
-#if defined(__enable_sycl_stream__)
-  , cout(cout)
-#endif
   {
     ioBuffer = (input + rank * workSize / sizeof(T));
 
@@ -132,15 +126,6 @@ public:
         retry |= recvMessages(messages, localScatterSink[i] + sinkOffInType, flag);
       } while(sycl::any_of_group(sg, retry));
 
-#if defined(__enable_sycl_stream__)
-      if (lane_id == firstFlagChannel || lane_id == lastFlagChannel) {
-        cout<<"["<<rank<<","<<lane_id<<"]";
-        for (int u = 0; u < unroll; ++ u)
-          cout<<sycl::hex<<messages[u]<<"; ";
-        cout<<sycl::endl<<sycl::flush;
-      }
-#endif
-
       restoreData(messages);
       accumMessages(v, messages);
     }
@@ -203,8 +188,4 @@ protected:
 
   uint32_t seqNo;
   int rank;
-
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };

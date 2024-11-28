@@ -1,6 +1,6 @@
 OPT=-O3 -fno-strict-aliasing
 # OPT=-g -fno-strict-aliasing
-# VERBOSE=-D__enable_sycl_stream__
+# VERBOSE=-D__enable_device_verbose__
 
 SYCLFLAGS=-fsycl -fsycl-targets=spir64_gen -Xsycl-target-backend=spir64_gen "-device pvc"
 

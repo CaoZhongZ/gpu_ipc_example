@@ -40,10 +40,6 @@ private:
           lscLoad<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
               v[i], src + off
           );
-#if defined(__enable_sycl_stream__)
-          // cout<<"["<<rank<<","<<lid<<"]off: "<<off
-          //   <<", src "<<src<<":"<<v[i]<<sycl::endl;
-#endif
 #else
           (void)off;
 #endif
@@ -473,14 +469,8 @@ protected:
       T* const peerBuf0[], T* const peerBuf1[],
       size_t workSize, size_t transmitSize,
       int rank, uint32_t seqNo
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
   ) : farScatterStep(seqNo), closeScatterStep(seqNo + 1), closeGatherStep(seqNo + 2),
   rank(rank), l_rank(rank/2)
-#if defined(__enable_sycl_stream__)
-      , cout(cout)
-#endif
   {
     auto pairRank = rank ^ 1;
 
@@ -612,8 +602,4 @@ protected:
   int rank;
   int l_rank;
   uint32_t seqNo;
-
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };

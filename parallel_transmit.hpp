@@ -38,14 +38,7 @@ public:
       ssize_t workSize,
       int rank,
       uint32_t seqNo   // Serve as flag for checking
-#if defined(__enable_sycl_stream__)
-      , sycl::stream cout
-#endif
-  ) : workElems(workSize/sizeof(T)), rank(rank), seqNo(seqNo)
-#if defined(__enable_sycl_stream__)
-  , cout(cout)
-#endif
-  {
+  ) : workElems(workSize/sizeof(T)), rank(rank), seqNo(seqNo) {
     ioForPeers = input;
 
     localGatherSink = reinterpret_cast<ringPtr>(gatherBuf);
@@ -148,9 +141,6 @@ protected:
   ringPtr localScatterSink[NPeers];
   ringPtr localGatherSink;
 
-#if defined(__enable_sycl_stream__)
-  sycl::stream cout;
-#endif
 };
 
 
