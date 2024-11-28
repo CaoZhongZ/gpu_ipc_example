@@ -1137,7 +1137,7 @@ sycl::event testTransmit(
         nelems, rank, world, step, subgroup, queue
     );
   } else if (transmitType == "small_pcie") {
-    return testTransmit<T, Rt64_PCIE, ParallelTransmit>(
+    return testTransmit<T, Rt64_PCIE, SequentialTransmit>(
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue

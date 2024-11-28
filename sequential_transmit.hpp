@@ -2,7 +2,7 @@
 
 //
 // For those do not have sub-group level independent forward progress
-// and PCIE connection without switch
+// or PCIE connection without switch (remote polling).
 //
 
 template <typename T, int NRanks,
@@ -28,11 +28,14 @@ protected:
   using ProtoT::storeOutput;
 
 public:
-  constexpr static size_t nSlot = 8;
-  constexpr static size_t ringSize = wireTransSize * nSlot;
+  constexpr static size_t nSlot = 4;
+  constexpr static int unroll = 1;
   constexpr static size_t maxLaunch = 64 * 64;
+  constexpr static size_t ringSize = maxLaunch * wireTransSize * nSlot * unroll;
 
-  typedef T (* ringPtr)[nSlot][wireTransElems];
+  static_assert(ringSize * NRanks < 32 * 1024 * 1024ull);
+
+  typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems];
 
 public:
   SequentialTransmit(
@@ -61,14 +64,12 @@ public:
     }
   }
 
-  template <int unroll>
   inline void run(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
     auto wireId = sycl::ext::oneapi::experimental::
       this_nd_item<1>().get_global_id(0) / SubGroupSize;
 
-    auto wireId_xrank = wireId;
     auto inputOffInType = inputOffset / sizeof(T);
     auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
@@ -91,7 +92,7 @@ public:
     for (int i = 0; i < NPeers; ++ i) {
       shuffleData(v[i]);
       insertFlags(v[i], flag);
-      sendMessages(scatterSink[i][wireId_xrank][tStep%nSlot], v[i]);
+      sendMessages(scatterSink[i][tStep%nSlot][wireId], v[i]);
     }
 
     // gather, reduce and broadcast
@@ -107,7 +108,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localScatterSink[i][wireId_xrank][tStep%nSlot], flag);
+          messages, localScatterSink[0][tStep%nSlot][wireId], flag);
     } while (sycl::any_of_group(
           sycl::ext::oneapi::experimental::this_sub_group(), retry)
       );
@@ -135,7 +136,7 @@ public:
       do {
         retry = false;
         retry |= recvMessages(
-            messages, localScatterSink[i][wireId_xrank][tStep%nSlot], flag);
+            messages, localScatterSink[i][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );
@@ -153,7 +154,7 @@ public:
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i)
-      sendMessages(gatherSink[i][wireId_xrank][tStep%nSlot], in);
+      sendMessages(gatherSink[i][tStep%nSlot][wireId], in);
 
     restoreData(in);
 
@@ -169,7 +170,7 @@ public:
 
       do {
         retry = false;
-        retry |= recvMessages(in, localGatherSink[i][wireId_xrank][tStep%nSlot], flag);
+        retry |= recvMessages(in, localGatherSink[i][tStep%nSlot][wireId], flag);
       } while(sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );
