@@ -5,7 +5,6 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__)
   using inner_t = message_t::vector_t;
 #endif
-
   constexpr static size_t wireCapacity = SubGroupSize * sizeof(message_t) / 2;
   constexpr static size_t wireTransSize = SubGroupSize * sizeof(message_t);
 
@@ -21,7 +20,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint64_t) / sizeof(T);
+    int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
@@ -45,7 +44,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint64_t) / sizeof(T);
+    int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
@@ -102,7 +101,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint64_t) / sizeof(T);
+    int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireCapacityInType + local_off;
@@ -126,7 +125,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint64_t) / sizeof(T);
+    int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireCapacityInType + local_off;
@@ -144,7 +143,6 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
     }}
   }
 
-  // We always push 128-byte packages
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
