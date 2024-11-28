@@ -29,13 +29,12 @@ protected:
 
 public:
   constexpr static size_t nSlot = 4;
-  constexpr static int unroll = 1;
   constexpr static size_t maxLaunch = 64 * 64;
-  constexpr static size_t ringSize = maxLaunch * wireTransSize * nSlot * unroll;
+  constexpr static size_t ringSize = maxLaunch * wireTransSize * nSlot;
 
-  static_assert(ringSize * NRanks < 32 * 1024 * 1024ull);
+  static_assert(ringSize <= 4 * 1024 * 1024ull * SubGroupSize/16);
 
-  typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems];
+  typedef T (* ringPtr)[maxLaunch][wireTransElems];
 
 public:
   SequentialTransmit(
@@ -64,6 +63,8 @@ public:
     }
   }
 
+  // TODO: unroll should be class template param
+  template <int unroll>
   inline void run(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {

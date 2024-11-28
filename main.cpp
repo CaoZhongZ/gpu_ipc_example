@@ -98,7 +98,7 @@ int main(int argc, char* argv[]) {
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
   size_t alloc_size = nelems * sizeof(test_type);
-  size_t interm_size = 32 * 1024 * 1024; // fix at 32M for now.
+  size_t interm_size = world * 8 * 1024 * 1024; // rough estimation
   int device = devices[rank] - '0';
   auto queue = currentQueue(device / 2, device & 1);
 
