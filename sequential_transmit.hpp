@@ -103,7 +103,25 @@ public:
     else
       loadInput(in, ioBuffer + inputOffInType);
 
+    bool retry;
+    do {
+      retry = false;
+      retry |= recvMessages(
+          messages, localScatterSink[i][wireId_xrank][tStep%nSlot], flag);
+    } while (sycl::any_of_group(
+          sycl::ext::oneapi::experimental::this_sub_group(), retry)
+      );
+#if defined(__enable_device_verbose__)
+    if (sycl::ext::oneapi::experimental::
+        this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
+      sycl::ext::oneapi::experimental::printf("%#x,%#x\n", messages[0][0], messages[0][1]);
+    else
+      sycl::ext::oneapi::experimental::printf("%#x,%#x; ", messages[0][0], messages[0][1]);
+#endif
+
     shuffleData(in);
+    accumMessages(in, messages);
+
 #if defined(__enable_device_verbose__)
     if (sycl::ext::oneapi::experimental::this_nd_item<1>().get_global_id(0)
          % SubGroupSize == (SubGroupSize -1))
@@ -112,8 +130,8 @@ public:
       sycl::ext::oneapi::experimental::printf("%#x,%#x; ", in[0][0], in[0][1]);
 #endif
 
-    for (int i = 0; i < NPeers; ++ i) {
-      bool retry;
+#   pragma unroll
+    for (int i = 1; i < NPeers; ++ i) {
       do {
         retry = false;
         retry |= recvMessages(
@@ -144,6 +162,7 @@ public:
     else
       storeOutput(ioBuffer + inputOffInType, in);
 
+#   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       bool retry;
       message_t in[unroll];
