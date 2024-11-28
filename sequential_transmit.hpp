@@ -10,6 +10,7 @@ template <typename T, int NRanks,
 class SequentialTransmit : public Proto<T, SubGroupSize> {
 protected:
   static constexpr int NPeers = NRanks -1;
+  static constexpr int parallel_sg = 1;
   using ProtoT = Proto<T, SubGroupSize>;
 
   using typename ProtoT::message_t;
@@ -95,6 +96,13 @@ public:
       insertFlags(v[i], flag);
       sendMessages(scatterSink[i][tStep%nSlot][wireId], v[i]);
     }
+#if defined(__enable_device_verbose__)
+    if (sycl::ext::oneapi::experimental::this_nd_item<1>().get_global_id(0)
+         % SubGroupSize == (SubGroupSize -1))
+      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
+    else
+      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
+#endif
 
     // gather, reduce and broadcast
     message_t messages[unroll];
@@ -116,21 +124,13 @@ public:
 #if defined(__enable_device_verbose__)
     if (sycl::ext::oneapi::experimental::
         this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
-      sycl::ext::oneapi::experimental::printf("%#x,%#x\n", messages[0][0], messages[0][1]);
+      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
     else
-      sycl::ext::oneapi::experimental::printf("%#x,%#x; ", messages[0][0], messages[0][1]);
+      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
 #endif
 
     shuffleData(in);
     accumMessages(in, messages);
-
-#if defined(__enable_device_verbose__)
-    if (sycl::ext::oneapi::experimental::this_nd_item<1>().get_global_id(0)
-         % SubGroupSize == (SubGroupSize -1))
-      sycl::ext::oneapi::experimental::printf("%#x,%#x\n", in[0][0], in[0][1]);
-    else
-      sycl::ext::oneapi::experimental::printf("%#x,%#x; ", in[0][0], in[0][1]);
-#endif
 
 #   pragma unroll
     for (int i = 1; i < NPeers; ++ i) {
@@ -144,9 +144,9 @@ public:
 #if defined(__enable_device_verbose__)
       if (sycl::ext::oneapi::experimental::
           this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
-        sycl::ext::oneapi::experimental::printf("%#x,%#x\n", messages[0][0], messages[0][1]);
+        sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
       else
-        sycl::ext::oneapi::experimental::printf("%#x,%#x; ", messages[0][0], messages[0][1]);
+        sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
 #endif
       accumMessages(in, messages);
     }

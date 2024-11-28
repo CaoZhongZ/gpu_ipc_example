@@ -80,15 +80,21 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
       sycl::nd_item<1> pos
   ) const {
     auto nWires = pos.get_global_range(0) / SubGroupSize;
-    auto wireId_x = pos.get_global_id(0) / SubGroupSize / NRanks;
+    auto wireId_x = pos.get_global_id(0) / SubGroupSize / Super::parallel_sg;
 
-    auto loopSize = nWires / NRanks * wireCapacity;
+    auto loopSize = nWires / Super::parallel_sg * wireCapacity;
 
     for (size_t gOff = 0, tOff = 0;
         gOff < workSize; gOff += loopSize, ++ tOff) {
       auto wireOff = wireId_x * wireCapacity + gOff;
 
       ssize_t workLeft = workSize - wireOff;
+#if defined(__enable_device_verbose__)
+      auto local_id = pos.get_sub_group().get_local_id()[0];
+      if (local_id == 0)
+        sycl::ext::oneapi::experimental::printf(
+            "wireOff %d, workLeft %ld, wireId %d\n", wireOff, workLeft, wireId_x);
+#endif
       if (workLeft > 0)
         const_cast<AllReduce *>(this)-> template run<unroll>(wireOff, tOff, workLeft);
     }

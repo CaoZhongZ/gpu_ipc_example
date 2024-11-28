@@ -7,6 +7,7 @@ template <typename T, int NRanks,
 class ParallelTransmit : public Proto<T, SubGroupSize> {
 protected:
   static constexpr int NPeers = NRanks -1;
+  static constexpr int parallel_sg = NRanks;
   using ProtoT = Proto<T, SubGroupSize>;
 
   using typename ProtoT::message_t;

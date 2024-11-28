@@ -12,8 +12,8 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   constexpr static int wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
 
   // load first row of registers
   template <int unroll> static inline void loadInput(
@@ -21,7 +21,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint32_t) / sizeof(T);
+    int local_off = lid * sizeof(uint64_t) / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
@@ -45,7 +45,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint32_t) / sizeof(T);
+    int local_off = lid * sizeof(uint64_t) / sizeof(T);
 
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
@@ -102,7 +102,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint32_t) / sizeof(T);
+    int local_off = lid * sizeof(uint64_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireCapacityInType + local_off;
@@ -126,7 +126,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   ) {
     auto sg = sycl::ext::oneapi::experimental::this_sub_group();
     auto lid = sg.get_local_id()[0];
-    int local_off = lid * sizeof(uint32_t) / sizeof(T);
+    int local_off = lid * sizeof(uint64_t) / sizeof(T);
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto off = i * wireCapacityInType + local_off;
