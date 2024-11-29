@@ -240,7 +240,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
         retry |= (lid == 3 && messages[u][3] != flag)
           || (lid == 7 && messages[u][3] != flag)
           || (lid == 11 && messages[u][3] != flag)
-          || (lid == 15 && messages[u][3] != flag);
+          || (lid == 15 && messages[u][3] != flag)
           || (lid == 19 && messages[u][3] != flag)
           || (lid == 23 && messages[u][3] != flag)
           || (lid == 27 && messages[u][3] != flag)
