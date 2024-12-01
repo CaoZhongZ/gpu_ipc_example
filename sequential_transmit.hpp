@@ -69,8 +69,6 @@ public:
   inline void run(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
-    if (workLeft <= 0) return;
-
     auto wireId = sycl::ext::oneapi::experimental::
       this_nd_item<1>().get_global_id(0) / SubGroupSize;
 
@@ -80,110 +78,120 @@ public:
 
     constexpr auto eltPerPack = unroll * wireCapacityInType;
 
-    // scatter
     message_t v[NPeers][unroll];
-    if (nelems < eltPerPack) {
-#     pragma unroll
-      for (int i = 0; i < NPeers; ++ i)
-        loadInput(v[i], ioForPeers[i] + inputOffInType, nelems);
-    } else {
-#     pragma unroll
-      for (int i = 0; i < NPeers; ++ i)
-        loadInput(v[i], ioForPeers[i] + inputOffInType);
-    }
-
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
-      shuffleData(v[i]);
-      insertFlags(v[i], flag);
-      sendMessages(scatterSink[i][tStep%nSlot][wireId], v[i]);
-    }
-#if defined(__enable_device_verbose__)
-    if (sycl::ext::oneapi::experimental::this_nd_item<1>().get_global_id(0)
-         % SubGroupSize == (SubGroupSize -1))
-      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
-    else
-      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
-#endif
-
-    // gather, reduce and broadcast
-    message_t messages[unroll];
     message_t in[unroll];
+    message_t messages[unroll];
 
-    if (nelems < eltPerPack)
-      loadInput(in, ioBuffer + inputOffInType, nelems);
-    else
-      loadInput(in, ioBuffer + inputOffInType);
+    if (workLeft > 0) {
+      if (nelems < eltPerPack) {
+#       pragma unroll
+        for (int i = 0; i < NPeers; ++ i)
+          loadInput(v[i], ioForPeers[i] + inputOffInType, nelems);
+      } else {
+#       pragma unroll
+        for (int i = 0; i < NPeers; ++ i)
+          loadInput(v[i], ioForPeers[i] + inputOffInType);
+      }
 
-    bool retry;
-    do {
-      retry = false;
-      retry |= recvMessages(
-          messages, localScatterSink[0][tStep%nSlot][wireId], flag);
-    } while (sycl::any_of_group(
-          sycl::ext::oneapi::experimental::this_sub_group(), retry)
-      );
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i) {
+        shuffleData(v[i]);
+        insertFlags(v[i], flag);
+        sendMessages(scatterSink[i][tStep%nSlot][wireId], v[i]);
+      }
 #if defined(__enable_device_verbose__)
-    if (sycl::ext::oneapi::experimental::
-        this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
-      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
-    else
-      sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
+      if (sycl::ext::oneapi::experimental::this_nd_item<1>().get_global_id(0)
+           % SubGroupSize == (SubGroupSize -1))
+        sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
+      else
+        sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
 #endif
 
-    shuffleData(in);
-    accumMessages(in, messages);
+      if (nelems < eltPerPack)
+        loadInput(in, ioBuffer + inputOffInType, nelems);
+      else
+        loadInput(in, ioBuffer + inputOffInType);
+    }
 
-#   pragma unroll
-    for (int i = 1; i < NPeers; ++ i) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    barrier();
+#endif
+
+    if (workLeft > 0) {
+      bool retry;
       do {
         retry = false;
         retry |= recvMessages(
-            messages, localScatterSink[i][tStep%nSlot][wireId], flag);
+            messages, localScatterSink[0][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );
-#if defined(__enable_device_verbose__)
+#if   defined(__enable_device_verbose__)
       if (sycl::ext::oneapi::experimental::
           this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
-        sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
+        sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
       else
-        sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
+        sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
 #endif
+
+      shuffleData(in);
       accumMessages(in, messages);
-    }
 
-    insertFlags(in, flag);
+#     pragma unroll
+      for (int i = 1; i < NPeers; ++ i) {
+        do {
+          retry = false;
+          retry |= recvMessages(
+              messages, localScatterSink[i][tStep%nSlot][wireId], flag);
+        } while (sycl::any_of_group(
+              sycl::ext::oneapi::experimental::this_sub_group(), retry)
+          );
+#if   defined(__enable_device_verbose__)
+        if (sycl::ext::oneapi::experimental::
+            this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
+          sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
+        else
+          sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
+#endif
+        accumMessages(in, messages);
+      }
 
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i)
-      sendMessages(gatherSink[i][tStep%nSlot][wireId], in);
+      insertFlags(in, flag);
 
-    restoreData(in);
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i)
+        sendMessages(gatherSink[i][tStep%nSlot][wireId], in);
 
-    if (nelems < eltPerPack)
-      storeOutput(ioBuffer + inputOffInType, in, nelems);
-    else
-      storeOutput(ioBuffer + inputOffInType, in);
-
-#   pragma unroll
-    for (int i = 0; i < NPeers; ++ i) {
-      bool retry;
-      message_t in[unroll];
-
-      do {
-        retry = false;
-        retry |= recvMessages(in, localGatherSink[i][tStep%nSlot][wireId], flag);
-      } while(sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
-        );
-      auto ptr = ioForPeers[i] + inputOffInType;
       restoreData(in);
 
       if (nelems < eltPerPack)
-        storeOutput(ptr, in, nelems);
+        storeOutput(ioBuffer + inputOffInType, in, nelems);
       else
-        storeOutput(ptr, in);
+        storeOutput(ioBuffer + inputOffInType, in);
+    }
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    barrier();
+#endif
+
+    if (workLeft > 0) {
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i) {
+        bool retry;
+        do {
+          retry = false;
+          retry |= recvMessages(in, localGatherSink[i][tStep%nSlot][wireId], flag);
+        } while(sycl::any_of_group(
+              sycl::ext::oneapi::experimental::this_sub_group(), retry)
+          );
+        auto ptr = ioForPeers[i] + inputOffInType;
+        restoreData(in);
+
+        if (nelems < eltPerPack)
+          storeOutput(ptr, in, nelems);
+        else
+          storeOutput(ptr, in);
+      }
     }
   }
 
