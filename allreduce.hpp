@@ -95,8 +95,7 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
         sycl::ext::oneapi::experimental::printf(
             "wireOff %d, workLeft %ld, wireId %d\n", wireOff, workLeft, wireId_x);
 #endif
-      if (workLeft > 0)
-        const_cast<AllReduce *>(this)-> template run<unroll>(wireOff, tOff, workLeft);
+      const_cast<AllReduce *>(this)-> template run<unroll>(wireOff, tOff, workLeft);
     }
   }
 

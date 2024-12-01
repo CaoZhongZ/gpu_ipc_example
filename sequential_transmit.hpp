@@ -69,6 +69,8 @@ public:
   inline void run(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
+    if (workLeft <= 0) return;
+
     auto wireId = sycl::ext::oneapi::experimental::
       this_nd_item<1>().get_global_id(0) / SubGroupSize;
 

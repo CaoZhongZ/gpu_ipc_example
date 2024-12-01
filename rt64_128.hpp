@@ -231,13 +231,13 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
       (void) lid; (void) local_off;
 #endif
       if constexpr (SubGroupSize == 16)
-        retry |= (lid == 3 && messages[u][3] != flag)
+        retry = (lid == 3 && messages[u][3] != flag)
           || (lid == 7 && messages[u][3] != flag)
           || (lid == 11 && messages[u][3] != flag)
           || (lid == 15 && messages[u][3] != flag);
 
       if constexpr (SubGroupSize == 32)
-        retry |= (lid == 3 && messages[u][3] != flag)
+        retry = (lid == 3 && messages[u][3] != flag)
           || (lid == 7 && messages[u][3] != flag)
           || (lid == 11 && messages[u][3] != flag)
           || (lid == 15 && messages[u][3] != flag)
