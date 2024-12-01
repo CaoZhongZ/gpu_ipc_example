@@ -106,7 +106,13 @@ public:
       else
         sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
 #endif
+    }
 
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    sbarrier_signal();
+#endif
+
+    if (workLeft > 0) {
       if (nelems < eltPerPack)
         loadInput(in, ioBuffer + inputOffInType, nelems);
       else
@@ -114,7 +120,7 @@ public:
     }
 
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    barrier();
+    sbarrier_wait();
 #endif
 
     if (workLeft > 0) {
@@ -161,6 +167,13 @@ public:
 #     pragma unroll
       for (int i = 0; i < NPeers; ++ i)
         sendMessages(gatherSink[i][tStep%nSlot][wireId], in);
+    }
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    sbarrier_signal();
+#endif
+
+    if (workLeft > 0) {
 
       restoreData(in);
 
@@ -171,7 +184,7 @@ public:
     }
 
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    barrier();
+    sbarrier_wait();
 #endif
 
     if (workLeft > 0) {
