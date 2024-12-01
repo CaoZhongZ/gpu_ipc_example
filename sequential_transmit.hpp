@@ -64,6 +64,24 @@ public:
     }
   }
 
+  // When split barrier is not supported, signal become null,
+  // wait will be both signal and wait.
+  static inline void sbarrier_signal_compat() {
+#if defined(XE_PLUS) && defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    sbarrier_signal();
+#endif
+  }
+
+  static inline void sbarrier_wait_compat() {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+#if defined(XE_PLUS)
+    sbarrier_wait();
+#else
+    barrier();
+#endif
+#endif
+  }
+
   // TODO: unroll should be class template param
   template <int unroll>
   inline void run(
@@ -108,9 +126,7 @@ public:
 #endif
     }
 
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    sbarrier_signal();
-#endif
+    sbarrier_signal_compat();
 
     if (workLeft > 0) {
       if (nelems < eltPerPack)
@@ -119,9 +135,7 @@ public:
         loadInput(in, ioBuffer + inputOffInType);
     }
 
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    sbarrier_wait();
-#endif
+    sbarrier_wait_compat();
 
     if (workLeft > 0) {
       bool retry;
@@ -169,9 +183,7 @@ public:
         sendMessages(gatherSink[i][tStep%nSlot][wireId], in);
     }
 
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    sbarrier_signal();
-#endif
+    sbarrier_signal_compat();
 
     if (workLeft > 0) {
 
@@ -183,9 +195,7 @@ public:
         storeOutput(ioBuffer + inputOffInType, in);
     }
 
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-    sbarrier_wait();
-#endif
+    sbarrier_wait_compat();
 
     if (workLeft > 0) {
 #     pragma unroll
