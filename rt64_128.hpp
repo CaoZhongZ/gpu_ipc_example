@@ -74,19 +74,19 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
     for (int i = 0; i < unroll; ++ i) {
 #if defined(XE_PLUS)
       asm volatile (
-          "mov (M1, 1) %0(6, 3)<1> %1(0, 0)<0;1,0>\n"
-          "mov (M1, 1) %0(6, 7)<1> %1(0, 0)<0;1,0>\n"
-          "mov (M1, 1) %0(7, 3)<1> %1(0, 0)<0;1,0>\n"
-          "mov (M1, 1) %0(7, 7)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(3, 3)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(3, 7)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(3, 11)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(3, 15)<1> %1(0, 0)<0;1,0>\n"
           : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
           : "rw"(flag)
       );
 #else
       asm volatile (
-          "mov (M1, 1) %0(3, 3)<1> %1(0, 0)<0;1,0>\n"
-          "mov (M1, 1) %0(3, 7)<1> %1(0, 0)<0;1,0>\n"
-          "mov (M1, 1) %0(3, 11)<1> %1(0, 0)<0;1,0>\n"
-          "mov (M1, 1) %0(3, 15)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(6, 3)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(6, 7)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(7, 3)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(7, 7)<1> %1(0, 0)<0;1,0>\n"
           : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
           : "rw"(flag)
       );
@@ -201,9 +201,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
       for (int i = 0; i < unroll; ++ i) {
         auto off = i * wireCapacityInType + local_off;
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-        lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
-            dst + off, v[i]
-        );
+        lscStore<SubGroupSize>(dst + off, v[i]);
 #else
         (void)off; (void)local_off;
 #endif
@@ -222,9 +220,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
         auto off = i * wireCapacityInType + local_off;
         if (off < nElt) {        // XXX: runtime condition
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-          lscStore<SubGroupSize/*, CacheCtrl::L1UC_L3UC*/>(
-              dst + off, v[i]
-          );
+          lscStore<SubGroupSize>(dst + off, v[i]);
 #endif
     }}}
   }
