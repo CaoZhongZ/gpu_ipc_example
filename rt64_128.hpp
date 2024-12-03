@@ -12,8 +12,13 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
   constexpr static size_t wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static size_t wireTransElems = wireTransSize/ sizeof(T);
 
+#if defined(XE_PLUS)
   constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
   constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+#else
+  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
+  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
+#endif
 
   //
   // Process of pack messages
