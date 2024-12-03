@@ -72,6 +72,16 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
+#if defined(XE_PLUS)
+      asm volatile (
+          "mov (M1, 1) %0(6, 3)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(6, 7)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(7, 3)<1> %1(0, 0)<0;1,0>\n"
+          "mov (M1, 1) %0(7, 7)<1> %1(0, 0)<0;1,0>\n"
+          : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
+          : "rw"(flag)
+      );
+#else
       asm volatile (
           "mov (M1, 1) %0(3, 3)<1> %1(0, 0)<0;1,0>\n"
           "mov (M1, 1) %0(3, 7)<1> %1(0, 0)<0;1,0>\n"
@@ -80,6 +90,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
           : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
           : "rw"(flag)
       );
+#endif
     }
 
     if constexpr (SubGroupSize == 32 ) {
@@ -104,6 +115,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       if constexpr (SubGroupSize == 16) {
+#if defined(XE_PLUS)
         asm volatile ("\n"
             "mov (M1, 1) %0(0, 15)<1> %0(3, 3)<0;1,0>\n"
             "mov (M1, 1) %0(1, 15)<1> %0(3, 7)<0;1,0>\n"
@@ -111,6 +123,15 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
             : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
             :
         );
+#else
+        asm volatile ("\n"
+            "mov (M1, 1) %0(1, 7)<1> %0(6, 3)<0;1,0>\n"
+            "mov (M1, 1) %0(3, 7)<1> %0(6, 7)<0;1,0>\n"
+            "mov (M1, 1) %0(5, 7)<1> %0(7, 3)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
+            :
+        );
+#endif
       }
       if constexpr (SubGroupSize == 32) {
         asm volatile ("\n"
@@ -135,6 +156,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       if constexpr (SubGroupSize == 16) {
+#if defined(XE_PLUS)
         asm volatile ("\n"
             "mov (M1, 1) %0(3, 3)<1> %0(0, 15)<0;1,0>\n"
             "mov (M1, 1) %0(3, 7)<1> %0(1, 15)<0;1,0>\n"
@@ -142,6 +164,15 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
             : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
             :
         );
+#else
+        asm volatile ("\n"
+            "mov (M1, 1) %0(6, 3)<1> %0(1, 7)<0;1,0>\n"
+            "mov (M1, 1) %0(6, 7)<1> %0(3, 7)<0;1,0>\n"
+            "mov (M1, 1) %0(7, 3)<1> %0(5, 7)<0;1,0>\n"
+            : "+rw"(reinterpret_cast<typename message_t::vector_t &>(messages[i]))
+            :
+        );
+#endif
       } else {
         asm volatile ("\n"
             "mov (M1, 1) %0(3, 3)<1> %0(0, 30)<0;1,0>\n"
