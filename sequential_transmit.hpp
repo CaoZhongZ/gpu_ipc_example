@@ -73,12 +73,8 @@ public:
   }
 
   static inline void sbarrier_wait_compat() {
-#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
-#if defined(XE_PLUS)
+#if defined(XE_PLUS) && defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     sbarrier_wait();
-#else
-    barrier();
-#endif
 #endif
   }
 #if defined(ATOB_SUPPORT)
