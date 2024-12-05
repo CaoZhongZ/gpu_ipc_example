@@ -67,7 +67,7 @@ int main(int argc, char* argv[]) {
      cxxopts::value<std::string>()->default_value("small"))
     ("i,instance", "Instance offset, used for multiple instances",
      cxxopts::value<uint32_t>()->default_value("0"))
-    ("d,devices", "Device lists for communication",
+    ("l,devices", "Device lists for communication",
      cxxopts::value<std::string>()->default_value("012345678"))
     ("p,pcie", "Use PCIE to do the communication",
      cxxopts::value<bool>()->default_value("false"))
