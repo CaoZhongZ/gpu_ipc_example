@@ -3,12 +3,12 @@ ARCH ?= pvc
 
 ifeq ($(ARCH), bmg)
 arch_string=bmg-g21-a0
-arch_support=-DXE_PLUS -DATOB_SUPPORT
+arch_support=-DXE_PLUS -DATOB_SUPPORT -DBMG
 endif
 
 ifeq ($(ARCH), pvc)
 arch_string=pvc
-arch_support=-DXE_PLUS
+arch_support=-DXE_PLUS -DPVC
 endif
 
 ifeq ($(ARCH), arc770)

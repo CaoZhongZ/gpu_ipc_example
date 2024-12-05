@@ -38,7 +38,11 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
 
   sycl::nd_range<1> getLaunchParam(uint32_t& updateSeqNo) const {
     constexpr uint32_t nThreads = 64; /* TODO: get EU/thread config */
+#if defined(PVC)
     constexpr size_t maxSS = 64;
+#else
+    constexpr size_t maxSS = 16;
+#endif
     int w = NRanks;
     size_t wirePerSS = nThreads  / w;
     size_t nWire = divUp(workSize, wireCapacity);
