@@ -43,7 +43,7 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
 #else
     constexpr size_t maxSS = 16;
 #endif
-    int w = NRanks;
+    int w = Super::parallel_sg;
     size_t wirePerSS = nThreads  / w;
     size_t nWire = divUp(workSize, wireCapacity);
     size_t nSS = divUp(nWire, wirePerSS);
