@@ -40,11 +40,13 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
     constexpr uint32_t nThreads = 64; /* TODO: get EU/thread config */
 #if defined(PVC)
     constexpr size_t maxSS = 64;
-#else
-    constexpr size_t maxSS = 16;
+#elif defined(BMG)
+    constexpr size_t maxSS = 20;
+#elif defined(DG2)
+    constexpr size_t maxSS = 32;
 #endif
     int w = Super::parallel_sg;
-    size_t wirePerSS = nThreads  / w;
+    size_t wirePerSS = nThreads / w;
     size_t nWire = divUp(workSize, wireCapacity);
     size_t nSS = divUp(nWire, wirePerSS);
     auto actualSS = std::min(nSS, maxSS);
@@ -57,7 +59,7 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
 
     return sycl::nd_range<1>(
       actualSS * wirePerSS * w * SubGroupSize,
-      wirePerSS * w * SubGroupSize
+      nThreads * SubGroupSize
     );
   }
 

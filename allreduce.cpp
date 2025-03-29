@@ -1020,6 +1020,18 @@ sycl::event testTransmit(
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
     );
+  } else if (transmitType == "small_pcie_p") {
+    return testTransmit<T, Rt64_PCIE, ParallelTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else if (transmitType == "simple_pcie_p") {
+    return testTransmit<T, Rt64_128_PCIE, ParallelTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
   }
 #if defined(XE_PLUS)
   else if (transmitType == "bisect") {
