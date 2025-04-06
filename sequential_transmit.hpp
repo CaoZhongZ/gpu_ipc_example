@@ -252,7 +252,7 @@ public:
 
   static_assert(ringSize <= 4 * 1024 * 1024ull * SubGroupSize/16);
 
-  typedef T (* ringPtr)[maxLaunch][wireTransElems * unroll];
+  typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems * unroll];
 
 public:
   RingTransmit(
@@ -263,21 +263,14 @@ public:
       uint32_t seqNo   // Serve as flag for checking
   ) : workElems(workSize/sizeof(T)), rank(rank), seqNo(seqNo) {
     auto next = (rank + 1) % NRanks;
+
     ioBuffer = input;
 
-    for (int i = 0; i < NRanks; ++ i) {
-      int peer = (rank + i) % NRanks;
+    scatterSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf0[next]);
+    gatherSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf1[next]);
 
-      scatterSink[i] = reinterpret_cast<ringPtr>(
-          (uintptr_t)peerBuf0[next] + peer * ringSize);
-      gatherSink[i] = reinterpret_cast<ringPtr>(
-          (uintptr_t)peerBuf1[next] + peer * ringSize);
-
-      localScatterSink[i] = reinterpret_cast<ringPtr>(
-          (uintptr_t)scatterBuf + peer * ringSize);
-      localGatherSink[i] = reinterpret_cast<ringPtr>(
-          (uintptr_t)gatherBuf + peer * ringSize);
-    }
+    localScatterSink = reinterpret_cast<ringPtr>((uintptr_t)scatterBuf);
+    localGatherSink = reinterpret_cast<ringPtr>((uintptr_t)gatherBuf);
   }
 
   template <int __dummy__>
@@ -308,7 +301,7 @@ public:
 
     shuffleData(v);
     insertFlags(v, flag);
-    sendMessages(scatterSink[p_idx][tStep%nSlot][wireId], v);
+    sendMessages(scatterSink[peer][tStep%nSlot][wireId], v);
 
     sbarrier_signal_compat();
 
@@ -327,7 +320,7 @@ public:
       do {
         retry = false;
         retry |= recvMessages(
-            messages, localScatterSink[p_idx][tStep%nSlot][wireId], flag);
+            messages, localScatterSink[peer][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );
@@ -335,7 +328,7 @@ public:
       shuffleData(v);
       accumMessages(v, messages);
       insertFlags(v, flag);
-      sendMessages(scatterSink[p_idx][tStep % nSlot][wireId], v);
+      sendMessages(scatterSink[peer][tStep % nSlot][wireId], v);
 
       sbarrier_signal_compat();
     }
@@ -353,7 +346,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localScatterSink[p_idx][tStep%nSlot][wireId], flag);
+          messages, localScatterSink[peer][tStep%nSlot][wireId], flag);
     } while (sycl::any_of_group(
           sycl::ext::oneapi::experimental::this_sub_group(), retry)
       );
@@ -362,7 +355,7 @@ public:
     accumMessages(v, messages);
 
     insertFlags(v, flag);
-    sendMessages(gatherSink[p_idx][tStep % nSlot][wireId], v);
+    sendMessages(gatherSink[peer][tStep % nSlot][wireId], v);
     sbarrier_signal_compat();
 
     restoreData(v);
@@ -381,13 +374,13 @@ public:
       do {
         retry = false;
         retry |= recvMessages(
-            v, localGatherSink[p_idx][tStep%nSlot][wireId], flag);
+            v, localGatherSink[peer][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
             sycl::ext::oneapi::experimental::this_sub_group(), retry)
         );
 
       insertFlags(v, flag);
-      sendMessages(gatherSink[p_idx][tStep % nSlot][wireId], v);
+      sendMessages(gatherSink[peer][tStep % nSlot][wireId], v);
       sbarrier_signal_compat();
 
       restoreData(v);
@@ -405,7 +398,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          v, localGatherSink[p_idx][tStep%nSlot][wireId], flag);
+          v, localGatherSink[peer][tStep%nSlot][wireId], flag);
     } while (sycl::any_of_group(
           sycl::ext::oneapi::experimental::this_sub_group(), retry)
       );
@@ -423,9 +416,9 @@ protected:
   int rank;
   uint32_t seqNo;
 
-  ringPtr scatterSink[NRanks];
-  ringPtr gatherSink[NRanks];
+  ringPtr scatterSink;
+  ringPtr gatherSink;
 
-  ringPtr localScatterSink[NRanks];
-  ringPtr localGatherSink[NRanks];
+  ringPtr localScatterSink;
+  ringPtr localGatherSink;
 };
