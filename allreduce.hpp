@@ -13,9 +13,7 @@ template <typename T,
 struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
   using Super = Transmit<T, NRanks, Proto, SubGroupSize>;
   using message_t = typename Super::message_t;
-  constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
   constexpr static int wireCapacity = Super::wireCapacity;
-  constexpr static int wireTransSize = Super::wireTransSize;
 
   AllReduce(
       T* input, size_t nelems, int rank, uint32_t seqNo,
@@ -101,7 +99,7 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
         sycl::ext::oneapi::experimental::printf(
             "wireOff %d, workLeft %ld, wireId %d\n", wireOff, workLeft, wireId_x);
 #endif
-      const_cast<AllReduce *>(this)-> template run<unroll>(wireOff, tOff, workLeft);
+      const_cast<AllReduce *>(this)-> template run<1>(wireOff, tOff, workLeft);
     }
   }
 
