@@ -1042,14 +1042,26 @@ sycl::event testTransmit(
     );
   }
 #endif
-  else if (transmitType == "small_pcie") {
+  else if (transmitType == "small_ring") {
     return testTransmit<T, Rt64_PCIE, RingTransmit>(
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
     );
-  } else if (transmitType == "simple_pcie") {
+  } else if (transmitType == "simple_ring") {
     return testTransmit<T, Rt64_128_PCIE, RingTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else if (transmitType == "small_pcie") {
+    return testTransmit<T, Rt64_PCIE, SequentialTransmit>(
+        launchParam,
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else if (transmitType == "simple_pcie") {
+    return testTransmit<T, Rt64_128_PCIE, SequentialTransmit>(
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue

@@ -245,11 +245,12 @@ protected:
   using ProtoT::restoreData;
   using ProtoT::storeOutput;
 
+  static constexpr auto wireCapacity = ProtoT::wireCapacity * unroll;
+
 public:
   constexpr static size_t nSlot = 4;
   constexpr static size_t maxLaunch = 64 * 64;
   constexpr static size_t ringSize = maxLaunch * wireTransSize * unroll * nSlot;
-
   static_assert(ringSize <= 4 * 1024 * 1024ull * SubGroupSize/16);
 
   typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems * unroll];
@@ -263,7 +264,6 @@ public:
       uint32_t seqNo   // Serve as flag for checking
   ) : workElems(workSize/sizeof(T)), rank(rank), seqNo(seqNo) {
     auto next = (rank + 1) % NRanks;
-
     ioBuffer = input;
 
     scatterSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf0[next]);
