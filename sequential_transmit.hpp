@@ -264,7 +264,7 @@ public:
       uint32_t seqNo   // Serve as flag for checking
   ) : workElems(workSize/sizeof(T)), rank(rank), seqNo(seqNo) {
     auto next = (rank + 1) % NRanks;
-    ioBuffer = input;
+    ingress = input;
 
     scatterSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf0[next]);
     gatherSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf1[next]);
@@ -295,7 +295,7 @@ public:
     int peer = (rank + p_idx) % NRanks;
 
     // Step 0
-    auto* ptr = ioBuffer + peer * workElems + inputOffInType;
+    auto* ptr = ingress + peer * workElems + inputOffInType;
     if (nelems < eltPerPack) loadInput(v, ptr, nelems);
     else loadInput(v, ptr);
 
@@ -310,7 +310,7 @@ public:
     for (int i = 1; i < NRanks -1; ++i) {
       p_idx = (p_idx -1) % NRanks;
       peer = (rank + p_idx) % NRanks;
-      ptr = ioBuffer + peer * workElems + inputOffInType;
+      ptr = ingress + peer * workElems + inputOffInType;
 
       if (nelems < eltPerPack) loadInput(v, ptr, nelems);
       else loadInput(v, ptr);
@@ -336,7 +336,7 @@ public:
     // Step N
     p_idx = (p_idx -1) % NRanks;
     peer = (rank + p_idx) % NRanks;
-    ptr = ioBuffer + peer * workElems + inputOffInType;
+    ptr = ingress + peer * workElems + inputOffInType;
     if (nelems < eltPerPack) loadInput(v, ptr, nelems);
     else loadInput(v, ptr);
 
@@ -385,7 +385,7 @@ public:
 
       restoreData(v);
 
-      auto* ptr = ioBuffer + peer * workElems + inputOffInType;
+      auto* ptr = ingress + peer * workElems + inputOffInType;
 
       if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
       else storeOutput(ptr, v);
@@ -405,13 +405,88 @@ public:
 
     restoreData(v);
 
-    ptr = ioBuffer + peer * workElems + inputOffInType;
+    ptr = ingress + peer * workElems + inputOffInType;
     if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
     else storeOutput(ptr, v);
   }
 
+  inline void runAllGather(
+      size_t inputOffset, size_t tStep, ssize_t workLeft
+  ) {
+    if (workLeft <= 0) return;
+
+    auto wireId = sycl::ext::oneapi::experimental::
+      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto flag = seqNo + tStep / nSlot;
+    auto nelems = workLeft / sizeof(T);
+
+    constexpr auto eltPerPack = unroll * wireCapacityInType;
+
+    message_t v[unroll];
+    message_t messages[unroll];
+
+    uint32_t p_idx = 0;
+    int peer = (rank + p_idx) % NRanks;
+
+    auto* ptr = ingress + peer * workElems + inputOffInType;
+    loadInput(v, ptr, nelems);
+
+    shuffleData(v);
+    insertFlags(v, flag);
+    sendMessages(scatterSink[peer][tStep%nSlot][wireId], v);
+
+    sbarrier_signal_compat();
+
+#   pragma unroll
+    for (uint32_t i = 1; i < NRanks -1; ++i) {
+      p_idx = (p_idx -1) % NRanks; // 0
+      peer = (rank + p_idx) % NRanks;
+
+      sbarrier_wait_compat();
+      bool retry;
+      do {
+        retry = false;
+        retry |= recvMessages(
+            v, localGatherSink[peer][tStep%nSlot][wireId], flag);
+      } while (sycl::any_of_group(
+            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+        );
+
+      sendMessages(gatherSink[peer][tStep % nSlot][wireId], v);
+      sbarrier_signal_compat();
+
+      restoreData(v);
+
+      auto* ptr = egress + peer * workElems + inputOffInType;
+      storeOutput(ptr, v, nelems);
+    }
+
+    p_idx = (p_idx -1) % NRanks;
+    peer = (rank + p_idx) % NRanks;
+
+    sbarrier_wait_compat();
+
+    bool retry;
+    do {
+      retry = false;
+      retry |= recvMessages(
+          v, localGatherSink[peer][tStep%nSlot][wireId], flag);
+    } while (sycl::any_of_group(
+          sycl::ext::oneapi::experimental::this_sub_group(), retry)
+      );
+
+    restoreData(v);
+
+    ptr = egress + peer * workElems + inputOffInType;
+    storeOutput(ptr, v, nelems);
+  }
+
 protected:
-  T* ioBuffer;
+  T* ingress;
+  T* egress;
+
   ssize_t workElems;
   int rank;
   uint32_t seqNo;
