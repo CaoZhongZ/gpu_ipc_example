@@ -265,6 +265,25 @@ public:
   ) : workElems(workSize/sizeof(T)), rank(rank), seqNo(seqNo) {
     auto next = (rank + 1) % NRanks;
     ingress = input;
+    egress = input;
+
+    scatterSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf0[next]);
+    gatherSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf1[next]);
+
+    localScatterSink = reinterpret_cast<ringPtr>((uintptr_t)scatterBuf);
+    localGatherSink = reinterpret_cast<ringPtr>((uintptr_t)gatherBuf);
+  }
+
+  RingTransmit(
+      T* input, T* output, T* scatterBuf, T* gatherBuf,
+      T* const peerBuf0[], T* const peerBuf1[],
+      ssize_t workSize,
+      int rank,
+      uint32_t seqNo   // Serve as flag for checking
+  ) : workElems(workSize/sizeof(T)), rank(rank), seqNo(seqNo) {
+    auto next = (rank + 1) % NRanks;
+    ingress = input;
+    egress = output;
 
     scatterSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf0[next]);
     gatherSink = reinterpret_cast<ringPtr>((uintptr_t)peerBuf1[next]);
@@ -410,7 +429,7 @@ public:
     else storeOutput(ptr, v);
   }
 
-  inline void runAllGather(
+  inline void runAllgather(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
     if (workLeft <= 0) return;
@@ -422,20 +441,21 @@ public:
     auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacityInType;
-
     message_t v[unroll];
-    message_t messages[unroll];
 
     uint32_t p_idx = 0;
     int peer = (rank + p_idx) % NRanks;
 
-    auto* ptr = ingress + peer * workElems + inputOffInType;
+    auto* ptr = ingress + inputOffInType;
+    auto* o_ptr = egress + peer * workElems + inputOffInType;
     loadInput(v, ptr, nelems);
+
+    if (ptr != o_ptr)
+      storeOutput(o_ptr, v, nelems);
 
     shuffleData(v);
     insertFlags(v, flag);
-    sendMessages(scatterSink[peer][tStep%nSlot][wireId], v);
+    sendMessages(gatherSink[peer][tStep%nSlot][wireId], v);
 
     sbarrier_signal_compat();
 
@@ -459,8 +479,8 @@ public:
 
       restoreData(v);
 
-      auto* ptr = egress + peer * workElems + inputOffInType;
-      storeOutput(ptr, v, nelems);
+      auto* o_ptr = egress + peer * workElems + inputOffInType;
+      storeOutput(o_ptr, v, nelems);
     }
 
     p_idx = (p_idx -1) % NRanks;
@@ -479,8 +499,8 @@ public:
 
     restoreData(v);
 
-    ptr = egress + peer * workElems + inputOffInType;
-    storeOutput(ptr, v, nelems);
+    o_ptr = egress + peer * workElems + inputOffInType;
+    storeOutput(o_ptr, v, nelems);
   }
 
 protected:

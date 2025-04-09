@@ -12,6 +12,7 @@
 #include "utils.hpp"
 
 #include "allreduce.hpp"
+#include "allgather.hpp"
 
 size_t parse_nelems(const std::string& nelems_string) {
   size_t base = 1;
@@ -42,6 +43,129 @@ void extract_profiling(sycl::event e, int rank) {
 };
 
 using test_type = sycl::half;
+
+template <typename T>
+static void benchAllreduce(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    T* input, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t simd, uint32_t flag, sycl::queue queue,
+    bool verify = false
+) {
+  size_t alloc_size = nelems * sizeof(T);
+  size_t interm_size = world * 8 * 1024 * 1024; // rough estimation
+
+  auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
+  auto* host_verify = (test_type *)sycl::malloc_host(interm_size * 2, queue);
+
+  __scope_guard free_pointers([&]{
+      free(host_init, queue);
+      free(host_verify, queue);
+  });
+
+  auto e = testTransmit<test_type>(
+      transmitType, launchParam,
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag, simd, queue
+  );
+
+  e.wait();
+  // extract_profiling<test_type>(e);
+  if (verify) {
+    queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
+    queue.memcpy(host_init, input, alloc_size).wait();
+
+    verifyTransmit<test_type>(
+        host_verify, host_init, flag, rank, world, simd, nelems
+    );
+    std::cout<<std::dec;
+    return;
+  }
+
+  testTransmit<test_type>(
+      transmitType, launchParam,
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 100, simd, queue
+  );
+
+  testTransmit<test_type>(
+      transmitType, launchParam,
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 150, simd, queue
+  );
+
+  if (rank == 0)
+    std::cout<<"---------last run------------------"<<std::endl;
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  e = testTransmit<test_type>(
+      transmitType, launchParam,
+      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 200, simd, queue
+  );
+  extract_profiling<test_type>(e, rank);
+}
+
+template <typename T>
+static void benchAllgather(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    T* input, T* output, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t simd, uint32_t flag, sycl::queue queue,
+    bool verify = false
+) {
+  size_t alloc_size = nelems * sizeof(T);
+  auto* host_init = (test_type *) sycl::malloc_host(alloc_size * world, queue);
+
+  __scope_guard free_pointers([&]{
+      free(host_init, queue);
+  });
+
+  auto e = testAllgather<test_type>(
+      transmitType, launchParam,
+      input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag, simd, queue
+  );
+
+  e.wait();
+  // extract_profiling<test_type>(e);
+  if (verify) {
+    queue.memcpy(host_init, output, alloc_size * world).wait();
+
+    verifyAllgather<test_type>(
+        host_init, rank, world, nelems
+    );
+    std::cout<<std::dec;
+    return;
+  }
+
+  testAllgather<test_type>(
+      transmitType, launchParam,
+      input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 100, simd, queue
+  );
+
+  testAllgather<test_type>(
+      transmitType, launchParam,
+      input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 150, simd, queue
+  );
+
+  if (rank == 0)
+    std::cout<<"---------last run------------------"<<std::endl;
+
+  MPI_Barrier(MPI_COMM_WORLD);
+
+  e = testAllgather<test_type>(
+      transmitType, launchParam,
+      input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+      nelems, rank, world, flag + 200, simd, queue
+  );
+  extract_profiling<test_type>(e, rank);
+}
 
 int main(int argc, char* argv[]) {
   cxxopts::Options opts(
@@ -108,15 +232,12 @@ int main(int argc, char* argv[]) {
   // We only need single IPC exchange
   //
   auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
-  auto* host_verify = (test_type *)sycl::malloc_host(interm_size * 2, queue);
-
   auto* ipcbuf0 = pcie ? (test_type *)sycl::malloc_host(interm_size * 2, queue)
 	  : (test_type *)sycl::malloc_device(interm_size * 2, queue);
   auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
 
   __scope_guard free_pointers([&]{
       free(host_init, queue);
-      free(host_verify, queue);
       free(ipcbuf0, queue);
   });
 
@@ -166,51 +287,25 @@ int main(int argc, char* argv[]) {
   auto local_size = subgroups * simd;
   auto global_size = groups * local_size;
 
-  auto e = testTransmit<test_type>(
-      algo,
-      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag, simd, queue
-  );
+  if (algo.find("allgather") != std::string::npos) {
+    auto* output = (test_type *)sycl::malloc_device(alloc_size * world, queue);
+    queue.memset(output, 1, alloc_size * world);
+    __scope_guard free_pointers([&]{
+        free(output, queue);
+    });
 
-  e.wait();
-  // extract_profiling<test_type>(e);
-  if (verify) {
-    queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
-    queue.memcpy(host_init, input, alloc_size).wait();
-
-    verifyTransmit<test_type>(
-        host_verify, host_init, flag, rank, world, simd, nelems
-    );
-    std::cout<<std::dec;
-    return 0;
+    benchAllgather(
+        algo,
+        {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+        input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, simd, flag, queue, verify);
+  } else {
+    benchAllreduce(
+        algo,
+        {sycl::range<1>(global_size), sycl::range<1>(local_size)},
+        input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, simd, flag, queue, verify);
   }
 
-  testTransmit<test_type>(
-      algo,
-      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 100, simd, queue
-  );
-
-  testTransmit<test_type>(
-      algo,
-      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 150, simd, queue
-  );
-
-  if (rank == 0)
-    std::cout<<"---------last run------------------"<<std::endl;
-
-  MPI_Barrier(MPI_COMM_WORLD);
-
-  e = testTransmit<test_type>(
-      algo,
-      {sycl::range<1>(global_size), sycl::range<1>(local_size)},
-      input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
-      nelems, rank, world, flag + 200, simd, queue
-  );
-  extract_profiling<test_type>(e, rank);
   return 0;
 }

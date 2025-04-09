@@ -1,5 +1,6 @@
 #include "utils.hpp"
 #include "allreduce.hpp"
+#include "allgather.hpp"
 
 template <typename T>
 static void allreduce(T* allRanks[], int nRanks, size_t nelems) {
@@ -23,6 +24,14 @@ static void allreduce(T* result, T* allRanks[], int nRanks, size_t nelems) {
       sum += allRanks[r][i];
     result[i] = sum;
   }
+}
+
+template <typename T>
+static void allgather(T* output, T* allRanks[], int nRanks, size_t nelems) {
+# pragma omp parallel for
+  for (int r = 0; r < nRanks; ++ r)
+    for (int i = 0; i < nelems; ++ i)
+      output[nelems * r + i] = allRanks[r][i];
 }
 
 // template <typename T,
@@ -541,6 +550,41 @@ template <typename T> int verifyAllReduce(
   return 0;
 }
 
+template <typename T> int verifyAllgather(
+    T* host, int rank, int world, size_t nelems
+){
+  T* allRanks[16];
+
+  for (int i = 0; i < world; ++ i) {
+    allRanks[i] = (T *)malloc(sizeof(T) * nelems);
+  }
+
+  auto* allgatherResult = (T*)malloc(sizeof(T) * nelems * world);
+
+  __scope_guard free_pointers([&] {
+    for (int i = 0; i < world; ++ i) {
+      free(allRanks[i]);
+    }
+    free(allgatherResult);
+  });
+
+  for (int i = 0; i < world; ++ i) {
+    fill_pattern(allRanks[i], i, nelems);
+  }
+
+  allgather(allgatherResult, allRanks, world, nelems);
+
+  for (int i = 0; i < nelems * world; ++ i) {
+    if (allgatherResult[i] != host[i]) {
+      std::cout<<"Error Compare! Expected: "
+        <<allgatherResult[i] <<", got: "<<host[i]
+        <<"@["<<rank<<"]("<<i<<");"<<std::endl;
+    }
+  }
+  return 0;
+}
+
+
 // template <typename T,
 //          int NRanks,
 //          template <typename, int, int> class Transmit,
@@ -874,6 +918,79 @@ sycl::event testTransmit(
   }
 }
 
+template <typename T,
+         template <typename, int> class Proto,
+         template <typename, int, template <typename, int> class, int> class Transmit>
+sycl::event testAllgather(
+    sycl::nd_range<1> launchParam,
+    T* input, T* output, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
+  if (subgroup == 16) {
+    constexpr int SubGroupSize = 16;
+    switch(world) {
+    case 2:
+      return queue.submit([&](sycl::handler &cgh) {
+          cgh.parallel_for(
+            launchParam,
+            AllGather<T, 2, Proto, Transmit, SubGroupSize>(
+              input, output, nelems, rank, step,
+              ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+      ));});
+    case 4:
+      return queue.submit([&](sycl::handler &cgh) {
+          cgh.parallel_for(
+            launchParam,
+            AllGather<T, 4, Proto, Transmit, SubGroupSize>(
+              input, output, nelems, rank, step,
+              ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+      ));});
+    case 8:
+      return queue.submit([&](sycl::handler &cgh) {
+          cgh.parallel_for(
+            launchParam,
+            AllGather<T, 8, Proto, Transmit, SubGroupSize>(
+              input, output, nelems, rank, step,
+              ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+      ));});
+    default:
+      throw std::logic_error("Unsupported communication topology");
+    }
+  } else if (subgroup == 32) {
+    constexpr int SubGroupSize = 32;
+    switch(world) {
+    case 2:
+      return queue.submit([&](sycl::handler &cgh) {
+          cgh.parallel_for(
+            launchParam,
+            AllGather<T, 2, Proto, Transmit, SubGroupSize>(
+              input, output, nelems, rank, step,
+              ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+      ));});
+    case 4:
+      return queue.submit([&](sycl::handler &cgh) {
+          cgh.parallel_for(
+            launchParam,
+            AllGather<T, 4, Proto, Transmit, SubGroupSize>(
+              input, output, nelems, rank, step,
+              ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+      ));});
+    case 8:
+      return queue.submit([&](sycl::handler &cgh) {
+          cgh.parallel_for(
+            launchParam,
+            AllGather<T, 8, Proto, Transmit, SubGroupSize>(
+              input, output, nelems, rank, step,
+              ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
+      ));});
+    default:
+      throw std::logic_error("Unsupported communication topology");
+    }
+  } else {
+    throw std::logic_error("Unsupported Sub-group size");
+  }
+}
+
 #if defined(XE_PLUS)
 template <typename T, template <typename, int, int> class Transmit>
 sycl::event testBisectTransmit (
@@ -1071,6 +1188,30 @@ sycl::event testTransmit(
   }
 }
 
+template <typename T>
+sycl::event testAllgather(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    T* input, T* output, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
+  if (transmitType == "allgather_small") {
+    return testAllgather<T, Rt64_PCIE, RingTransmit>(
+        launchParam,
+        input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else if (transmitType == "allgather_simple") {
+    return testAllgather<T, Rt64_128_PCIE, RingTransmit>(
+        launchParam,
+        input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
+        nelems, rank, world, step, subgroup, queue
+    );
+  } else {
+    throw std::logic_error("Transmit type not support");
+  }
+}
+
 template sycl::event testTransmit<sycl::half, Rt64, ParallelTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
@@ -1100,3 +1241,14 @@ template sycl::event testTransmit<sycl::half>(
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue);
+
+template sycl::event testAllgather<sycl::half>(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    sycl::half* input, sycl::half* output, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
+    sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue);
+
+template int verifyAllgather<sycl::half>(
+    sycl::half* host, int rank, int world, size_t nelems
+);

@@ -14,17 +14,18 @@ struct AllGather : public Transmit<T, NRanks, Proto, SubGroupSize> {
   using Super = Transmit<T, NRanks, Proto, SubGroupSize>;
   using message_t = typename Super::message_t;
   constexpr static int wireCapacity = Super::wireCapacity;
+  using Super::runAllgather;
 
   AllGather(
-      T* input, size_t nelems, int rank, uint32_t seqNo,
+      T* input, T* output, size_t nelems, int rank, uint32_t seqNo,
       T* scatterBuf, T* gatherBuf,
       T* const peerBuf0[], T* const peerBuf1[]
   )
   : Transmit<T, NRanks, Proto, SubGroupSize>(
-      input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
-      calcWorkSize(input, nelems * sizeof(T)),
+      input, output, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
+      calcWorkSize(input, output, nelems * sizeof(T)),
       rank, seqNo
-  ), workSize(calcWorkSize(input, nelems * sizeof(T)))
+  ), workSize(calcWorkSize(input, output, nelems * sizeof(T)))
   {}
 
   sycl::nd_range<1> getLaunchParam(uint32_t& updateSeqNo) const {
@@ -55,9 +56,11 @@ struct AllGather : public Transmit<T, NRanks, Proto, SubGroupSize> {
   }
 
   static void launch(
-      T* input, T* ipcbuf0, T* ipcbuf1, T* const peerbuf0[], T* const peerbuf1[],
+      T* input, T* output, T* ipcbuf0, T* ipcbuf1,
+      T* const peerbuf0[], T* const peerbuf1[],
       size_t nelems, int rank, uint32_t& step, sycl::queue queue) {
-    AllGather offload(input, nelems, rank, step, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1);
+    AllGather offload(input, output, nelems, rank, step,
+        ipcbuf0, ipcbuf1, peerbuf0, peerbuf1);
 
     queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
@@ -98,21 +101,32 @@ struct AllGather : public Transmit<T, NRanks, Proto, SubGroupSize> {
 
 private:
   // TODO: buffer plan and start point calc
-  static size_t calcWorkSize(T* input, size_t size) {
+  static size_t calcWorkSize(T* input, T* output, size_t input_sz) {
     // Input must be message size align
-    if ((uintptr_t)input % sizeof(message_t) != 0)
+    if ((uintptr_t)input % sizeof(message_t) != 0
+        || (uintptr_t)output % sizeof(message_t) != 0)
       throw std::logic_error("We only support aligned pointer for now");
 
-    auto nChunks = NRanks;
-    auto octSize = divUp(size, sizeof(message_t));
-    auto chunkSize = divUp(octSize, nChunks);
+    auto octSize = divUp(input_sz, sizeof(message_t));
 
-    if (octSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
+    // predicates granularity
+    if (octSize * sizeof(message_t) != input_sz)
       throw std::logic_error("We don't support non-even divide yet");
 
-    // TODO: Production logic needs every rank chunk
-    return chunkSize * sizeof(message_t);
+    return octSize * sizeof(message_t);
   }
 
   ssize_t workSize;
 };
+
+template <typename T>
+sycl::event testAllgather(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    T* input, T* output, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue);
+
+template <typename T> int verifyAllgather(
+    T* host, int rank, int world, size_t nelems
+);
