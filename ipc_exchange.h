@@ -9,3 +9,6 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
     sycl::queue queue, void *ptr, int rank, int world,
     void *peer_bases[], size_t offsets[], int instance = 0
 );
+
+bool canAccessPeer(sycl::device d0, sycl::device d1);
+bool canAccessPeer(int rank, int world);

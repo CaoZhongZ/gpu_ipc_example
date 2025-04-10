@@ -232,7 +232,13 @@ int main(int argc, char* argv[]) {
   // We only need single IPC exchange
   //
   auto* host_init = (test_type *) sycl::malloc_host(alloc_size, queue);
-  auto* ipcbuf0 = pcie ? (test_type *)sycl::malloc_host(interm_size * 2, queue)
+
+  auto p2p = pcie ? false : canAccessPeer(rank, world);
+
+  if (!pcie && !p2p)
+    std::cout<<"Request p2p but not support, revert back to host"<<std::endl;
+
+  auto* ipcbuf0 = !p2p ? (test_type *)sycl::malloc_host(interm_size * 2, queue)
 	  : (test_type *)sycl::malloc_device(interm_size * 2, queue);
   auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
 

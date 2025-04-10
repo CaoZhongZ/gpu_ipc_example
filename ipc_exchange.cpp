@@ -19,6 +19,7 @@
 
 #include "ze_exception.hpp"
 #include "ipc_exchange.h"
+#include "sycl_misc.hpp"
 #include "utils.hpp"
 
 struct exchange_contents {
@@ -309,6 +310,29 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
     }
   }
   return send_buf.ipc_handle;
+}
+
+bool canAccessPeer(sycl::device d0, sycl::device d1) {
+  auto l0_dev0 = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(d0);
+  auto l0_dev1 = sycl::get_native<sycl::backend::ext_oneapi_level_zero>(d1);
+  ze_bool_t can;
+
+  zeCheck(zeDeviceCanAccessPeer(l0_dev0, l0_dev1, &can));
+
+  return (bool)can;
+}
+
+bool canAccessPeer(int rank, int world) {
+  bool canAccess = true;
+  auto dev = currentQueue(rank/2, rank &1);
+
+  for (int i = 0; i < world; ++ i) {
+    if (i != rank) {
+      auto peer = currentQueue(i/2, i &1);
+      canAccess &= canAccessPeer(dev.get_device(), peer.get_device());
+    }
+  }
+  return canAccess;
 }
 
 static size_t align_up(size_t size, size_t align_sz) {
