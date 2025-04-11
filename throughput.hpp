@@ -27,7 +27,7 @@ private:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -49,7 +49,7 @@ private:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -109,7 +109,7 @@ private:
     }
 #else
     // Add flags at the middle and tail
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     if (lid == firstFlagChannel || lid == lastFlagChannel) {
 #     pragma unroll
@@ -139,7 +139,7 @@ private:
       }
     }
 #else
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto data = sg.shuffle(messages[i][lastElem], SubGroupSize /2 -1);
@@ -169,7 +169,7 @@ private:
       }
     }
 #else
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i) {
       auto data = sg.shuffle(messages[i][firstElem], lastDataChannel);
@@ -182,7 +182,7 @@ private:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Diverge
@@ -202,7 +202,7 @@ private:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Fixed diverge
@@ -221,7 +221,7 @@ private:
   // We always push 128-byte packages
   template <int unroll>
   inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -240,7 +240,7 @@ private:
 
   template <int unroll>
   inline bool recvMessages(message_t (&messages)[unroll], T* ptr, uint32_t flag) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -325,7 +325,7 @@ public:
       for (int i = 0; i < NPeers; ++ i)
         loadInput(v[i], ioForPeers[i] + inputOffInType);
 
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     // Poll, reduce and send to close remotes
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
@@ -365,7 +365,7 @@ public:
     } else {
       loadInput(v, inPtr);
     }
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     bool retry;
     do {
       retry = false;
@@ -411,7 +411,7 @@ public:
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireElems;
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
       bool retry;
@@ -442,7 +442,7 @@ public:
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireElems;
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 #   pragma unroll
     for (int i = 0; i < BiNRanks; ++ i) {
       message_t messages[unroll];

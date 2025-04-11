@@ -116,7 +116,7 @@ public:
       loadInput(v, inPtr);
     }
 
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {
@@ -156,7 +156,7 @@ public:
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireCapacityInType;
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
 
 #   pragma unroll
     for (int i = 0; i < NPeers; ++ i) {

@@ -29,7 +29,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -49,7 +49,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -193,7 +193,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < payloadChannels) { // XXX: Diverge
@@ -211,7 +211,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < payloadChannels) { // XXX: Fixed diverge
@@ -227,7 +227,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
 
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -246,7 +246,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
 
   template <int unroll>
   static inline bool recvMessages(message_t (&messages)[unroll], T* ptr, uint32_t flag) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -323,7 +323,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -345,7 +345,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -405,7 +405,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
     }
 #else
     // Add flags at the middle and tail
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     if (lid == firstFlagChannel || lid == lastFlagChannel) {
 #     pragma unroll
@@ -462,7 +462,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Diverge
@@ -482,7 +482,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Fixed diverge
@@ -501,7 +501,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
   // We always push 128-byte packages
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -520,7 +520,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
 
   template <int unroll>
   static inline bool recvMessages(message_t (&messages)[unroll], T* ptr, uint32_t flag) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 

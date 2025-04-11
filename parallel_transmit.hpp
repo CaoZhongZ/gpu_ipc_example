@@ -65,8 +65,8 @@ public:
   ) {
     if (workLeft <= 0) return;
 
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
 
     auto y_id = wireId % NRanks;
     auto x_id = wireId / NRanks * NRanks;
@@ -97,7 +97,7 @@ public:
         retry = false;
         retry |= recvMessages(v, localGatherSink[wireId][tStep%nSlot], flag);
       } while(sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
     }
 
@@ -110,7 +110,7 @@ public:
           retry |= recvMessages(
               messages, localScatterSink[i][x_id][tStep%nSlot], flag);
         } while (sycl::any_of_group(
-              sycl::ext::oneapi::experimental::this_sub_group(), retry)
+              sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
           );
         accumMessages(v, messages);
       }

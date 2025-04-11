@@ -46,7 +46,7 @@ private:
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -64,7 +64,7 @@ private:
   }
 
   template <int unroll> static inline void preload(T *ptr) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -83,7 +83,7 @@ private:
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -141,7 +141,7 @@ private:
     }
 #else
     // Add flags at the middle and tail
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     if (lid == firstFlagChannel || lid == lastFlagChannel) {
 #     pragma unroll
@@ -198,7 +198,7 @@ private:
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Diverge
@@ -216,7 +216,7 @@ private:
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Fixed diverge
@@ -233,7 +233,7 @@ private:
   // We always push 128-byte packages
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -252,7 +252,7 @@ private:
 
   template <int unroll>
   static inline bool recvMessages(message_t (&messages)[unroll], T* ptr, uint32_t flag) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -291,8 +291,8 @@ public:
   ) {
     // given ioForPeers vs. ioForFar is stride with multiple of 1024
     // Presume loss of L1 for accessing each other
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
     auto y_id = wireId % BiNRanks;
     preload<unroll>(ioForPeers + y_id * workElems + inputOffset/sizeof(T));
     preload<unroll>(ioForFar + y_id * workElems + inputOffset/sizeof(T));
@@ -307,8 +307,8 @@ public:
 
     constexpr auto eltPerPack = unroll * wireElems;
 
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
     auto y_id = wireId % BiNRanks;
     auto *ptr = ioForFar + y_id * workElems + inputOffInType;
 
@@ -333,8 +333,8 @@ public:
     auto flag = seqNo + tStep / nSlot;
     auto nelems = workLeft / sizeof(T);
 
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
     auto y_id = wireId % BiNRanks;
 
     constexpr auto eltPerPack = unroll * wireElems;
@@ -346,7 +346,7 @@ public:
       retry |= recvMessages(
           messages, localFarGatherSink[wireId][tStep % nSlot], flag
       );
-    } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));
+    } while(sycl::any_of_group(sycl::ext::oneapi::this_work_item::get_sub_group(), retry));
 
     // if (sg.get_local_id()[0] == 15)
     //   cout<<messages[0]<<sycl::endl<<sycl::flush;
@@ -362,8 +362,8 @@ public:
   template <int unroll> inline void closeUnifiedPollReduceScatterGather(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
     auto y_id = wireId % BiNRanks;
     auto wireId_g = wireId / BiNRanks * BiNRanks;
 
@@ -388,7 +388,7 @@ public:
       retry |= recvMessages(
           messages, localFarScatterSink[wireId][tStep%nSlot], flag
       );
-    } while(sycl::any_of_group(sycl::ext::oneapi::experimental::this_sub_group(), retry));
+    } while(sycl::any_of_group(sycl::ext::oneapi::this_work_item::get_sub_group(), retry));
 
     shuffleData(v);
     accumMessages(v, messages);
@@ -403,7 +403,7 @@ public:
         retry = false;
         retry |= recvMessages(v, localGatherSink[wireId][tStep%nSlot], flag);
       } while(sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );                                          // 4. xNPeers waits for <gather>
     }
 
@@ -416,7 +416,7 @@ public:
           retry |= recvMessages(
               messages, localScatterSink[i][wireId_g][tStep%nSlot], flag);
         } while (sycl::any_of_group(
-              sycl::ext::oneapi::experimental::this_sub_group(), retry)
+              sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
           );                                        // 2. wait for <scatter> xNPeers
         accumMessages(v, messages);
       }
@@ -572,7 +572,7 @@ private:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -592,7 +592,7 @@ private:
   template <int unroll> inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -652,7 +652,7 @@ private:
     }
 #else
     // Add flags at the middle and tail
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     if (lid == firstFlagChannel || lid == lastFlagChannel) {
 #     pragma unroll
@@ -709,7 +709,7 @@ private:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Diverge
@@ -727,7 +727,7 @@ private:
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
     if (lid < lastDataChannel) { // XXX: Fixed diverge
@@ -744,7 +744,7 @@ private:
   // We always push 128-byte packages
   template <int unroll>
   inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -763,7 +763,7 @@ private:
 
   template <int unroll>
   inline bool recvMessages(message_t (&messages)[unroll], T* ptr, uint32_t flag) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -807,7 +807,7 @@ public:
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireElems;
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto y_id = sg.get_group_id()[0] % 2;
     auto *ptr0 = ioForFar[y_id * 2] + inputOffInType;
     auto *ptr1 = ioForFar[y_id * 2 + 1] + inputOffInType;
@@ -843,7 +843,7 @@ public:
     auto flag = seqNo + seqDelta(sinkOffset);
     auto nelems = workLeft / sizeof(T);
 
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto y_id = sg.get_group_id()[0] % 2;
 
     constexpr auto eltPerPack = unroll * wireElems;
@@ -882,7 +882,7 @@ public:
   template <int unroll> inline void closeUnifiedPollReduceScatterGather(
       size_t inputOffset, size_t sinkOffset, ssize_t workLeft
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto y_id = sg.get_group_id()[0] % BiNRanks;
 
     auto inputOffInType = inputOffset / sizeof(T);

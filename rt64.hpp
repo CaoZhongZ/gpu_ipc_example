@@ -23,7 +23,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 
@@ -47,7 +47,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 
@@ -104,7 +104,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 #   pragma unroll
@@ -128,7 +128,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / 2 / sizeof(T);
 #   pragma unroll
@@ -150,7 +150,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -169,7 +169,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 
   template <int unroll>
   static inline bool recvMessages(message_t (&messages)[unroll], T* ptr, int flag) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -209,7 +209,7 @@ template <typename T, int SubGroupSize> struct Rt64 {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src, int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(uint32_t) / sizeof(T);
 
@@ -235,7 +235,7 @@ template <typename T, int SubGroupSize> struct Rt64 {
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(uint32_t) / sizeof(T);
 
@@ -288,7 +288,7 @@ template <typename T, int SubGroupSize> struct Rt64 {
   template <int unroll> inline void storeOutput(
       T* dst, message_t (&v)[unroll]
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(uint32_t) / sizeof(T);
 #   pragma unroll
@@ -312,7 +312,7 @@ template <typename T, int SubGroupSize> struct Rt64 {
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(uint32_t) / sizeof(T);
 #   pragma unroll
@@ -337,7 +337,7 @@ template <typename T, int SubGroupSize> struct Rt64 {
   // We always push 128-byte packages
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 
@@ -356,7 +356,7 @@ template <typename T, int SubGroupSize> struct Rt64 {
 
   template <int unroll>
   static inline bool recvMessages(message_t (&messages)[unroll], T* ptr, int flag) {
-    auto sg = sycl::ext::oneapi::experimental::this_sub_group();
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
     auto lid = sg.get_local_id()[0];
     int local_off = lid * sizeof(message_t) / sizeof(T);
 

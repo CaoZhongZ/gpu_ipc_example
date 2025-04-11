@@ -86,8 +86,8 @@ public:
   ) {
     if (workLeft <= 0) return;
 
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
 
     auto inputOffInType = inputOffset / sizeof(T);
     auto flag = seqNo + tStep / nSlot;
@@ -116,7 +116,7 @@ public:
       sendMessages(scatterSink[i][tStep%nSlot][wireId], v[i]);
     }
 #if defined(__enable_device_verbose__)
-    if (sycl::ext::oneapi::experimental::this_nd_item<1>().get_global_id(0)
+    if (sycl::ext::oneapi::this_work_item::get_nd_item<1>().get_global_id(0)
          % SubGroupSize == (SubGroupSize -1))
       sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", v[0][0][0], v[0][0][1], v[0][0][2], v[0][0][3]);
     else
@@ -138,11 +138,11 @@ public:
       retry |= recvMessages(
           messages, localScatterSink[0][tStep%nSlot][wireId], flag);
     } while (sycl::any_of_group(
-          sycl::ext::oneapi::experimental::this_sub_group(), retry)
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
       );
 #if defined(__enable_device_verbose__)
-    if (sycl::ext::oneapi::experimental::
-        this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
+    if (sycl::ext::oneapi::this_work_item::
+        get_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
       sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
     else
       sycl::ext::oneapi::experimental::printf("%x,%x,%x,%x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
@@ -158,11 +158,11 @@ public:
         retry |= recvMessages(
             messages, localScatterSink[i][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
 #if defined(__enable_device_verbose__)
-      if (sycl::ext::oneapi::experimental::
-          this_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
+      if (sycl::ext::oneapi::this_work_item::
+          get_nd_item<1>().get_global_id(0) % SubGroupSize == (SubGroupSize -1))
         sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x\n", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
       else
         sycl::ext::oneapi::experimental::printf("%#x,%#x,%#x,%#x; ", messages[0][0], messages[0][1], messages[0][2], messages[0][3]);
@@ -194,7 +194,7 @@ public:
         retry = false;
         retry |= recvMessages(in, localGatherSink[i][tStep%nSlot][wireId], flag);
       } while(sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
       auto ptr = ioForPeers[i] + inputOffInType;
       restoreData(in);
@@ -298,8 +298,8 @@ public:
   ) {
     if (workLeft <= 0) return;
 
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
 
     auto inputOffInType = inputOffset / sizeof(T);
     auto flag = seqNo + tStep / nSlot;
@@ -341,7 +341,7 @@ public:
         retry |= recvMessages(
             messages, localScatterSink[peer][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
 
       shuffleData(v);
@@ -367,7 +367,7 @@ public:
       retry |= recvMessages(
           messages, localScatterSink[peer][tStep%nSlot][wireId], flag);
     } while (sycl::any_of_group(
-          sycl::ext::oneapi::experimental::this_sub_group(), retry)
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
       );
 
     shuffleData(v);
@@ -395,7 +395,7 @@ public:
         retry |= recvMessages(
             v, localGatherSink[peer][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
 
       insertFlags(v, flag);
@@ -419,7 +419,7 @@ public:
       retry |= recvMessages(
           v, localGatherSink[peer][tStep%nSlot][wireId], flag);
     } while (sycl::any_of_group(
-          sycl::ext::oneapi::experimental::this_sub_group(), retry)
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
       );
 
     restoreData(v);
@@ -434,8 +434,8 @@ public:
   ) {
     if (workLeft <= 0) return;
 
-    auto wireId = sycl::ext::oneapi::experimental::
-      this_nd_item<1>().get_global_id(0) / SubGroupSize;
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
 
     auto inputOffInType = inputOffset / sizeof(T);
     auto flag = seqNo + tStep / nSlot;
@@ -471,7 +471,7 @@ public:
         retry |= recvMessages(
             v, localGatherSink[peer][tStep%nSlot][wireId], flag);
       } while (sycl::any_of_group(
-            sycl::ext::oneapi::experimental::this_sub_group(), retry)
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
 
       sendMessages(gatherSink[peer][tStep % nSlot][wireId], v);
@@ -494,7 +494,7 @@ public:
       retry |= recvMessages(
           v, localGatherSink[peer][tStep%nSlot][wireId], flag);
     } while (sycl::any_of_group(
-          sycl::ext::oneapi::experimental::this_sub_group(), retry)
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
       );
 
     restoreData(v);
