@@ -11,4 +11,6 @@ ze_ipc_mem_handle_t open_all_ipc_mems(
 );
 
 bool canAccessPeer(sycl::device d0, sycl::device d1);
+#if defined(LOCAL_TEST)
 bool canAccessPeer(int rank, int world);
+#endif

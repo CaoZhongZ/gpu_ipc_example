@@ -322,6 +322,7 @@ bool canAccessPeer(sycl::device d0, sycl::device d1) {
   return (bool)can;
 }
 
+#if defined(LOCAL_TEST)
 bool canAccessPeer(int rank, int world) {
   bool canAccess = true;
   auto dev = currentQueue(rank/2, rank &1);
@@ -334,6 +335,7 @@ bool canAccessPeer(int rank, int world) {
   }
   return canAccess;
 }
+#endif
 
 static size_t align_up(size_t size, size_t align_sz) {
     return ((size + align_sz -1) / align_sz) * align_sz;
