@@ -44,6 +44,27 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
     }}
   }
 
+  static inline void loadInput(
+      message_t &v, T* src, int nElt
+  ) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(message_t) / 2 / sizeof(T);
+
+    if (off < nElt) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+      if constexpr (SubGroupSize == 16)
+        asm volatile ("\n" // Add this partial load to tvisa
+            "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
+            : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
+      if constexpr (SubGroupSize == 32)
+        asm volatile ("\n" // Add this partial load to tvisa
+            "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
+            : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
+#endif
+    }
+  }
+
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
@@ -64,15 +85,39 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
             "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
             : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
 #else
-      (void)off;
+    (void)off;
 #endif
     }
+  }
+
+  static inline void loadInput(
+      message_t &v, T* src
+  ) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(message_t) / 2 / sizeof(T);
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (SubGroupSize == 16)
+      asm volatile ("\n" // Add this partial load to tvisa
+          "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
+          : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
+    if constexpr (SubGroupSize == 32)
+      asm volatile ("\n" // Add this partial load to tvisa
+          "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
+          : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
+#else
+    (void)off;
+#endif
   }
 
   template <int unroll>
   static inline void shuffleData(message_t (& messages)[unroll]) {}
   template <int unroll>
   static inline void restoreData(message_t (& messages)[unroll]) {}
+
+  static inline void shuffleData(message_t & messages) {}
+  static inline void restoreData(message_t & messages) {}
 
   template <int unroll> inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
@@ -91,6 +136,20 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #endif
   }
 
+  static inline void accumMessages(
+      message_t &v, message_t &m
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    using math_t = sycl::vec<T, sizeof(uint32_t)/sizeof(T)>;
+    v[0] = sycl::bit_cast<uint32_t>(
+        sycl::bit_cast<math_t>(m[0]) + sycl::bit_cast<math_t>(v[0])
+    );
+    v[1] = sycl::bit_cast<uint32_t>(
+        sycl::bit_cast<math_t>(m[1]) + sycl::bit_cast<math_t>(v[1])
+    );
+#endif
+  }
+
   //Insert flags to second row
   template <int unroll>
   static inline void insertFlags(
@@ -99,6 +158,12 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i)
       messages[i][2] = messages[i][3] = flag;
+  }
+
+  static inline void insertFlags(
+      message_t & messages, uint32_t flag
+  ) {
+    messages[2] = messages[3] = flag;
   }
 
   template <int unroll> inline void storeOutput(
@@ -125,6 +190,27 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
     }
   }
 
+  inline void storeOutput(
+      T* dst, message_t &v
+  ) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(message_t) / 2 / sizeof(T);
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (SubGroupSize == 16)
+      asm volatile ("\n"
+          "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
+          :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
+    if constexpr (SubGroupSize == 32)
+      asm volatile ("\n"
+          "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
+          :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
+#else
+      (void)off;
+#endif
+  }
+
+
   template <int unroll> static inline void storeOutput(
       T* dst, message_t (&v)[unroll], int nElt
   ) {
@@ -148,6 +234,26 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
     }}
   }
 
+  static inline void storeOutput(
+      T* dst, message_t &v, int nElt
+  ) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(message_t) / 2 / sizeof(T);
+    if (off < nElt) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+      if constexpr (SubGroupSize == 16)
+        asm volatile ("\n"
+            "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
+            :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
+      if constexpr (SubGroupSize == 32)
+        asm volatile ("\n"
+            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
+            :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
+#endif
+    }
+  }
+
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
     auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
@@ -165,6 +271,20 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
       (void)local_off;
 #endif
     }
+  }
+
+  static inline void sendMessages(T* ptr, message_t &messages) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    lscStore<SubGroupSize, CommWriteCacheCtrl>(
+        ptr + local_off, messages
+    );
+#else
+    (void)local_off;
+#endif
   }
 
   template <int unroll>
@@ -189,8 +309,28 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 
     return retry;
   }
+
+  static inline bool recvMessages(message_t &messages, T* ptr, int flag) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+
+    bool retry = false;
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    lscLoad<SubGroupSize, CommReadCacheCtrl>(
+        messages, ptr + local_off
+    );
+#else
+    (void)local_off;
+#endif
+    retry |= (messages[2] != flag) || (messages[3] != flag);
+
+    return retry;
+  }
 };
 
+// should use PCIE variant all the time
 template <typename T, int SubGroupSize> struct Rt64 {
   using message_t = sycl::vec<uint32_t, 2>;
   static constexpr int dataElem = 0;
@@ -232,6 +372,29 @@ template <typename T, int SubGroupSize> struct Rt64 {
     }}
   }
 
+  static inline void loadInput(
+      message_t &v, T* src, int nElt
+  ) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(uint32_t) / sizeof(T);
+
+    if (off < nElt) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+      if constexpr (SubGroupSize == 16)
+        asm volatile ("\n" // Add this partial load to tvisa
+            "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+            : "=rw"(v[dataElem]) : "rw"(src + off));
+      else
+        asm volatile ("\n" // Add this partial load to tvisa
+            "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+            : "=rw"(v[dataElem]) : "rw"(src + off));
+#else
+        v[dataElem] = src[off];
+#endif
+    }
+  }
+
   template <int unroll> static inline void loadInput(
       message_t (&v)[unroll], T* src
   ) {
@@ -257,10 +420,34 @@ template <typename T, int SubGroupSize> struct Rt64 {
     }
   }
 
+  static inline void loadInput(
+      message_t &v, T* src
+  ) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(uint32_t) / sizeof(T);
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (SubGroupSize == 16)
+      asm volatile ("\n" // Add this partial load to tvisa
+          "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+          : "=rw"(v[dataElem]) : "rw"(src + off));
+    else
+      asm volatile ("\n" // Add this partial load to tvisa
+          "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+          : "=rw"(v[dataElem]) : "rw"(src + off));
+#else
+      v[dataElem] = src[off];
+#endif
+  }
+
   template <int unroll>
   static inline void shuffleData(message_t (& messages)[unroll]) {}
   template <int unroll>
   static inline void restoreData(message_t (& messages)[unroll]) {}
+
+  static inline void shuffleData(message_t & messages) {}
+  static inline void restoreData(message_t & messages) {}
 
   template <int unroll> inline void accumMessages(
       message_t (&v)[unroll], message_t (&m)[unroll]
@@ -275,6 +462,17 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #endif
   }
 
+  inline void accumMessages(
+      message_t &v, message_t &m
+  ) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    using math_t = sycl::vec<T, sizeof(uint32_t)/sizeof(T)>;
+    v[0] = sycl::bit_cast<uint32_t>(
+        sycl::bit_cast<math_t>(m[0]) + sycl::bit_cast<math_t>(v[0])
+    );
+#endif
+  }
+
   //Insert flags to second row
   template <int unroll>
   static inline void insertFlags(
@@ -283,6 +481,12 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #   pragma unroll
     for (int i = 0; i < unroll; ++ i)
       messages[i][flagElem] = flag;
+  }
+
+  static inline void insertFlags(
+      message_t & messages, uint32_t flag
+  ) {
+    messages[flagElem] = flag;
   }
 
   template <int unroll> inline void storeOutput(
@@ -307,6 +511,24 @@ template <typename T, int SubGroupSize> struct Rt64 {
       dst[off] = v[i][0];
 #endif
     }
+  }
+
+  inline void storeOutput(T* dst, message_t &v) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(uint32_t) / sizeof(T);
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    if constexpr (SubGroupSize == 16)
+      asm volatile ("\n"
+          "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
+          :: "rw"(dst + off), "rw"(v[dataElem]));
+    else
+      asm volatile ("\n"
+          "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
+          :: "rw"(dst + off), "rw"(v[dataElem]));
+#else
+      dst[off] = v[0];
+#endif
   }
 
   template <int unroll> static inline void storeOutput(
@@ -334,6 +556,28 @@ template <typename T, int SubGroupSize> struct Rt64 {
     }}
   }
 
+  static inline void storeOutput(
+      T* dst, message_t &v, int nElt
+  ) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int off = lid * sizeof(uint32_t) / sizeof(T);
+    if (off < nElt) {
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+      if constexpr (SubGroupSize == 16)
+        asm volatile ("\n"
+            "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
+            :: "rw"(dst + off), "rw"(v[dataElem]));
+      else
+        asm volatile ("\n"
+            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
+            :: "rw"(dst + off), "rw"(v[dataElem]));
+#else
+      dst[off] = v[dataElem];
+#endif
+    }
+  }
+
   // We always push 128-byte packages
   template <int unroll>
   static inline void sendMessages(T* ptr, message_t (&messages)[unroll]) {
@@ -352,6 +596,20 @@ template <typename T, int SubGroupSize> struct Rt64 {
       (void) lid; (void) local_off;
 #endif
     }
+  }
+
+  static inline void sendMessages(T* ptr, message_t &messages) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    lscStore<SubGroupSize, CommWriteCacheCtrl>(
+        ptr + local_off, messages
+    );
+#else
+    (void) lid; (void) local_off;
+#endif
   }
 
   template <int unroll>
@@ -373,6 +631,25 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #endif
       retry |= (messages[u][flagElem] != flag);
     }
+
+    return retry;
+  }
+
+  static inline bool recvMessages(message_t &messages, T* ptr, int flag) {
+    auto sg = sycl::ext::oneapi::this_work_item::get_sub_group();
+    auto lid = sg.get_local_id()[0];
+    int local_off = lid * sizeof(message_t) / sizeof(T);
+
+    bool retry = false;
+
+#if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
+    lscLoad<SubGroupSize, CommReadCacheCtrl>(
+        messages, ptr + local_off
+    );
+#else
+    (void) lid; (void) local_off;
+#endif
+    retry |= (messages[flagElem] != flag);
 
     return retry;
   }

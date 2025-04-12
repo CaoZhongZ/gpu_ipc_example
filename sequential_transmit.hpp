@@ -224,7 +224,7 @@ protected:
 };
 
 template <typename T, int NRanks,
-         template <typename, int> class Proto, int SubGroupSize = 16, int unroll = 1>
+         template <typename, int> class Proto, int SubGroupSize = 16>
 class RingTransmit : public Proto<T, SubGroupSize> {
 protected:
   static constexpr int parallel_sg = 1;
@@ -244,16 +244,19 @@ protected:
   using ProtoT::accumMessages;
   using ProtoT::restoreData;
   using ProtoT::storeOutput;
-
-  static constexpr auto wireCapacity = ProtoT::wireCapacity * unroll;
+  using ProtoT::wireCapacity;
 
 public:
   constexpr static size_t nSlot = 4;
+#if defined(BMG)
+  constexpr static size_t maxLaunch = 64 * 20;
+#else
   constexpr static size_t maxLaunch = 64 * 64;
-  constexpr static size_t ringSize = maxLaunch * wireTransSize * unroll * nSlot;
+#endif
+  constexpr static size_t ringSize = maxLaunch * wireTransSize * nSlot;
   static_assert(ringSize <= 4 * 1024 * 1024ull * SubGroupSize/16);
 
-  typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems * unroll];
+  typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems];
 
 public:
   RingTransmit(
@@ -292,77 +295,67 @@ public:
     localGatherSink = reinterpret_cast<ringPtr>((uintptr_t)gatherBuf);
   }
 
-  template <int __dummy__>
-  inline void run(
+  template <int __dummy__> inline void run(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
-    if (workLeft <= 0) return;
+    runAllreduce(inputOffset, tStep, workLeft);
+  }
 
-    auto wireId = sycl::ext::oneapi::this_work_item::
-      get_nd_item<1>().get_global_id(0) / SubGroupSize;
-
-    auto inputOffInType = inputOffset / sizeof(T);
-    auto flag = seqNo + tStep / nSlot;
-    auto slot = (seqNo + tStep) % nSlot;
-    auto nelems = workLeft / sizeof(T);
-
-    constexpr auto eltPerPack = unroll * wireCapacityInType;
-
-    message_t v[unroll];
-    message_t messages[unroll];
-
-    uint32_t p_idx = 0;
-    int peer = (rank + p_idx) % NRanks;
-
-    // Step 0
-    auto* ptr = ingress + peer * workElems + inputOffInType;
-    if (nelems < eltPerPack) loadInput(v, ptr, nelems);
-    else loadInput(v, ptr);
+  inline void send(
+      int wireId, int peer, size_t offset,
+      uint32_t flag, uint32_t slot, ssize_t nelems
+  ) {
+    message_t v;
+    auto* ptr = ingress + peer * workElems + offset;
+    loadInput(v, ptr, nelems);
 
     shuffleData(v);
     insertFlags(v, flag);
+
     sendMessages(scatterSink[peer][slot][wireId], v);
-
     sbarrier_signal_compat();
+  }
 
-    // Step 1 to N-1
-#   pragma unroll
-    for (int i = 1; i < NRanks -1; ++i) {
-      p_idx = (p_idx -1) % NRanks;
-      peer = (rank + p_idx) % NRanks;
-      ptr = ingress + peer * workElems + inputOffInType;
+  inline void loadRecvReduceSend(
+      int wireId, int peer, size_t offset,
+      uint32_t flag, uint32_t slot, ssize_t nelems
+  ) {
+    message_t v;
+    message_t messages;
 
-      if (nelems < eltPerPack) loadInput(v, ptr, nelems);
-      else loadInput(v, ptr);
-      sbarrier_wait_compat();
-
-      bool retry;
-      do {
-        retry = false;
-        retry |= recvMessages(
-            messages, localScatterSink[peer][slot][wireId], flag);
-      } while (sycl::any_of_group(
-            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-        );
-
-      shuffleData(v);
-      accumMessages(v, messages);
-      insertFlags(v, flag);
-      sendMessages(scatterSink[peer][slot][wireId], v);
-
-      sbarrier_signal_compat();
-    }
-
-    // Step N
-    p_idx = (p_idx -1) % NRanks;
-    peer = (rank + p_idx) % NRanks;
-    ptr = ingress + peer * workElems + inputOffInType;
-    if (nelems < eltPerPack) loadInput(v, ptr, nelems);
-    else loadInput(v, ptr);
-
-    sbarrier_wait_compat();
+    auto* ptr = ingress + peer * workElems + offset; 
+    loadInput(v, ptr, nelems);
 
     bool retry;
+    sbarrier_wait_compat();
+    do {
+      retry = false;
+      retry |= recvMessages(
+          messages, localScatterSink[peer][slot][wireId], flag);
+    } while (sycl::any_of_group(
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
+      );
+
+    shuffleData(v);
+    accumMessages(v, messages);
+    insertFlags(v, flag);
+
+    sendMessages(scatterSink[peer][slot][wireId], v);
+    sbarrier_signal_compat();
+  }
+
+  inline void loadRecvReduceSendWrtback(
+      int wireId, int peer, size_t offset,
+      uint32_t flag, uint32_t slot, ssize_t nelems
+  ) {
+    message_t v;
+    message_t messages;
+
+    auto* ptr = ingress + peer * workElems + offset;
+    loadInput(v, ptr, nelems);
+
+    bool retry;
+    sbarrier_wait_compat();
     do {
       retry = false;
       retry |= recvMessages(
@@ -377,44 +370,47 @@ public:
     insertFlags(v, flag);
     sendMessages(gatherSink[peer][slot][wireId], v);
     sbarrier_signal_compat();
+ 
+    restoreData(v);
+
+    ptr = egress + peer * workElems + offset;
+    storeOutput(ptr, v, nelems);
+  }
+
+  inline void recvSendWrtback(
+      int wireId, int peer, size_t offset,
+      uint32_t flag, uint32_t slot, ssize_t nelems
+  ) {
+    message_t v;
+
+    bool retry;
+    sbarrier_wait_compat();
+    do {
+      retry = false;
+      retry |= recvMessages(
+          v, localGatherSink[peer][slot][wireId], flag);
+    } while (sycl::any_of_group(
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
+      );
+
+    insertFlags(v, flag);
+    sendMessages(gatherSink[peer][slot][wireId], v);
+    sbarrier_signal_compat();
 
     restoreData(v);
 
-    if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
-    else storeOutput(ptr, v);
+    auto* ptr = egress + peer * workElems + offset;
+    storeOutput(ptr, v, nelems);
+  }
 
-    // write back
-#   pragma unroll
-    for (uint32_t i = 1; i < NRanks -1; ++i) {
-      p_idx = (p_idx -1) % NRanks; // 0
-      peer = (rank + p_idx) % NRanks;
-
-      sbarrier_wait_compat();
-      bool retry;
-      do {
-        retry = false;
-        retry |= recvMessages(
-            v, localGatherSink[peer][slot][wireId], flag);
-      } while (sycl::any_of_group(
-            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-        );
-
-      insertFlags(v, flag);
-      sendMessages(gatherSink[peer][slot][wireId], v);
-      sbarrier_signal_compat();
-
-      restoreData(v);
-
-      auto* ptr = ingress + peer * workElems + inputOffInType;
-
-      if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
-      else storeOutput(ptr, v);
-    }
-
-    p_idx = (p_idx -1) % NRanks;
-    peer = (rank + p_idx) % NRanks;
+  inline void recvWrtback(
+      int wireId, int peer, size_t offset,
+      uint32_t flag, uint32_t slot, ssize_t nelems
+  ) {
+    message_t v;
 
     sbarrier_wait_compat();
+    bool retry;
     do {
       retry = false;
       retry |= recvMessages(
@@ -425,9 +421,53 @@ public:
 
     restoreData(v);
 
-    ptr = ingress + peer * workElems + inputOffInType;
-    if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
-    else storeOutput(ptr, v);
+    auto* ptr = egress + peer * workElems + offset;
+    storeOutput(ptr, v, nelems);
+  }
+
+  inline void runAllreduce(
+      size_t inputOffset, size_t tStep, ssize_t workLeft
+  ) {
+    if (workLeft <= 0) return;
+
+    auto wireId = sycl::ext::oneapi::this_work_item::
+      get_nd_item<1>().get_global_id(0) / SubGroupSize;
+
+    auto offset = inputOffset / sizeof(T);
+    auto flag = seqNo + tStep / nSlot;
+    auto slot = (seqNo + tStep) % nSlot;
+    auto nelems = workLeft / sizeof(T);
+
+    uint32_t p_idx = 0;
+    int peer = (rank + p_idx) % NRanks;
+
+    // Step 0
+    send(wireId, peer, offset, flag, slot, nelems);
+
+    // Step 1 to N-1
+#   pragma unroll
+    for (int i = 1; i < NRanks -1; ++i) {
+      p_idx = (p_idx -1) % NRanks;
+      peer = (rank + p_idx) % NRanks;
+      loadRecvReduceSend(wireId, peer, offset, flag, slot, nelems);
+    }
+
+    // Step N
+    p_idx = (p_idx -1) % NRanks;
+    peer = (rank + p_idx) % NRanks;
+    loadRecvReduceSendWrtback(wireId, peer, offset, flag, slot, nelems);
+
+    // write back
+#   pragma unroll
+    for (uint32_t i = 1; i < NRanks -1; ++i) {
+      p_idx = (p_idx -1) % NRanks; // 0
+      peer = (rank + p_idx) % NRanks;
+      recvSendWrtback(wireId, peer, offset, flag, slot, nelems);
+    }
+
+    p_idx = (p_idx -1) % NRanks;
+    peer = (rank + p_idx) % NRanks;
+    recvWrtback(wireId, peer, offset, flag, slot, nelems);
   }
 
   inline void runAllgather(
@@ -443,7 +483,7 @@ public:
     auto slot = (seqNo + tStep) % nSlot;
     auto nelems = workLeft / sizeof(T);
 
-    message_t v[unroll];
+    message_t v;
 
     uint32_t p_idx = 0;
     int peer = (rank + p_idx) % NRanks;
@@ -465,44 +505,13 @@ public:
     for (uint32_t i = 1; i < NRanks -1; ++i) {
       p_idx = (p_idx -1) % NRanks; // 0
       peer = (rank + p_idx) % NRanks;
-
-      sbarrier_wait_compat();
-      bool retry;
-      do {
-        retry = false;
-        retry |= recvMessages(
-            v, localGatherSink[peer][slot][wireId], flag);
-      } while (sycl::any_of_group(
-            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-        );
-
-      sendMessages(gatherSink[peer][slot][wireId], v);
-      sbarrier_signal_compat();
-
-      restoreData(v);
-
-      auto* o_ptr = egress + peer * workElems + inputOffInType;
-      storeOutput(o_ptr, v, nelems);
+      recvSendWrtback(wireId, peer, inputOffInType, flag, slot, nelems);
     }
 
     p_idx = (p_idx -1) % NRanks;
     peer = (rank + p_idx) % NRanks;
 
-    sbarrier_wait_compat();
-
-    bool retry;
-    do {
-      retry = false;
-      retry |= recvMessages(
-          v, localGatherSink[peer][slot][wireId], flag);
-    } while (sycl::any_of_group(
-          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-      );
-
-    restoreData(v);
-
-    o_ptr = egress + peer * workElems + inputOffInType;
-    storeOutput(o_ptr, v, nelems);
+    recvWrtback(wireId, peer, inputOffInType, flag, slot, nelems);
   }
 
 protected:

@@ -111,10 +111,10 @@ private:
       throw std::logic_error("We only support aligned pointer for now");
 
     auto nChunks = NRanks;
-    auto octSize = divUp(size, sizeof(message_t));
-    auto chunkSize = divUp(octSize, nChunks);
+    auto msgSize = divUp(size, sizeof(message_t));
+    auto chunkSize = divUp(msgSize, nChunks);
 
-    if (octSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
+    if (msgSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
       throw std::logic_error("We don't support non-even divide yet");
 
     // TODO: Production logic needs every rank chunk
@@ -284,107 +284,13 @@ struct bisectPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
       auto wireOff = wireId_x * wireCapacity + gOff;
       ssize_t workLeft = workSize - wireOff;
 
-#if defined(__enable_prefetch__)
-      auto nextOff = wireOff + gOff;
-      auto nextLeft = workSize - nextOff;
-#endif
       if (workLeft > 0) { // Y parallel equals bisect Ranks
-#if defined(__enable_prefetch__)
-        if (nextLeft > cableTSize)
-          const_cast<bisectPAllReduce *>(this)-> template PreloadNext<unroll>(nextOff);
-#endif
         const_cast<bisectPAllReduce *>(this)->
           template scatterFar<unroll>(wireOff, tOff, workLeft);
         const_cast<bisectPAllReduce *>(this)->
           template closeUnifiedPollReduceScatterGather<unroll>(wireOff, tOff, workLeft);
         const_cast<bisectPAllReduce *>(this)->
           template pollFarGatherOutput<unroll>(wireOff, tOff, workLeft);
-      }
-    }
-  }
-
-private:
-  // TODO: buffer plan and start point calc
-  static size_t calcWorkSize(T* input, size_t size) {
-    // Input must be message size align
-    if ((uintptr_t)input % sizeof(message_t) != 0)
-      throw std::logic_error("We only support aligned pointer for now");
-
-    auto nChunks = NRanks;
-    auto octSize = divUp(size, sizeof(message_t));
-    auto chunkSize = divUp(octSize, nChunks);
-
-    if (octSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
-      throw std::logic_error("We don't support non-even divide yet");
-
-    // TODO: Production logic needs every rank chunk
-    return chunkSize * sizeof(message_t);
-  }
-
-  ssize_t workSize;
-};
-
-template <typename T,
-         int NRanks,
-         template <typename, int, int> class Transmit = BisectPPTransmit,
-         int SubGroupSize = 16>
-struct bisectPPAllReduce : public Transmit<T, NRanks, SubGroupSize> {
-  using Super = Transmit<T, NRanks, SubGroupSize>;
-  using message_t = typename Super::message_t;
-  constexpr static int unroll = 1 /*NPeers < 4 ? 4 : 2*/;
-  constexpr static int wireCapacity = Super::wireCapacity;
-  constexpr static int wireTransSize = Super::wireTransSize;
-  constexpr static int BiNRanks = NRanks/2;
-
-  bisectPPAllReduce(
-      T* input, size_t nelems, int rank, uint32_t seqNo,
-      T* scatterBuf, T* gatherBuf, T* const peerBuf0[], T* const peerBuf1[]
-  ) :
-  Super(input, scatterBuf, gatherBuf, peerBuf0, peerBuf1,
-      calcWorkSize(input, nelems * sizeof(T)), rank, seqNo
-    ), workSize(calcWorkSize(input, nelems * sizeof(T)))
-  {}
-
-  static int stage4Verify(T* host, int rank, uint32_t flag, size_t nelems);
-
-  //
-  // We use linear group configuration because subgroup is linear only
-  // And we want to control coalescing as much as possible
-  //
-  void operator() [[sycl::reqd_sub_group_size(SubGroupSize)]] (
-      sycl::nd_item<1> pos
-  ) const {
-    auto groupRange = pos.get_group_range()[0];
-    int subGroupXRange = pos.get_sub_group().get_group_range()[0]/BiNRanks/2;
-
-    auto cableCapacity = wireCapacity * subGroupXRange;
-    auto cableTSize = wireTransSize * subGroupXRange;
-
-    // 0, 1, 2, 3, 4, 5, 6, 7 work on same offset
-    auto subGroupXId = pos.get_sub_group().get_group_id()[0] /(BiNRanks *2);
-    auto subGroupYId = pos.get_sub_group().get_group_id()[0] %(BiNRanks *2);
-    auto groupId = pos.get_group().get_group_id()[0];
-
-    auto loopSize = groupRange * cableCapacity;
-    auto loopTSize = groupRange * cableTSize;
-
-    for (size_t gOff = 0, tOff = 0;
-        gOff < workSize; gOff += loopSize, tOff += loopTSize) {
-      auto wireOff = groupId * cableCapacity + subGroupXId * wireCapacity + gOff;
-      auto transOff = groupId * cableTSize + subGroupXId * wireTransSize + tOff;
-      ssize_t workLeft = workSize - wireOff;
-
-      if (workLeft > 0) { // Y parallel equals bisect Ranks
-        if (subGroupYId < 2) {
-          const_cast<bisectPPAllReduce *>(this)->
-            template scatterFar<unroll>(wireOff, transOff, workLeft);
-        } else if (subGroupYId < 4) {
-          const_cast<bisectPPAllReduce *>(this)->
-            template pollFarGatherOutput<unroll>(wireOff, transOff, workLeft);
-        } else if (subGroupYId < 8) {
-          const_cast<bisectPPAllReduce *>(this)->
-           template closeUnifiedPollReduceScatterGather<unroll>(wireOff, transOff, workLeft);
-        }
       }
     }
   }
