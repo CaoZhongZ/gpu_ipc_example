@@ -56,7 +56,7 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
             "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
-            : "=rw"(reinterpret_cast<inner_t &>(v) : "rw"(src + off));
+            : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
       if constexpr (SubGroupSize == 32)
         asm volatile ("\n" // Add this partial load to tvisa
             "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
@@ -573,7 +573,7 @@ template <typename T, int SubGroupSize> struct Rt64 {
             "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[dataElem]));
 #else
-      dst[off] = v[i][dataElem];
+      dst[off] = v[dataElem];
 #endif
     }
   }

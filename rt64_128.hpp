@@ -360,7 +360,7 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscStore<SubGroupSize>(dst + off, v);
 #else
-      (void)off; (void)local_off;
+      (void)off;
 #endif
     }
   }
@@ -817,7 +817,7 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       lscStore<SubGroupSize>(dst + off, v);
 #else
-      (void)off; (void)local_off;
+      (void)off;
 #endif
     }
   }
