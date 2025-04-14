@@ -16,7 +16,7 @@ arch_string=ats-m150
 arch_support=-DDG2
 endif
 
-OPT=-O3 -fno-strict-aliasing
+OPT=-O3 -fno-strict-aliasing -DLOCAL_TEST
 # OPT=-g -fno-strict-aliasing
 # VERBOSE=-D__enable_device_verbose__
 #

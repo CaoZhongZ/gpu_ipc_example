@@ -303,6 +303,7 @@ public:
 
     auto inputOffInType = inputOffset / sizeof(T);
     auto flag = seqNo + tStep / nSlot;
+    auto slot = (seqNo + tStep) % nSlot;
     auto nelems = workLeft / sizeof(T);
 
     constexpr auto eltPerPack = unroll * wireCapacityInType;
@@ -320,7 +321,7 @@ public:
 
     shuffleData(v);
     insertFlags(v, flag);
-    sendMessages(scatterSink[peer][tStep%nSlot][wireId], v);
+    sendMessages(scatterSink[peer][slot][wireId], v);
 
     sbarrier_signal_compat();
 
@@ -339,7 +340,7 @@ public:
       do {
         retry = false;
         retry |= recvMessages(
-            messages, localScatterSink[peer][tStep%nSlot][wireId], flag);
+            messages, localScatterSink[peer][slot][wireId], flag);
       } while (sycl::any_of_group(
             sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
@@ -347,7 +348,7 @@ public:
       shuffleData(v);
       accumMessages(v, messages);
       insertFlags(v, flag);
-      sendMessages(scatterSink[peer][tStep % nSlot][wireId], v);
+      sendMessages(scatterSink[peer][slot][wireId], v);
 
       sbarrier_signal_compat();
     }
@@ -365,7 +366,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          messages, localScatterSink[peer][tStep%nSlot][wireId], flag);
+          messages, localScatterSink[peer][slot][wireId], flag);
     } while (sycl::any_of_group(
           sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
       );
@@ -374,7 +375,7 @@ public:
     accumMessages(v, messages);
 
     insertFlags(v, flag);
-    sendMessages(gatherSink[peer][tStep % nSlot][wireId], v);
+    sendMessages(gatherSink[peer][slot][wireId], v);
     sbarrier_signal_compat();
 
     restoreData(v);
@@ -393,13 +394,13 @@ public:
       do {
         retry = false;
         retry |= recvMessages(
-            v, localGatherSink[peer][tStep%nSlot][wireId], flag);
+            v, localGatherSink[peer][slot][wireId], flag);
       } while (sycl::any_of_group(
             sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
 
       insertFlags(v, flag);
-      sendMessages(gatherSink[peer][tStep % nSlot][wireId], v);
+      sendMessages(gatherSink[peer][slot][wireId], v);
       sbarrier_signal_compat();
 
       restoreData(v);
@@ -417,7 +418,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          v, localGatherSink[peer][tStep%nSlot][wireId], flag);
+          v, localGatherSink[peer][slot][wireId], flag);
     } while (sycl::any_of_group(
           sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
       );
@@ -439,6 +440,7 @@ public:
 
     auto inputOffInType = inputOffset / sizeof(T);
     auto flag = seqNo + tStep / nSlot;
+    auto slot = (seqNo + tStep) % nSlot;
     auto nelems = workLeft / sizeof(T);
 
     message_t v[unroll];
@@ -455,7 +457,7 @@ public:
 
     shuffleData(v);
     insertFlags(v, flag);
-    sendMessages(gatherSink[peer][tStep%nSlot][wireId], v);
+    sendMessages(gatherSink[peer][slot][wireId], v);
 
     sbarrier_signal_compat();
 
@@ -469,12 +471,12 @@ public:
       do {
         retry = false;
         retry |= recvMessages(
-            v, localGatherSink[peer][tStep%nSlot][wireId], flag);
+            v, localGatherSink[peer][slot][wireId], flag);
       } while (sycl::any_of_group(
             sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
         );
 
-      sendMessages(gatherSink[peer][tStep % nSlot][wireId], v);
+      sendMessages(gatherSink[peer][slot][wireId], v);
       sbarrier_signal_compat();
 
       restoreData(v);
@@ -492,7 +494,7 @@ public:
     do {
       retry = false;
       retry |= recvMessages(
-          v, localGatherSink[peer][tStep%nSlot][wireId], flag);
+          v, localGatherSink[peer][slot][wireId], flag);
     } while (sycl::any_of_group(
           sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
       );
