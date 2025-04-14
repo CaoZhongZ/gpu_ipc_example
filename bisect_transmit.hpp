@@ -1,8 +1,5 @@
 #pragma once
 
-//
-// Requires multiple dimension launch with Y dimention equal to 'BiNRanks'
-//
 template <typename T, int NRanks, int SubGroupSize>
 class BisectPTransmit {
   constexpr static int BiNRanks = NRanks / 2;
@@ -286,18 +283,6 @@ private:
 #endif
   }
 public:
-  template <int unroll> inline void PreloadNext(
-      size_t inputOffset
-  ) {
-    // given ioForPeers vs. ioForFar is stride with multiple of 1024
-    // Presume loss of L1 for accessing each other
-    auto wireId = sycl::ext::oneapi::this_work_item::
-      get_nd_item<1>().get_global_id(0) / SubGroupSize;
-    auto y_id = wireId % BiNRanks;
-    preload<unroll>(ioForPeers + y_id * workElems + inputOffset/sizeof(T));
-    preload<unroll>(ioForFar + y_id * workElems + inputOffset/sizeof(T));
-  }
-
   template <int unroll> inline void scatterFar(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
@@ -496,6 +481,208 @@ protected:
     }
   }
 
+  // --------------------Input/Output buffer-------------------
+  // Input partitions
+  T* ioForPeers;
+  T* ioForFar;
+  ssize_t workElems;
+
+  // ---------------------IPC buffers-------------------------
+  ringPtr farScatterSink;
+  ringPtr farGatherSink;
+
+  // ----------------Sinks, written by remotes----------------
+  ringPtr localFarScatterSink;
+  ringPtr localFarGatherSink;
+
+  int l_rank;
+  uint32_t seqNo;
+
+  ringPtr scatterSink[BiNRanks];
+  ringPtr gatherSink[NPeers];
+
+  ringPtr localScatterSink[NPeers];
+  ringPtr localGatherSink;
+};
+
+template <typename T, int NRanks,
+         template <typename, int> class Proto, int SubGroupSize = 16>
+class BisectTransmit {
+protected:
+  using ProtoT = Proto<T, SubGroupSize>;
+
+  using typename ProtoT::message_t;
+  using ProtoT::wireCapacityInType;
+
+  using ProtoT::wireTransSize;
+  using ProtoT::wireTransElems;
+
+  using ProtoT::loadInput;
+  using ProtoT::shuffleData;
+  using ProtoT::insertFlags;
+  using ProtoT::sendMessages;
+  using ProtoT::recvMessages;
+  using ProtoT::accumMessages;
+  using ProtoT::restoreData;
+  using ProtoT::storeOutput;
+  using ProtoT::wireCapacity;
+
+  constexpr static int BiNRanks = NRanks / 2;
+  constexpr static int NPeers = BiNRanks -1;
+  static constexpr int parallel_sg = BiNRanks;
+
+  constexpr static size_t nSlot = 8;
+  constexpr static size_t maxLaunch = 64 * 64; // 64 wire, 64 bundle
+
+  typedef T (* ringPtr)[nSlot][maxLaunch/BiNRanks][wireTransElems];
+  constexpr static size_t ringSize = nSlot * maxLaunch * wireTransSize;
+
+protected:
+  BisectTransmit(
+      T* input,
+      T* scatterBuf, T* gatherBuf,
+      T* const peerBuf0[], T* const peerBuf1[],
+      size_t workSize, int rank, uint32_t seqNo
+  ) :workElems(workSize / sizeof(T)), l_rank(rank/2), seqNo(seqNo) {
+    auto pairRank = rank ^ 1;
+    auto* pairBuf0 = peerBuf0[pairRank];
+    auto* pairBuf1 = peerBuf1[pairRank];
+
+    auto ioClosePart = [&](T* p) {
+      return (rank & 1) ? (T *)((uintptr_t)p + workSize * BiNRanks) : p;
+    };
+    auto ioFarPart = [&](T* p) {
+      return (rank & 1) ? p : (T *)((uintptr_t)p + workSize * BiNRanks);
+    };
+    auto ipcClosePart = [&](T *p) {
+      return p;
+    };
+    auto ipcFarPart = [&](T* p) {
+      return (T *)((uintptr_t)p + ringSize);
+    };
+
+    ioForPeers = ioClosePart(input);
+    ioForFar = ioFarPart(input);
+  }
+
+public:
+  inline void scatterFar(
+      size_t inputOffset, size_t tStep, ssize_t workLeft
+  ) {
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto flag = seqNo + tStep / nSlot;
+    auto nelems = workLeft / sizeof(T);
+
+    auto wireId = sycl::ext::oneapi::this_work_item::get_nd_item<1>()
+      .get_global_id(0) / SubGroupSize;
+    auto rank_id = wireId % BiNRanks;
+    auto *ptr = ioForFar + rank_id * workElems + inputOffInType;
+
+    message_t messages;
+
+    // could loop certain steps
+    loadInput(messages, ptr, nelems);
+
+    shuffleData(messages);
+    insertFlags(messages, flag);
+
+    sendMessages(farScatterSink[tStep % nSlot][wireId], messages);
+  }
+
+  inline void pollFarGatherOutput(
+      size_t inputOffset, size_t tStep, ssize_t workLeft
+  ) {
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto flag = seqNo + tStep / nSlot;
+    auto nelems = workLeft / sizeof(T);
+
+    auto wireId = sycl::ext::oneapi::this_work_item::get_nd_item<1>().
+      get_global_id(0) / SubGroupSize;
+    auto rank_id = wireId % BiNRanks;
+
+    message_t messages;
+    bool retry;
+    do {
+      retry = false;
+      retry |= recvMessages(
+          messages, localFarGatherSink[tStep % nSlot][wireId], flag
+      );
+    } while(sycl::any_of_group(
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
+      );
+
+    restoreData(messages);
+    storeOutput(ioForFar + rank_id * workElems + inputOffInType, messages, nelems);
+  }
+
+  inline void closeUnifiedPollReduceScatterGather(
+      size_t inputOffset, size_t tStep, ssize_t workLeft
+  ) {
+    auto wireId = sycl::ext::oneapi::this_work_item::get_nd_item<1>()
+      .get_global_id(0) / SubGroupSize;
+    auto rank_id = wireId % BiNRanks;
+    auto wireId_g = wireId / BiNRanks * BiNRanks;
+
+    auto inputOffInType = inputOffset / sizeof(T);
+    auto flag = seqNo + tStep / nSlot;
+    auto nelems = workLeft / sizeof(T);
+
+    message_t v; // more than one in future?
+    auto* ioPtr = ioForPeers + rank_id * workElems + inputOffInType;
+    loadInput(v, ioPtr, nelems);
+
+    message_t messages;
+
+    bool retry;
+    do {
+      retry = false;
+      retry |= recvMessages(
+          messages, localFarScatterSink[tStep%nSlot][wireId], flag
+      );
+    } while(
+        sycl::any_of_group(sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
+    );
+
+    shuffleData(v);
+    accumMessages(v, messages);
+
+    // ------------------ diverge N:1 -----------------------
+    if (rank_id != l_rank) {
+      insertFlags(v, flag);
+      sendMessages(scatterSink[rank_id][tStep%nSlot][wireId_g], v);
+
+      bool retry;
+      do {
+        retry = false;
+        retry |= recvMessages(v, localGatherSink[tStep%nSlot][wireId], flag);
+      } while(sycl::any_of_group(
+            sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
+        );
+    } else {
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i) {
+        bool retry;
+        do {
+          retry = false;
+          retry |= recvMessages(
+              messages, localScatterSink[i][tStep%nSlot][wireId_g], flag);
+        } while (sycl::any_of_group(
+              sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
+          );
+        accumMessages(v, messages);
+      }
+      insertFlags(v, flag);
+#     pragma unroll
+      for (int i = 0; i < NPeers; ++ i)
+        sendMessages(gatherSink[i][tStep%nSlot][wireId_g], v);
+    } // -------------------- converge -------------------
+
+    sendMessages(farGatherSink[tStep%nSlot][wireId], v);
+    restoreData(v);
+    storeOutput(ioPtr, v, nelems);
+  }
+
+protected:
   // --------------------Input/Output buffer-------------------
   // Input partitions
   T* ioForPeers;

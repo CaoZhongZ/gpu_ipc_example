@@ -111,10 +111,10 @@ private:
       throw std::logic_error("We only support aligned pointer for now");
 
     auto nChunks = NRanks;
-    auto octSize = divUp(size, sizeof(message_t));
-    auto chunkSize = divUp(octSize, nChunks);
+    auto msgSize = divUp(size, sizeof(message_t));
+    auto chunkSize = divUp(msgSize, nChunks);
 
-    if (octSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
+    if (msgSize * sizeof(message_t) != size || chunkSize * sizeof(message_t) * nChunks > size)
       throw std::logic_error("We don't support non-even divide yet");
 
     // TODO: Production logic needs every rank chunk

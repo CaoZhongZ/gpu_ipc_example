@@ -224,7 +224,7 @@ protected:
 };
 
 template <typename T, int NRanks,
-         template <typename, int> class Proto, int SubGroupSize = 16, int unroll = 1>
+         template <typename, int> class Proto, int SubGroupSize = 16>
 class RingTransmit : public Proto<T, SubGroupSize> {
 protected:
   static constexpr int parallel_sg = 1;
@@ -244,16 +244,19 @@ protected:
   using ProtoT::accumMessages;
   using ProtoT::restoreData;
   using ProtoT::storeOutput;
-
-  static constexpr auto wireCapacity = ProtoT::wireCapacity * unroll;
+  using ProtoT::wireCapacity;
 
 public:
   constexpr static size_t nSlot = 4;
+#if defined(BMG)
+  constexpr static size_t maxLaunch = 64 * 20;
+#else
   constexpr static size_t maxLaunch = 64 * 64;
-  constexpr static size_t ringSize = maxLaunch * wireTransSize * unroll * nSlot;
+#endif
+  constexpr static size_t ringSize = maxLaunch * wireTransSize * nSlot;
   static_assert(ringSize <= 4 * 1024 * 1024ull * SubGroupSize/16);
 
-  typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems * unroll];
+  typedef T (* ringPtr)[nSlot][maxLaunch][wireTransElems];
 
 public:
   RingTransmit(
@@ -291,8 +294,12 @@ public:
     localScatterSink = reinterpret_cast<ringPtr>((uintptr_t)scatterBuf);
     localGatherSink = reinterpret_cast<ringPtr>((uintptr_t)gatherBuf);
   }
+  template <int __dummy__> inline void run(
+      size_t inputOffset, size_t tStep, ssize_t workLeft
+  ) {
+    run(inputOffset, tStep, workLeft);
+  }
 
-  template <int __dummy__>
   inline void run(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
@@ -306,10 +313,10 @@ public:
     auto slot = (seqNo + tStep) % nSlot;
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = unroll * wireCapacityInType;
+    constexpr auto eltPerPack = wireCapacityInType;
 
-    message_t v[unroll];
-    message_t messages[unroll];
+    message_t v;
+    message_t messages;
 
     uint32_t p_idx = 0;
     int peer = (rank + p_idx) % NRanks;
@@ -443,7 +450,7 @@ public:
     auto slot = (seqNo + tStep) % nSlot;
     auto nelems = workLeft / sizeof(T);
 
-    message_t v[unroll];
+    message_t v;
 
     uint32_t p_idx = 0;
     int peer = (rank + p_idx) % NRanks;
