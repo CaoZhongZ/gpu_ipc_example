@@ -534,6 +534,7 @@ protected:
   constexpr static size_t nSlot = 8;
   constexpr static size_t maxLaunch = 64 * 64; // 64 wire, 64 bundle
 
+  //for one set: T ring[BiNRanks][nSlot][maxLaunch/BiNRanks][wireTransElems];
   typedef T (* ringPtr)[nSlot][maxLaunch/BiNRanks][wireTransElems];
   constexpr static size_t ringSize = nSlot * maxLaunch * wireTransSize;
 

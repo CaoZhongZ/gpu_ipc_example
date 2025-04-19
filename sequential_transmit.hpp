@@ -297,10 +297,10 @@ public:
   template <int __dummy__> inline void run(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
-    run(inputOffset, tStep, workLeft);
+    runAllreduce(inputOffset, tStep, workLeft);
   }
 
-  inline void run(
+  inline void runAllreduce(
       size_t inputOffset, size_t tStep, ssize_t workLeft
   ) {
     if (workLeft <= 0) return;
@@ -313,8 +313,6 @@ public:
     auto slot = (seqNo + tStep) % nSlot;
     auto nelems = workLeft / sizeof(T);
 
-    constexpr auto eltPerPack = wireCapacityInType;
-
     message_t v;
     message_t messages;
 
@@ -323,8 +321,7 @@ public:
 
     // Step 0
     auto* ptr = ingress + peer * workElems + inputOffInType;
-    if (nelems < eltPerPack) loadInput(v, ptr, nelems);
-    else loadInput(v, ptr);
+    loadInput(v, ptr, nelems);
 
     shuffleData(v);
     insertFlags(v, flag);
@@ -339,8 +336,8 @@ public:
       peer = (rank + p_idx) % NRanks;
       ptr = ingress + peer * workElems + inputOffInType;
 
-      if (nelems < eltPerPack) loadInput(v, ptr, nelems);
-      else loadInput(v, ptr);
+      loadInput(v, ptr, nelems);
+
       sbarrier_wait_compat();
 
       bool retry;
@@ -364,8 +361,7 @@ public:
     p_idx = (p_idx -1) % NRanks;
     peer = (rank + p_idx) % NRanks;
     ptr = ingress + peer * workElems + inputOffInType;
-    if (nelems < eltPerPack) loadInput(v, ptr, nelems);
-    else loadInput(v, ptr);
+    loadInput(v, ptr, nelems);
 
     sbarrier_wait_compat();
 
@@ -387,8 +383,7 @@ public:
 
     restoreData(v);
 
-    if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
-    else storeOutput(ptr, v);
+    storeOutput(ptr, v, nelems);
 
     // write back
 #   pragma unroll
@@ -414,8 +409,7 @@ public:
 
       auto* ptr = ingress + peer * workElems + inputOffInType;
 
-      if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
-      else storeOutput(ptr, v);
+      storeOutput(ptr, v, nelems);
     }
 
     p_idx = (p_idx -1) % NRanks;
@@ -433,8 +427,7 @@ public:
     restoreData(v);
 
     ptr = ingress + peer * workElems + inputOffInType;
-    if (nelems < eltPerPack) storeOutput(ptr, v, nelems);
-    else storeOutput(ptr, v);
+    storeOutput(ptr, v, nelems);
   }
 
   inline void runAllgather(
