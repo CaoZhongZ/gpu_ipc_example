@@ -995,8 +995,8 @@ sycl::event testAllgather(
 template <typename T, template <typename, int, int> class Transmit>
 sycl::event testBisectTransmit (
     sycl::nd_range<1> launchParam,
-    sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
-    sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t nelems,
+    T* input, T* ipcbuf0, T* ipcbuf1,
+    T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
   if (subgroup == 16) {
     constexpr int SubGroupSize = 16;
@@ -1005,7 +1005,7 @@ sycl::event testBisectTransmit (
       return queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 4, Transmit, SubGroupSize>(
+          bisectPAllReduce<T, 4, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
@@ -1013,7 +1013,7 @@ sycl::event testBisectTransmit (
       return queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 8, Transmit, SubGroupSize>(
+          bisectPAllReduce<T, 8, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
@@ -1021,7 +1021,7 @@ sycl::event testBisectTransmit (
       return queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 16, Transmit, SubGroupSize>(
+          bisectPAllReduce<T, 16, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
@@ -1035,7 +1035,7 @@ sycl::event testBisectTransmit (
       return queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 4, Transmit, SubGroupSize>(
+          bisectPAllReduce<T, 4, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
@@ -1043,7 +1043,7 @@ sycl::event testBisectTransmit (
       return queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 8, Transmit, SubGroupSize>(
+          bisectPAllReduce<T, 8, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
     ));});
@@ -1051,7 +1051,7 @@ sycl::event testBisectTransmit (
       return queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
           launchParam,
-          bisectPAllReduce<sycl::half, 16, Transmit, SubGroupSize>(
+          bisectPAllReduce<T, 16, Transmit, SubGroupSize>(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
     ));});
@@ -1212,6 +1212,8 @@ sycl::event testAllgather(
   }
 }
 
+using bf16 = sycl::ext::oneapi::bfloat16;
+
 template sycl::event testTransmit<sycl::half, Rt64, ParallelTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
@@ -1224,11 +1226,29 @@ template sycl::event testTransmit<sycl::half, Rt64_128, ParallelTransmit>(
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 
+template sycl::event testTransmit<bf16, Rt64, ParallelTransmit>(
+    sycl::nd_range<1> launchParam,
+    bf16* input, bf16* ipcbuf0, bf16* ipcbuf1,
+    bf16* const peerbuf0[], bf16* const peerbuf1[], size_t size,
+    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
+
+template sycl::event testTransmit<bf16, Rt64_128, ParallelTransmit>(
+    sycl::nd_range<1> launchParam,
+    bf16* input, bf16* ipcbuf0, bf16* ipcbuf1,
+    bf16* const peerbuf0[], bf16* const peerbuf1[], size_t size,
+    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
+
 #if defined(XE_PLUS)
 template sycl::event testBisectTransmit<sycl::half, BisectPTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
     sycl::half* const peerbuf0[], sycl::half* const peerbuf1[], size_t size,
+    int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
+
+template sycl::event testBisectTransmit<bf16, BisectPTransmit>(
+    sycl::nd_range<1> launchParam,
+    bf16* input, bf16* ipcbuf0, bf16* ipcbuf1,
+    bf16* const peerbuf0[], bf16* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
 #endif
 
@@ -1251,4 +1271,25 @@ template sycl::event testAllgather<sycl::half>(
 
 template int verifyAllgather<sycl::half>(
     sycl::half* host, int rank, int world, size_t nelems
+);
+
+template int verifyTransmit<bf16>(
+    bf16 *, bf16 *, uint32_t, int, int, uint32_t, size_t);
+
+template sycl::event testTransmit<bf16>(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    bf16* input, bf16* ipcbuf0, bf16* ipcbuf1,
+    bf16* const peerbuf0[], bf16* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue);
+
+template sycl::event testAllgather<bf16>(
+    std::string transmitType,
+    sycl::nd_range<1> launchParam,
+    bf16* input, bf16* output, bf16* ipcbuf0, bf16* ipcbuf1,
+    bf16* const peerbuf0[], bf16* const peerbuf1[], size_t nelems,
+    int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue);
+
+template int verifyAllgather<bf16>(
+    bf16* host, int rank, int world, size_t nelems
 );

@@ -42,7 +42,7 @@ void extract_profiling(sycl::event e, int rank) {
   std::cout<<"["<<rank<<"] Running time: "<<(end - start)<<"ns"<<std::endl;
 };
 
-using test_type = sycl::half;
+using test_type = sycl::ext::oneapi::bfloat16;
 
 template <typename T>
 static void benchAllreduce(
