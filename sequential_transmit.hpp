@@ -301,6 +301,36 @@ public:
     runAllreduce(inputOffset, tStep, workLeft);
   }
 
+  static inline void pollMessages(message_t& messages, T* adrs, uint32_t flag) {
+#if defined(__enable_device_verbose__)
+    uint32_t count = 100000;
+#endif
+    bool retry;
+    do {
+      retry = false;
+      retry |= recvMessages(messages, adrs, flag);
+    } while (sycl::any_of_group(
+          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
+#if defined(__enable_device_verbose__)
+        && count -- != 0
+#endif
+        );
+#if defined(__enable_device_verbose__)
+    auto lane = sycl::ext::oneapi::this_work_item::get_nd_item<1>();
+    if (lane.get_local_id(0) == 0)
+      sycl::ext::oneapi::experimental::printf("Count remain: %d\n", count);
+
+    if (lane.get_global_id(0) % SubGroupSize == SubGroupSize -1)
+      sycl::ext::oneapi::experimental::printf(
+          "%x,%x,%x,%x\n",
+          messages[0], messages[1], messages[2], messages[3]);
+    else
+      sycl::ext::oneapi::experimental::printf(
+          "%x,%x,%x,%x; ",
+          messages[0], messages[1], messages[2], messages[3]);
+#endif
+  }
+
   inline void send(
       int wireId, int peer, size_t offset,
       uint32_t flag, uint32_t slot, ssize_t nelems
@@ -326,15 +356,8 @@ public:
     auto* ptr = ingress + peer * workElems + offset; 
     loadInput(v, ptr, nelems);
 
-    bool retry;
     sbarrier_wait_compat();
-    do {
-      retry = false;
-      retry |= recvMessages(
-          messages, localScatterSink[peer][slot][wireId], flag);
-    } while (sycl::any_of_group(
-          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-      );
+    pollMessages(messages, localScatterSink[peer][slot][wireId], flag);
 
     shuffleData(v);
     accumMessages(v, messages);
@@ -354,15 +377,8 @@ public:
     auto* ptr = ingress + peer * workElems + offset;
     loadInput(v, ptr, nelems);
 
-    bool retry;
     sbarrier_wait_compat();
-    do {
-      retry = false;
-      retry |= recvMessages(
-          messages, localScatterSink[peer][slot][wireId], flag);
-    } while (sycl::any_of_group(
-          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-      );
+    pollMessages(messages, localScatterSink[peer][slot][wireId], flag);
 
     shuffleData(v);
     accumMessages(v, messages);
@@ -383,15 +399,8 @@ public:
   ) {
     message_t v;
 
-    bool retry;
     sbarrier_wait_compat();
-    do {
-      retry = false;
-      retry |= recvMessages(
-          v, localGatherSink[peer][slot][wireId], flag);
-    } while (sycl::any_of_group(
-          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-      );
+    pollMessages(v, localGatherSink[peer][slot][wireId], flag);
 
     insertFlags(v, flag);
     sendMessages(gatherSink[peer][slot][wireId], v);
@@ -410,15 +419,7 @@ public:
     message_t v;
 
     sbarrier_wait_compat();
-    bool retry;
-    do {
-      retry = false;
-      retry |= recvMessages(
-          v, localGatherSink[peer][slot][wireId], flag);
-    } while (sycl::any_of_group(
-          sycl::ext::oneapi::this_work_item::get_sub_group(), retry)
-      );
-
+    pollMessages(v, localGatherSink[peer][slot][wireId], flag);
     restoreData(v);
 
     auto* ptr = egress + peer * workElems + offset;
