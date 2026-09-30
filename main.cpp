@@ -76,9 +76,10 @@ static void benchAllreduce(
     queue.memcpy(host_verify, ipcbuf0, interm_size * 2);
     queue.memcpy(host_init, input, alloc_size).wait();
 
-    verifyTransmit<test_type>(
-        host_verify, host_init, flag, rank, world, simd, nelems
-    );
+    if (verifyTransmit<test_type>(
+          host_verify, host_init, flag, rank, world, simd, nelems
+        ) != 0)
+      throw std::runtime_error("All-reduce verification failed");
     std::cout<<std::dec;
     return;
   }
@@ -135,9 +136,10 @@ static void benchAllgather(
   if (verify) {
     queue.memcpy(host_init, output, alloc_size * world).wait();
 
-    verifyAllgather<test_type>(
-        host_init, rank, world, nelems
-    );
+    if (verifyAllgather<test_type>(
+          host_init, rank, world, nelems
+        ) != 0)
+      throw std::runtime_error("All-gather verification failed");
     std::cout<<std::dec;
     return;
   }
@@ -221,6 +223,29 @@ int main(int argc, char* argv[]) {
   MPI_Comm_size(MPI_COMM_WORLD, &world);
   MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+#if defined(CRI)
+  if (world != 2)
+    throw std::logic_error("CRI supports only the two-card Xe2/BMG topology");
+  if (simd != 16)
+    throw std::logic_error(
+        "CRI Xe2/BMG protocols require SIMD16 for a 256-byte store");
+#endif
+
+  if (rank == 0) {
+    std::cout<<"Communication store L1 cache policy: "
+      <<ipc_cache::CommCachePolicyName<<std::endl;
+#if defined(CRI)
+    std::cout<<"CRI protocol: Xe2/BMG PCIe, SIMD16 x 16 bytes = 256 bytes"
+      <<std::endl;
+#endif
+  }
+
+  if (rank >= static_cast<int>(devices.size())
+      || devices[rank] < '0' || devices[rank] > '9') {
+    throw std::logic_error(
+        "Device list must contain one decimal device index per MPI rank");
+  }
+
   size_t alloc_size = nelems * sizeof(test_type);
   size_t interm_size = world * 8 * 1024 * 1024; // rough estimation
   int device = devices[rank] - '0';
@@ -238,8 +263,14 @@ int main(int argc, char* argv[]) {
   if (!pcie && !p2p)
     std::cout<<"Request p2p but not support, revert back to host"<<std::endl;
 
-  auto* ipcbuf0 = !p2p ? (test_type *)sycl::malloc_host(interm_size * 2, queue)
-	  : (test_type *)sycl::malloc_device(interm_size * 2, queue);
+  constexpr size_t ipcAlignment = 256;
+  auto* ipcbuf0 = !p2p
+    ? (test_type *)sycl::aligned_alloc_host(
+        ipcAlignment, interm_size * 2, queue)
+    : (test_type *)sycl::aligned_alloc_device(
+        ipcAlignment, interm_size * 2, queue);
+  if (ipcbuf0 == nullptr)
+    throw std::bad_alloc();
   auto* ipcbuf1 = (test_type *)((uintptr_t)ipcbuf0 + interm_size);
 
   __scope_guard free_pointers([&]{
@@ -267,6 +298,13 @@ int main(int argc, char* argv[]) {
   [&](void *p){
       return (test_type *)((uintptr_t)p + interm_size);
   });
+
+  for (int i = 0; i < world; ++ i) {
+    if ((uintptr_t)peerbuf0[i] % ipcAlignment != 0
+        || (uintptr_t)peerbuf1[i] % ipcAlignment != 0) {
+      throw std::logic_error("IPC communication buffers must be 256-byte aligned");
+    }
+  }
 
   auto l0_ctx = sycl::get_native<
     sycl::backend::ext_oneapi_level_zero>(queue.get_context());

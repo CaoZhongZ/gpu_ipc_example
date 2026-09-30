@@ -9,8 +9,8 @@ class BisectPTransmit {
   constexpr static int lastElem = nReg128B -1;
 
   // Configurations
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto CommReadCacheCtrl = ipc_cache::CommReadCacheCtrl;
+  constexpr static auto CommWriteCacheCtrl = ipc_cache::CommWriteCacheCtrl;
   constexpr static auto PrefetchCacheCtrl = CacheCtrl::DEFAULT;
 
 protected:

@@ -8,17 +8,20 @@ template <typename T, int SubGroupSize> struct Rt64_128_PCIE {
 
   constexpr static size_t wireCapacity = payloadChannels * sizeof(message_t);
   constexpr static size_t wireTransSize = SubGroupSize * sizeof(message_t);
+#if defined(CRI)
+  static_assert(SubGroupSize == 16,
+      "CRI PCIe protocol requires a 16-lane subgroup");
+  static_assert(wireTransSize == 256,
+      "CRI PCIe protocol store must be exactly 256 bytes");
+#endif
 
   constexpr static size_t wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static size_t wireTransElems = wireTransSize/ sizeof(T);
 
-#if defined(XE_PLUS)
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
-#else
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
-#endif
+  constexpr static auto CommReadCacheCtrl =
+      ipc_cache::PcieCommReadCacheCtrl;
+  constexpr static auto CommWriteCacheCtrl =
+      ipc_cache::PcieCommWriteCacheCtrl;
 
   //
   // Process of pack messages
@@ -551,8 +554,8 @@ template <typename T, int SubGroupSize> struct Rt64_128 {
   constexpr static size_t wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static size_t wireTransElems = wireTransSize/ sizeof(T);
 
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto CommReadCacheCtrl = ipc_cache::CommReadCacheCtrl;
+  constexpr static auto CommWriteCacheCtrl = ipc_cache::CommWriteCacheCtrl;
 
   //
   // Process of pack messages

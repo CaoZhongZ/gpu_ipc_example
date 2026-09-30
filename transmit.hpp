@@ -3,6 +3,8 @@
 #include <sycl/sycl.hpp>
 #include <gen_visa_templates.hpp>
 
+#include "cache_control.hpp"
+
 #define divUp(x, m)  \
   (((x) + (m) -1) / (m))
 

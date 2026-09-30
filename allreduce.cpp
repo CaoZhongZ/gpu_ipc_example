@@ -545,6 +545,7 @@ template <typename T> int verifyAllReduce(
       std::cout<<"Error Compare! Expected: "
         <<allreduceResult[i] <<", got: "<<host[i]
         <<"@["<<rank<<"]("<<i<<");"<<std::endl;
+      return 1;
     }
   }
   return 0;
@@ -579,6 +580,7 @@ template <typename T> int verifyAllgather(
       std::cout<<"Error Compare! Expected: "
         <<allgatherResult[i] <<", got: "<<host[i]
         <<"@["<<rank<<"]("<<i<<");"<<std::endl;
+      return 1;
     }
   }
   return 0;
@@ -833,8 +835,7 @@ template<typename T>
 int verifyTransmit(
     T* host, T* host2, uint32_t step, int rank, int world, uint32_t simd, size_t nelems
 ) {
-  verifyAllReduce(host2, rank, world, nelems);
-  return 0;
+  return verifyAllReduce(host2, rank, world, nelems);
 }
 
 //
@@ -860,6 +861,7 @@ sycl::event testTransmit(
               input, nelems, rank, step,
               ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
+#if !defined(CRI)
     case 4:
       return queue.submit([&](sycl::handler &cgh) {
           cgh.parallel_for(
@@ -876,11 +878,12 @@ sycl::event testTransmit(
               input, nelems, rank, step,
               ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
+#endif
     default:
       throw std::logic_error("Unsupported communication topology");
     }
   }
-#if defined(XE_PLUS)
+#if defined(XE_PLUS) && !defined(CRI)
   else if (subgroup == 32) {
     constexpr int SubGroupSize = 32;
     switch(world) {
@@ -892,6 +895,7 @@ sycl::event testTransmit(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
+#if !defined(CRI)
     case 4:
       return queue.submit([&](sycl::handler &cgh) {
         cgh.parallel_for(
@@ -908,6 +912,7 @@ sycl::event testTransmit(
             input, nelems, rank, step,
             ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
         ));});
+#endif
     default:
       throw std::logic_error("Unsupported communication topology");
     }
@@ -937,6 +942,7 @@ sycl::event testAllgather(
               input, output, nelems, rank, step,
               ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
+#if !defined(CRI)
     case 4:
       return queue.submit([&](sycl::handler &cgh) {
           cgh.parallel_for(
@@ -953,9 +959,11 @@ sycl::event testAllgather(
               input, output, nelems, rank, step,
               ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
+#endif
     default:
       throw std::logic_error("Unsupported communication topology");
     }
+#if !defined(CRI)
   } else if (subgroup == 32) {
     constexpr int SubGroupSize = 32;
     switch(world) {
@@ -967,6 +975,7 @@ sycl::event testAllgather(
               input, output, nelems, rank, step,
               ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
+#if !defined(CRI)
     case 4:
       return queue.submit([&](sycl::handler &cgh) {
           cgh.parallel_for(
@@ -983,15 +992,17 @@ sycl::event testAllgather(
               input, output, nelems, rank, step,
               ipcbuf0, ipcbuf1, peerbuf0, peerbuf1
       ));});
+#endif
     default:
       throw std::logic_error("Unsupported communication topology");
     }
+#endif
   } else {
     throw std::logic_error("Unsupported Sub-group size");
   }
 }
 
-#if defined(XE_PLUS)
+#if defined(XE_PLUS) && !defined(CRI)
 template <typename T, template <typename, int, int> class Transmit>
 sycl::event testBisectTransmit (
     sycl::nd_range<1> launchParam,
@@ -1126,13 +1137,21 @@ sycl::event testTransmit(
     T* const peerbuf0[], T* const peerbuf1[], size_t nelems,
     int rank, int world, uint32_t step, uint32_t subgroup, sycl::queue queue) {
   if (transmitType == "small") {
+#if defined(CRI)
+    return testTransmit<T, Rt64_PCIE, ParallelTransmit>(
+#else
     return testTransmit<T, Rt64, ParallelTransmit>(
+#endif
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
     );
   } else if (transmitType == "simple") {
+#if defined(CRI)
+    return testTransmit<T, Rt64_128_PCIE, ParallelTransmit>(
+#else
     return testTransmit<T, Rt64_128, ParallelTransmit>(
+#endif
         launchParam,
         input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
         nelems, rank, world, step, subgroup, queue
@@ -1150,7 +1169,7 @@ sycl::event testTransmit(
         nelems, rank, world, step, subgroup, queue
     );
   }
-#if defined(XE_PLUS)
+#if defined(XE_PLUS) && !defined(CRI)
   else if (transmitType == "bisect") {
     return testBisectTransmit<T, BisectPTransmit>(
         launchParam,
@@ -1214,6 +1233,7 @@ sycl::event testAllgather(
 
 using bf16 = sycl::ext::oneapi::bfloat16;
 
+#if !defined(CRI)
 template sycl::event testTransmit<sycl::half, Rt64, ParallelTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,
@@ -1237,8 +1257,9 @@ template sycl::event testTransmit<bf16, Rt64_128, ParallelTransmit>(
     bf16* input, bf16* ipcbuf0, bf16* ipcbuf1,
     bf16* const peerbuf0[], bf16* const peerbuf1[], size_t size,
     int rank, int world, uint32_t step, uint32_t simd, sycl::queue queue);
+#endif
 
-#if defined(XE_PLUS)
+#if defined(XE_PLUS) && !defined(CRI)
 template sycl::event testBisectTransmit<sycl::half, BisectPTransmit>(
     sycl::nd_range<1> launchParam,
     sycl::half* input, sycl::half* ipcbuf0, sycl::half* ipcbuf1,

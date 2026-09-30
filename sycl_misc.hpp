@@ -7,7 +7,7 @@ template <int ndev, int nsub>
 sycl::device getSubDevice() {
   static auto devs = sycl::device::get_devices(sycl::info::device_type::gpu);
 
-  auto dev = devs[ndev];
+  auto dev = devs.at(ndev);
   // x4 xelink connection flop
   int map_nsub = nsub;
 
@@ -16,10 +16,14 @@ sycl::device getSubDevice() {
       sycl::info::partition_property::partition_by_affinity_domain>(
           sycl::info::partition_affinity_domain::numa);
 
-    return subs[map_nsub];
-  } catch (sycl::exception &e) {
-    return devs[ndev * 2 + map_nsub];
-  };
+    if (map_nsub < static_cast<int>(subs.size()))
+      return subs[map_nsub];
+  } catch (const sycl::exception &) {
+  }
+
+  // Devices such as CRI expose one root device per card and no NUMA
+  // subdevices. Preserve the existing flattened device numbering for them.
+  return devs.at(ndev * 2 + map_nsub);
 }
 
 template <int ndev, int nsub>
@@ -59,7 +63,8 @@ std::enable_if_t<std::is_trivially_destructible<T>::value &&
       __sycl_allocateLocalMemory(sizeof(T), alignof(T));
 
   if constexpr (!std::is_trivial_v<T>) {
-    sycl::id<3> Id = __spirv::initLocalInvocationId<3, sycl::id<3>>();
+    sycl::id<3> Id = sycl::ext::oneapi::this_work_item::
+      get_nd_item<3>().get_local_id();
     if (Id == sycl::id<3>(0, 0, 0))
       new (AllocatedMem) T(std::forward<Args>(args)...);
     sycl::detail::workGroupBarrier();

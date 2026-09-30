@@ -7,17 +7,20 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #endif
   constexpr static size_t wireCapacity = SubGroupSize * sizeof(message_t) / 2;
   constexpr static size_t wireTransSize = SubGroupSize * sizeof(message_t);
+#if defined(CRI)
+  static_assert(SubGroupSize == 16,
+      "CRI PCIe protocol requires a 16-lane subgroup");
+  static_assert(wireTransSize == 256,
+      "CRI PCIe protocol store must be exactly 256 bytes");
+#endif
 
   constexpr static int wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
-#if defined(XE_PLUS)
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
-#else
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3UC;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3UC;
-#endif
+  constexpr static auto CommReadCacheCtrl =
+      ipc_cache::PcieCommReadCacheCtrl;
+  constexpr static auto CommWriteCacheCtrl =
+      ipc_cache::PcieCommWriteCacheCtrl;
 
   // load first row of registers
   template <int unroll> static inline void loadInput(
@@ -34,11 +37,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
+              "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 16) %0:d32x2 flat[%1]:a64\n"
               : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
         if constexpr (SubGroupSize == 32)
           asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
+              "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 32) %0:d32x2 flat[%1]:a64\n"
               : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
 #endif
     }}
@@ -55,11 +60,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) %0:d32x2 flat[%1]:a64\n"
             : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
       if constexpr (SubGroupSize == 32)
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) %0:d32x2 flat[%1]:a64\n"
             : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
 #endif
     }
@@ -78,11 +85,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) %0:d32x2 flat[%1]:a64\n"
             : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
       if constexpr (SubGroupSize == 32)
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) %0:d32x2 flat[%1]:a64\n"
             : "=rw"(reinterpret_cast<inner_t &>(v[i])) : "rw"(src + off));
 #else
     (void)off;
@@ -100,11 +109,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     if constexpr (SubGroupSize == 16)
       asm volatile ("\n" // Add this partial load to tvisa
-          "lsc_load.ugm.df.df (M1, 16) %0:d32x2 flat[%1]:a64\n"
+          "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 16) %0:d32x2 flat[%1]:a64\n"
           : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
     if constexpr (SubGroupSize == 32)
       asm volatile ("\n" // Add this partial load to tvisa
-          "lsc_load.ugm.df.df (M1, 32) %0:d32x2 flat[%1]:a64\n"
+          "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 32) %0:d32x2 flat[%1]:a64\n"
           : "=rw"(reinterpret_cast<inner_t &>(v)) : "rw"(src + off));
 #else
     (void)off;
@@ -178,11 +189,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) flat[%0]:a64 %1:d32x2\n"
             :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
       if constexpr (SubGroupSize == 32)
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) flat[%0]:a64 %1:d32x2\n"
             :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
 #else
       (void)off;
@@ -199,11 +212,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     if constexpr (SubGroupSize == 16)
       asm volatile ("\n"
-          "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
+          "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 16) flat[%0]:a64 %1:d32x2\n"
           :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
     if constexpr (SubGroupSize == 32)
       asm volatile ("\n"
-          "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
+          "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 32) flat[%0]:a64 %1:d32x2\n"
           :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
 #else
       (void)off;
@@ -224,11 +239,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n"
-              "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
+              "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 16) flat[%0]:a64 %1:d32x2\n"
               :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
         if constexpr (SubGroupSize == 32)
           asm volatile ("\n"
-              "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
+              "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 32) flat[%0]:a64 %1:d32x2\n"
               :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v[i])));
 #endif
     }}
@@ -244,11 +261,13 @@ template <typename T, int SubGroupSize> struct Rt64_PCIE {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32x2\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) flat[%0]:a64 %1:d32x2\n"
             :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
       if constexpr (SubGroupSize == 32)
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32x2\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) flat[%0]:a64 %1:d32x2\n"
             :: "rw"(dst + off), "rw"(reinterpret_cast<inner_t &>(v)));
 #endif
     }
@@ -342,8 +361,8 @@ template <typename T, int SubGroupSize> struct Rt64 {
   constexpr static int wireCapacityInType = wireCapacity / sizeof(T);
   constexpr static int wireTransElems = wireTransSize / sizeof(T);
 
-  constexpr static auto CommReadCacheCtrl = CacheCtrl::L1UC_L3C;
-  constexpr static auto CommWriteCacheCtrl = CacheCtrl::L1UC_L3WB;
+  constexpr static auto CommReadCacheCtrl = ipc_cache::CommReadCacheCtrl;
+  constexpr static auto CommWriteCacheCtrl = ipc_cache::CommWriteCacheCtrl;
 
   // load first row of registers
   template <int unroll> static inline void loadInput(
@@ -360,11 +379,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+              "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 16) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
         else
           asm volatile ("\n" // Add this partial load to tvisa
-              "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+              "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 32) %0:d32 flat[%1]:a64\n"
               : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
         v[i][dataElem] = src[off];
@@ -383,11 +404,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[dataElem]) : "rw"(src + off));
       else
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[dataElem]) : "rw"(src + off));
 #else
         v[dataElem] = src[off];
@@ -408,11 +431,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
       else
         asm volatile ("\n" // Add this partial load to tvisa
-            "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+            "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) %0:d32 flat[%1]:a64\n"
             : "=rw"(v[i][dataElem]) : "rw"(src + off));
 #else
       v[i][dataElem] = src[off];
@@ -430,11 +455,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     if constexpr (SubGroupSize == 16)
       asm volatile ("\n" // Add this partial load to tvisa
-          "lsc_load.ugm.df.df (M1, 16) %0:d32 flat[%1]:a64\n"
+          "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 16) %0:d32 flat[%1]:a64\n"
           : "=rw"(v[dataElem]) : "rw"(src + off));
     else
       asm volatile ("\n" // Add this partial load to tvisa
-          "lsc_load.ugm.df.df (M1, 32) %0:d32 flat[%1]:a64\n"
+          "lsc_load.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 32) %0:d32 flat[%1]:a64\n"
           : "=rw"(v[dataElem]) : "rw"(src + off));
 #else
       v[dataElem] = src[off];
@@ -501,11 +528,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[i][dataElem]));
       else
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[i][dataElem]));
 #else
       dst[off] = v[i][0];
@@ -520,11 +549,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
     if constexpr (SubGroupSize == 16)
       asm volatile ("\n"
-          "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
+          "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 16) flat[%0]:a64 %1:d32\n"
           :: "rw"(dst + off), "rw"(v[dataElem]));
     else
       asm volatile ("\n"
-          "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
+          "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+          " (M1, 32) flat[%0]:a64 %1:d32\n"
           :: "rw"(dst + off), "rw"(v[dataElem]));
 #else
       dst[off] = v[0];
@@ -544,11 +575,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
         if constexpr (SubGroupSize == 16)
           asm volatile ("\n"
-              "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
+              "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 16) flat[%0]:a64 %1:d32\n"
               :: "rw"(dst + off), "rw"(v[i][dataElem]));
         else
           asm volatile ("\n"
-              "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
+              "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+              " (M1, 32) flat[%0]:a64 %1:d32\n"
               :: "rw"(dst + off), "rw"(v[i][dataElem]));
 #else
       dst[off] = v[i][dataElem];
@@ -566,11 +599,13 @@ template <typename T, int SubGroupSize> struct Rt64 {
 #if defined(__SYCL_DEVICE_ONLY__) && defined(__SPIR__)
       if constexpr (SubGroupSize == 16)
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 16) flat[%0]:a64 %1:d32\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 16) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[dataElem]));
       else
         asm volatile ("\n"
-            "lsc_store.ugm.df.df (M1, 32) flat[%0]:a64 %1:d32\n"
+            "lsc_store.ugm." IPC_LSC_DEFAULT_CACHE_CTRL
+            " (M1, 32) flat[%0]:a64 %1:d32\n"
             :: "rw"(dst + off), "rw"(v[dataElem]));
 #else
       dst[off] = v[dataElem];

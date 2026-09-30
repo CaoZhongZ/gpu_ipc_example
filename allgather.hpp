@@ -34,6 +34,8 @@ struct AllGather : public Transmit<T, NRanks, Proto, SubGroupSize> {
     constexpr size_t maxSS = 64;
 #elif defined(BMG)
     constexpr size_t maxSS = 20;
+#elif defined(CRI)
+    constexpr size_t maxSS = 64;
 #elif defined(DG2)
     constexpr size_t maxSS = 32;
 #endif
