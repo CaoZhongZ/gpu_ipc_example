@@ -69,6 +69,11 @@ CXXFLAGS=-std=c++17 -fopenmp $(SYCLFLAGS) $(OPT) $(VERBOSE) -Wall -Wno-vla-cxx-e
 
 main : ipc_exchange.cpp sycl_misc.cpp allreduce.cpp main.cpp
 
+# Independent CRI FIFO experiment; does not link any original transport.
+bulk_fifo_ring_test: bulk_fifo_ring_test.cpp bulk_fifo_ipc.cpp bulk_fifo_ipc.hpp \
+		bulk_fifo_layout.hpp bulk_fifo_memory.hpp bulk_fifo_transport.hpp
+	$(CXX) $(CXXFLAGS) bulk_fifo_ring_test.cpp bulk_fifo_ipc.cpp -o $@
+
 all : main
 
 clean:

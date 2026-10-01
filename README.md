@@ -72,6 +72,47 @@ ONEAPI_DEVICE_SELECTOR=level_zero:gpu \
 The explicit `small_pcie_p` and `simple_pcie_p` names remain aliases for these
 same parallel Xe2/BMG protocol paths.
 
+### Separate CRI bulk FIFO Ring test
+
+`bulk_fifo_ring_test` uses its own FIFO and separate send/receive control
+allocations. It runs one channel with 1024 work-items by default, sends each
+rank's input to the next rank (last to first), and verifies its predecessor's
+input across repeated FIFO wraps. It accepts 2–16 ranks on one host, with one
+distinct Level Zero root GPU per rank.
+
+```sh
+make ARCH=cri bulk_fifo_ring_test
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu I_MPI_FABRICS=shm \
+  mpirun -n 2 ./bulk_fifo_ring_test --devices 0,1
+bash test/test_bulk_fifo.sh
+```
+
+Use `--bytes`, `--iterations`, `--work-items`, and `--fifo-bytes 2M|4M` to
+adjust the test; `--list-devices` prints numeric GPU indices.
+`--store-cache` selects the FIFO payload-store policy:
+`wb.wb.uc`, `wt.wb.uc`, `st.wb.uc`, `uc.wb.uc`, `st.uc.uc`, or `wb.uc.uc`.
+The default remains `uc.uc.uc`. Controls and FIFO loads use `uc.uc.uc`;
+each store policy has its own AOT kernel. For example:
+
+```sh
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu I_MPI_FABRICS=shm \
+  mpirun -n 2 ./bulk_fifo_ring_test --bytes 8M --iterations 10 \
+  --store-cache uc.wb.uc
+# Run boundary/wrap checks for a selected policy:
+STORE_CACHE=uc.wb.uc bash test/test_bulk_fifo.sh
+```
+
+SYCL event start/end timestamps report each iteration's maximum-rank kernel
+time and each rank's minimum, average, maximum, and total kernel time. Send
+goodput is useful outgoing bytes per rank divided by the maximum-rank duration,
+in decimal GB/s; Ring send goodput multiplies this by the rank count. The
+summary uses the sum of each iteration's maximum duration. These times include
+GPU send/receive copies, polling, and synchronization; host staging, validation,
+and MPI are excluded. All iterations are measured, including the first.
+
+See [SYCL_BULK_FIFO_PLAN.md](SYCL_BULK_FIFO_PLAN.md) for the layout, ordering,
+verification, and validation status.
+
 ### Performance report
 
 Without `-v`, each rank reports its kernel execution time and goodput in
