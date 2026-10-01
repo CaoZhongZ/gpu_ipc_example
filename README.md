@@ -72,6 +72,20 @@ ONEAPI_DEVICE_SELECTOR=level_zero:gpu \
 The explicit `small_pcie_p` and `simple_pcie_p` names remain aliases for these
 same parallel Xe2/BMG protocol paths.
 
+### Performance report
+
+Without `-v`, each rank reports its kernel execution time and goodput in
+decimal GB/s (10^9 bytes/s). For both all-reduce and all-gather, goodput is the
+per-rank input payload, `nelems * sizeof(element)`, divided by that rank's
+kernel time. It excludes protocol flags and padding, is not summed across
+ranks, and is not PCIe wire bandwidth. A zero-duration event reports zero
+goodput.
+
+For example, `-n 16M` uses 33,554,432 bytes of BF16 input per rank. A 5 ms kernel
+reports `Goodput: 6.71089 GB/s`.
+
+Run the two-GPU goodput report checks with `bash test/test_2tile_goodput.sh`.
+
 ### CRI cache-policy results
 
 The following was measured on 2026-09-30 on the two-card CRI host

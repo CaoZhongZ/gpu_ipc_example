@@ -1,4 +1,5 @@
 #include <mpi.h>
+#include <sstream>
 #include <sys/mman.h>
 #include <sycl/sycl.hpp>
 #include <level_zero/ze_api.h>
@@ -34,12 +35,19 @@ size_t parse_nelems(const std::string& nelems_string) {
 }
 
 template <typename T>
-void extract_profiling(sycl::event e, int rank) {
+void extract_profiling(sycl::event e, int rank, size_t nelems) {
   e.wait();
   auto start = e.template get_profiling_info<sycl::info::event_profiling::command_start>();
   auto end = e.template get_profiling_info<sycl::info::event_profiling::command_end>();
 
-  std::cout<<"["<<rank<<"] Running time: "<<(end - start)<<"ns"<<std::endl;
+  auto elapsed_ns = end - start;
+  auto payload_bytes = static_cast<double>(nelems) * sizeof(T);
+  auto goodput_gbps = elapsed_ns == 0 ? 0.0 : payload_bytes / elapsed_ns;
+
+  std::ostringstream report;
+  report<<"["<<rank<<"] Running time: "<<elapsed_ns
+    <<"ns, Goodput: "<<goodput_gbps<<" GB/s";
+  std::cout<<(report.str)()<<std::endl;
 };
 
 using test_type = sycl::ext::oneapi::bfloat16;
@@ -106,7 +114,7 @@ static void benchAllreduce(
       input, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 200, simd, queue
   );
-  extract_profiling<test_type>(e, rank);
+  extract_profiling<test_type>(e, rank, nelems);
 }
 
 template <typename T>
@@ -166,7 +174,7 @@ static void benchAllgather(
       input, output, ipcbuf0, ipcbuf1, peerbuf0, peerbuf1,
       nelems, rank, world, flag + 200, simd, queue
   );
-  extract_profiling<test_type>(e, rank);
+  extract_profiling<test_type>(e, rank, nelems);
 }
 
 int main(int argc, char* argv[]) {
