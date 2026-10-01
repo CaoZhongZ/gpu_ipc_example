@@ -25,6 +25,8 @@ Use 2–16 ranks on one host, with a distinct Level Zero root GPU per rank. The 
 
 The first executable runs **one channel / one workgroup per rank**, with **1024 work-items and SIMD16** by default. `--work-items` accepts other supported positive multiples of 16, including 192; it checks both device and compiled-kernel limits. Geometry and the byte-count/iteration schedule must agree across ranks, while workgroup sizes may differ.
 
+`RingCopyKernel<StoreCache>` in `bulk_fifo_transport.hpp` is the kernel functor. It holds the connection, input/output pointers, transfer geometry, progress, poll limit, and status pointer; its `operator()` contains the GPU implementation and the SIMD16 attribute. The launcher constructs this functor and passes it directly to `queue.parallel_for`, which returns the profiled event.
+
 Each rank sends its own input to `(rank + 1) % world` and verifies input from `(rank + world - 1) % world`. A window sends up to eight one-step transfers, then receives the same number. Each send checks credit, fills a padded power-of-two span with 16-byte stores, joins all workers after system-release ordering, and publishes the receiver's tail. Each receive checks readiness, establishes freshness for every worker, copies only valid bytes to user output, checks padding, joins after completing consumption, and returns head credit. Bounded GPU polls and the test script's process timeout catch failed progress.
 
 The backend uses CRI **uncached counter accesses and FIFO loads at L1, L2, and L3**, plus per-worker `lsc_fence.ugm.evict.sysrel` release and `lsc_fence.ugm.evict.sysacq` acquire ordering. The vISA scope spelling is `sysrel` (the compiler rejects `system`).
@@ -81,6 +83,7 @@ Validation on **2026-10-01**, using two CRI root GPUs on `10.99.62.220`, oneAPI 
 | All six requested store policies with a partial final transfer: 5 MiB + 123 bytes, three iterations | Pass; head/tail end at 33 |
 | Mixed `wb.wb.uc`/`uc.wb.uc` policies with 192/1024 workers, 2 MiB FIFO, 3 MiB + 123 bytes | Pass; head/tail end at 39 |
 | Event statistics, throughput formulas, counter totals, and zero-byte rates across all 17 timing-check runs | Pass |
+| Functor launch: 8 KiB with all seven store policies; 5 MiB + 123 bytes, two iterations, at 1024 and 192 work-items | Pass; wrap runs end at head/tail 22 |
 
 Only **two GPUs** have been validated. Execution on 3–16 GPUs, multiple channels, and deliberate consumer-delay/failure-injection tests remain future checks.
 

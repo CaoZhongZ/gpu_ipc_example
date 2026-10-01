@@ -113,7 +113,54 @@ inline void receiveSlice(sycl::nd_item<1> item, RingConnection connection,
   sycl::group_barrier(item.get_group());
 }
 
-template <StoreCache Cache> class RingCopyKernel;
+template <StoreCache Cache>
+struct RingCopyKernel {
+  RingConnection connection;
+  const unsigned char* input;
+  unsigned char* output;
+  std::size_t bytes;
+  std::size_t stepBytes;
+  std::uint64_t firstStep;
+  std::uint64_t spinLimit;
+  KernelStatus* status;
+
+  [[sycl::reqd_sub_group_size(16)]]
+  void operator()(sycl::nd_item<1> item) const {
+    const std::size_t steps = stepsFor(bytes, stepBytes);
+    // Send a window, then receive it. All ranks start with send credits;
+    // no rank waits for its predecessor before posting its first window.
+    // At a later window, credit polling can overlap a slower consumer.
+    for (std::size_t base = 0; base < steps; base += Slots) {
+      const std::size_t window = (steps - base < Slots) ? steps - base : Slots;
+      for (std::size_t j = 0; j < window; ++j) {
+        const std::uint64_t step = firstStep + base + j;
+        const std::uint64_t minimumHead =
+            step + 1 > Slots ? step + 1 - Slots : 0;
+        if (!waitFor(item, connection.localHead, minimumHead, spinLimit,
+                     WaitPhase::Credit, status)) return;
+        systemAcquire(); // The previous receiver has released this slot.
+        const std::size_t offset = (base + j) * stepBytes;
+        const std::size_t valid =
+            bytes - offset < stepBytes ? bytes - offset : stepBytes;
+        sendSlice<Cache>(item, connection, input + offset, valid, stepBytes, step);
+      }
+      for (std::size_t j = 0; j < window; ++j) {
+        const std::uint64_t step = firstStep + base + j;
+        if (!waitFor(item, connection.localTail, step + 1, spinLimit,
+                     WaitPhase::Ready, status)) return;
+        const std::size_t offset = (base + j) * stepBytes;
+        const std::size_t valid =
+            bytes - offset < stepBytes ? bytes - offset : stepBytes;
+        receiveSlice(item, connection, output + offset, valid, stepBytes, step,
+                     status);
+      }
+    }
+    // Make both counters' final values observable before host validation.
+    if (steps)
+      waitFor(item, connection.localHead, firstStep + steps, spinLimit,
+              WaitPhase::FinalCredit, status);
+  }
+};
 
 // Dispatch on the host to distinct compiled kernels, keeping policy branches
 // out of the copy loop. The same dispatch selects the kernel for limit checks.
@@ -139,54 +186,15 @@ auto withStoreCache(StoreCache cache, Function function) {
 }
 
 template <StoreCache Cache>
-inline sycl::event launchRingCopyWithCache(sycl::queue& queue, RingConnection connection,
-                                 const unsigned char* input,
-                                 unsigned char* output, std::size_t bytes,
-                                 std::size_t stepBytes, unsigned workItems,
-                                 std::uint64_t firstStep,
-                                 std::uint64_t spinLimit,
-                                 KernelStatus* status) {
-  return queue.submit([=](sycl::handler& handler) {
-    handler.parallel_for<RingCopyKernel<Cache>>(
-        sycl::nd_range<1>(workItems, workItems),
-        [=](sycl::nd_item<1> item) [[sycl::reqd_sub_group_size(16)]] {
-          const std::size_t steps = stepsFor(bytes, stepBytes);
-          // Send a window, then receive it. All ranks start with send credits;
-          // no rank waits for its predecessor before posting its first window.
-          // At a later window, credit polling can overlap a slower consumer.
-          for (std::size_t base = 0; base < steps; base += Slots) {
-            const std::size_t window =
-                (steps - base < Slots) ? steps - base : Slots;
-            for (std::size_t j = 0; j < window; ++j) {
-              const std::uint64_t step = firstStep + base + j;
-              const std::uint64_t minimumHead =
-                  step + 1 > Slots ? step + 1 - Slots : 0;
-              if (!waitFor(item, connection.localHead, minimumHead, spinLimit,
-                           WaitPhase::Credit, status)) return;
-              systemAcquire(); // The previous receiver has released this slot.
-              const std::size_t offset = (base + j) * stepBytes;
-              const std::size_t valid =
-                  bytes - offset < stepBytes ? bytes - offset : stepBytes;
-              sendSlice<Cache>(item, connection, input + offset, valid,
-                               stepBytes, step);
-            }
-            for (std::size_t j = 0; j < window; ++j) {
-              const std::uint64_t step = firstStep + base + j;
-              if (!waitFor(item, connection.localTail, step + 1, spinLimit,
-                           WaitPhase::Ready, status)) return;
-              const std::size_t offset = (base + j) * stepBytes;
-              const std::size_t valid =
-                  bytes - offset < stepBytes ? bytes - offset : stepBytes;
-              receiveSlice(item, connection, output + offset, valid,
-                           stepBytes, step, status);
-            }
-          }
-          // Make both counters' final values observable before host validation.
-          if (steps)
-            waitFor(item, connection.localHead, firstStep + steps, spinLimit,
-                    WaitPhase::FinalCredit, status);
-        });
-  });
+inline sycl::event launchRingCopyWithCache(
+    sycl::queue& queue, RingConnection connection, const unsigned char* input,
+    unsigned char* output, std::size_t bytes, std::size_t stepBytes,
+    unsigned workItems, std::uint64_t firstStep, std::uint64_t spinLimit,
+    KernelStatus* status) {
+  const RingCopyKernel<Cache> kernel{
+      connection, input, output, bytes, stepBytes, firstStep, spinLimit, status};
+  return queue.parallel_for<RingCopyKernel<Cache>>(
+      sycl::nd_range<1>(workItems, workItems), kernel);
 }
 
 inline sycl::event launchRingCopy(sycl::queue& queue, RingConnection connection,
