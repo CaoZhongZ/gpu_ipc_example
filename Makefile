@@ -26,7 +26,7 @@ arch_support=-DDG2
 endif
 
 ifeq ($(ARCH), cri)
-arch_support=-DXE_PLUS -DCRI -D__SYCL_TARGET_INTEL_GPU_CRI__ \
+arch_support=-DXE_PLUS -DATOB_SUPPORT -DCRI -D__SYCL_TARGET_INTEL_GPU_CRI__ \
 	-D__SYCL_USE_LIBSYCL8_VEC_IMPL=1
 ifeq ($(CRI_STORE_L1_CACHE), uc)
 arch_support += -DCRI_STORE_L1_CACHE_POLICY=0

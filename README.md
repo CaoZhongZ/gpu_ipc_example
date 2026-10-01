@@ -30,6 +30,11 @@ The default `CRI_TARGET=legacy` uses `spir64_gen -device cri-a0`, which is
 supported by the oneAPI 2026.1 compiler. Newer compilers can use
 `CRI_TARGET=dedicated` for `-fsycl-targets=intel_gpu_cri`.
 
+CRI builds enable `XE_PLUS` and `ATOB_SUPPORT`, including native split barriers.
+Automatic all-reduce and all-gather launch sizing uses `maxSS=32`, and parallel,
+sequential, and ring transmitters use `maxLaunch=64*32` (2048 subgroups).
+The benchmark's explicit `-g` and `-w` settings still determine its launch size.
+
 Communication loads always use an uncached L1 policy so polling observes peer
 writes. `CRI_STORE_L1_CACHE` controls only the communication-store L1 policy:
 

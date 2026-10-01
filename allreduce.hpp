@@ -41,7 +41,7 @@ struct AllReduce : public Transmit<T, NRanks, Proto, SubGroupSize> {
 #elif defined(BMG)
     constexpr size_t maxSS = 20;
 #elif defined(CRI)
-    constexpr size_t maxSS = 64;
+    constexpr size_t maxSS = 32;
 #elif defined(DG2)
     constexpr size_t maxSS = 32;
 #endif

@@ -46,7 +46,11 @@ protected:
 
 public:
   constexpr static size_t nSlot = 4;
+#if defined(CRI)
+  constexpr static size_t maxLaunch = 64 * 32;
+#else
   constexpr static size_t maxLaunch = 64 * 64;
+#endif
   constexpr static size_t ringSize = maxLaunch * wireTransSize * nSlot;
 
   static_assert(ringSize <= 4 * 1024 * 1024ull * SubGroupSize/16);
@@ -250,6 +254,8 @@ public:
   constexpr static size_t nSlot = 4;
 #if defined(BMG)
   constexpr static size_t maxLaunch = 64 * 20;
+#elif defined(CRI)
+  constexpr static size_t maxLaunch = 64 * 32;
 #else
   constexpr static size_t maxLaunch = 64 * 64;
 #endif

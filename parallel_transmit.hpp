@@ -28,7 +28,11 @@ protected:
 public:
   constexpr static size_t nSlot = 8;
   constexpr static size_t ringSize = wireTransSize * nSlot;
+#if defined(CRI)
+  constexpr static size_t maxLaunch = 64 * 32;
+#else
   constexpr static size_t maxLaunch = 64 * 64;
+#endif
 
   typedef T (* ringPtr)[nSlot][wireTransElems];
 
