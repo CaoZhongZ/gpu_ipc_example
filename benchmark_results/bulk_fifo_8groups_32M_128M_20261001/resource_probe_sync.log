@@ -1,0 +1,4 @@
+Probe device=Intel(R) Graphics [0x674c] global_memory=171786108928 local_memory=393216 compute_units=256
+Probe PASS kernel_ns=1458
+Probe device=Intel(R) Graphics [0x674c] global_memory=171786108928 local_memory=393216 compute_units=256
+Probe PASS kernel_ns=1458

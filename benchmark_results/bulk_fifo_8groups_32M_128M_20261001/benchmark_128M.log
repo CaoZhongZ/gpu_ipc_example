@@ -1,0 +1,14 @@
+CRI Ring 2 GPUs, 8 channels/groups, 1024 work-items/group, 134217728 user bytes/rank, 10 iterations
+send-control=32768 receive-control=32768 data=33554432 step=524288 slots=8; control/FIFO-load cache=uc.uc.uc
+channel 0 input_offset=0 user_bytes=16777216 steps/iteration=32
+channel 1 input_offset=16777216 user_bytes=16777216 steps/iteration=32
+channel 2 input_offset=33554432 user_bytes=16777216 steps/iteration=32
+channel 3 input_offset=50331648 user_bytes=16777216 steps/iteration=32
+channel 4 input_offset=67108864 user_bytes=16777216 steps/iteration=32
+channel 5 input_offset=83886080 user_bytes=16777216 steps/iteration=32
+channel 6 input_offset=100663296 user_bytes=16777216 steps/iteration=32
+channel 7 input_offset=117440512 user_bytes=16777216 steps/iteration=32
+rank 0 GPU 0 -> rank 1 store_cache=uc.uc.uc
+rank 1 GPU 1 -> rank 0 store_cache=uc.uc.uc
+rank 0: level_zero backend failed with error: 40 (UR_RESULT_ERROR_OUT_OF_RESOURCES)
+Abort(1) on node 0 (rank 0 in comm 0): application called MPI_Abort(MPI_COMM_WORLD, 1) - process 0

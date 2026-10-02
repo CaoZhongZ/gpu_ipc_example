@@ -75,7 +75,7 @@ same parallel Xe2/BMG protocol paths.
 ### Separate CRI bulk FIFO Ring test
 
 `bulk_fifo_ring_test` uses its own FIFO and separate send/receive control
-allocations. It runs one channel with 1024 work-items by default, sends each
+allocations. It runs one channel with 1024 work-items per group by default, sends each
 rank's input to the next rank (last to first), and verifies its predecessor's
 input across repeated FIFO wraps. It accepts 2–16 ranks on one host, with one
 distinct Level Zero root GPU per rank.
@@ -87,8 +87,26 @@ ONEAPI_DEVICE_SELECTOR=level_zero:gpu I_MPI_FABRICS=shm \
 bash test/test_bulk_fifo.sh
 ```
 
-Use `--bytes`, `--iterations`, `--work-items`, and `--fifo-bytes 2M|4M` to
+Use `--bytes`, `--iterations`, `--channels`, `--work-items`, and `--fifo-bytes 2M|4M` to
 adjust the test; `--list-devices` prints numeric GPU indices.
+Input and output are 16-byte-aligned `uint4` arrays, and `--bytes` must be a
+multiple of 16. The default input is 5 MiB + 128 bytes. Payload copies use
+whole 16-byte vectors and leave unused FIFO slot bytes untouched.
+Each channel is one workgroup with its own FIFO and counters. `--bytes` is
+the total per rank, split into contiguous ranges of complete `uint4` packs.
+For eight groups of 1024 work-items and 32 MiB or 128 MiB per rank:
+
+```sh
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu I_MPI_FABRICS=shm \
+  mpirun -n 2 ./bulk_fifo_ring_test --channels 8 --work-items 1024 \
+  --bytes 32M --iterations 10
+# Repeat with --bytes 128M.
+```
+
+The current eight-group attempts at both sizes fail during peer kernel
+submission with `UR_RESULT_ERROR_OUT_OF_RESOURCES`, before event timing.
+See the [attempt report and logs](benchmark_results/bulk_fifo_8groups_32M_128M_20261001/README.md).
+
 `--store-cache` selects the FIFO payload-store policy:
 `wb.wb.uc`, `wt.wb.uc`, `st.wb.uc`, `uc.wb.uc`, `st.uc.uc`, or `wb.uc.uc`.
 The default remains `uc.uc.uc`. Controls and FIFO loads use `uc.uc.uc`;

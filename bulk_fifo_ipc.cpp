@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <fcntl.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -37,6 +38,11 @@ public:
     return *this;
   }
   int get() const { return value_; }
+  int release() {
+    const int value = value_;
+    value_ = -1;
+    return value;
+  }
 private:
   int value_;
 };
@@ -181,9 +187,19 @@ RingIpc::RingIpc(sycl::queue& queue, MPI_Comm communicator, int rank, int world,
     if (metadata.owner != static_cast<unsigned>(expectedOwner) ||
         metadata.kind != expectedKind || metadata.bytes != rangeBytes[index])
       throw std::runtime_error("unexpected owner, kind, or size in IPC range");
-    zeCheck(zeMemOpenIpcHandle(context_, device, metadata.handle,
+    int receivedFd;
+    std::memcpy(&receivedFd, &metadata.handle, sizeof(receivedFd));
+    Fd importFd(::fcntl(receivedFd, F_DUPFD_CLOEXEC, 0));
+    socketCheck(importFd.get() >= 0, "duplicate IPC import descriptor");
+    auto importHandle = metadata.handle;
+    const int descriptor = importFd.get();
+    std::memcpy(&importHandle, &descriptor, sizeof(descriptor));
+    zeCheck(zeMemOpenIpcHandle(context_, device, importHandle,
                               ZE_IPC_MEMORY_FLAG_BIAS_UNCACHED,
                               &imports_[index]), "zeMemOpenIpcHandle");
+    // Linux NEO retains this descriptor in the imported allocation and closes
+    // it with zeMemCloseIpcHandle. Broker/client Fd objects own separate copies.
+    importFd.release();
     ranges_[index] = static_cast<unsigned char*>(imports_[index]) +
                      metadata.offset;
     const auto alignment = index == 2 ? DataAlignment : ControlAlignment;

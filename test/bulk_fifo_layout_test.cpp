@@ -14,6 +14,23 @@ int main() {
   try { bf::nextPowerOfTwo(std::numeric_limits<std::size_t>::max()); }
   catch (const std::overflow_error&) { overflow = true; }
   assert(overflow);
+  for (unsigned channels : {1, 3, 8}) {
+    for (std::size_t bytes : {std::size_t(0), std::size_t(16), std::size_t(32),
+                              std::size_t(272), std::size_t(1008),
+                              5 * bf::MiB + 128, 32 * bf::MiB, 128 * bf::MiB}) {
+      std::size_t end = 0;
+      std::size_t minimum = std::numeric_limits<std::size_t>::max(), maximum = 0;
+      for (unsigned channel = 0; channel < channels; ++channel) {
+        const auto part = bf::channelPartition(bytes, channel, channels);
+        assert(part.offset == end && part.offset % bf::PackBytes == 0);
+        assert(part.bytes % bf::PackBytes == 0 && part.bytes <= bytes - end);
+        end += part.bytes;
+        minimum = std::min(minimum, part.bytes);
+        maximum = std::max(maximum, part.bytes);
+      }
+      assert(end == bytes && maximum - minimum <= bf::PackBytes);
+    }
+  }
   for (const auto fifo : {2 * bf::MiB, 4 * bf::MiB}) {
     for (unsigned channels : {1, 3, 8}) {
       const bf::RingGeometry geometry(fifo, channels);
@@ -29,19 +46,17 @@ int main() {
       }
     }
     const auto stepBytes = fifo / bf::Slots;
-    for (std::size_t bytes : {std::size_t(0), std::size_t(1), std::size_t(8192),
-                              stepBytes - 1, stepBytes, stepBytes + 1,
-                              5 * bf::MiB + 123}) {
+    for (std::size_t bytes : {std::size_t(0), std::size_t(16), std::size_t(8192),
+                              stepBytes - bf::PackBytes, stepBytes,
+                              stepBytes + bf::PackBytes, 5 * bf::MiB + 128}) {
       for (unsigned workers : {16, 64, 192, 1024}) {
         std::size_t copied = 0;
         for (std::size_t step = 0; step < bf::stepsFor(bytes, stepBytes); ++step) {
           const auto valid = std::min(bytes - copied, stepBytes);
-          const auto span = bf::transferBytes(valid);
-          assert(bf::isPowerOfTwo(span));
-          assert(span >= valid && span <= stepBytes && span >= 256);
-          std::vector<unsigned> visits(span / bf::PackBytes, 0);
+          assert(valid > 0 && valid <= stepBytes && valid % bf::PackBytes == 0);
+          std::vector<unsigned> visits(valid / bf::PackBytes, 0);
           for (unsigned worker = 0; worker < workers; ++worker)
-            for (std::size_t offset = worker * bf::PackBytes; offset < span;
+            for (std::size_t offset = worker * bf::PackBytes; offset < valid;
                  offset += workers * bf::PackBytes)
               ++visits[offset / bf::PackBytes];
           for (unsigned visitsPerPack : visits) assert(visitsPerPack == 1);
@@ -51,8 +66,6 @@ int main() {
       }
     }
   }
-  assert(bf::transferBytes(0) == 0);
-  assert(bf::transferBytes(1000) == 1024);
   assert(bf::pattern(0, 0, 0) != bf::pattern(0, 1, 0));
   std::cout << "PASS: layout, rounding overflow, transfer bounds, worker coverage\n";
 }

@@ -32,6 +32,7 @@ inline void storeCounter(std::uint64_t* address, std::uint64_t value) {
 }
 
 using Pack = sycl::vec<std::uint32_t, 4>;
+static_assert(sizeof(Pack) == PackBytes && alignof(Pack) == PackBytes);
 
 inline Pack loadPack(const unsigned char* address) {
   Pack value;

@@ -6,7 +6,7 @@ Build a new bulk FIFO transport for **2–16 GPUs on one host**, with separate r
 
 The prototype will have its own send-control, receive-control, and data allocations, kernels, benchmark, and protocol state. These occupy separate allocation ranges with separate bases and IPC handle metadata. It will not place counters or payload inside the existing `ipcbuf0`/`ipcbuf1` scatter/gather buffers, change their offsets, or reuse their embedded flags. Existing `simple`, `simple_pcie`, and other transport paths remain available for comparison.
 
-The first standalone CRI Ring copy test is now implemented in `bulk_fifo_ring_test.cpp`, with its own layout, memory-ordering, transport, and IPC files. The sections below retain the broader implementation plan; collective operations and multiple-channel execution are later work. Hardware validation results for the first test are recorded below.
+The standalone CRI Ring copy test is implemented in `bulk_fifo_ring_test.cpp`, with its own layout, memory-ordering, transport, and IPC files. It supports multiple channels; collective operations remain later work. Hardware validation results are recorded below.
 
 ### First CRI Ring test
 
@@ -15,37 +15,50 @@ Build and run independently of the original benchmark:
 ```bash
 make ARCH=cri bulk_fifo_ring_test
 mpirun -n 2 ./bulk_fifo_ring_test
-# Explicit numeric device mapping, arbitrary byte count, and smaller FIFO:
-mpirun -n 2 ./bulk_fifo_ring_test --devices 0,1 --bytes 3145851 --fifo-bytes 2M
+# Explicit numeric device mapping, uint4 byte count, and smaller FIFO:
+mpirun -n 2 ./bulk_fifo_ring_test --devices 0,1 --bytes 3145856 --fifo-bytes 2M
 # Boundary-size and wrap checks:
 bash test/test_bulk_fifo.sh
 ```
 
 Use 2–16 ranks on one host, with a distinct Level Zero root GPU per rank. The default mapping is GPU index equal to MPI rank; `--devices` accepts comma-separated numeric indices, including 10–15. `--list-devices` prints the available indices. Increase `mpirun -n` and supply the corresponding device list when additional GPUs are available.
 
-The first executable runs **one channel / one workgroup per rank**, with **1024 work-items and SIMD16** by default. `--work-items` accepts other supported positive multiples of 16, including 192; it checks both device and compiled-kernel limits. Geometry and the byte-count/iteration schedule must agree across ranks, while workgroup sizes may differ.
+The executable runs **one workgroup per channel per rank**, with **one channel, 1024 work-items per group, and SIMD16** by default. `--channels C` launches `C` groups in a single event: global range `C * W`, local range `W`. `--work-items W` accepts other supported positive multiples of 16, including 192; it checks both device and compiled-kernel limits. Geometry, channel count, and the byte-count/iteration schedule must agree across ranks, while workgroup sizes may differ.
 
-`RingCopyKernel<StoreCache>` in `bulk_fifo_transport.hpp` is the kernel functor. It holds the connection, input/output pointers, transfer geometry, progress, poll limit, and status pointer; its `operator()` contains the GPU implementation and the SIMD16 attribute. The launcher constructs this functor and passes it directly to `queue.parallel_for`, which returns the profiled event.
+Split the total per-rank user input into contiguous channel ranges in units of complete uint4 packs. Ranges differ by at most one pack; channels with zero packs schedule no transfers. Each channel has its own incoming FIFO, send/receive control tables, progress, and 64-byte-aligned status record. The kernel derives the channel from its workgroup ID and uses that channel's input/output range and connection offsets.
 
-Each rank sends its own input to `(rank + 1) % world` and verifies input from `(rank + world - 1) % world`. A window sends up to eight one-step transfers, then receives the same number. Each send checks credit, fills a padded power-of-two span with 16-byte stores, joins all workers after system-release ordering, and publishes the receiver's tail. Each receive checks readiness, establishes freshness for every worker, copies only valid bytes to user output, checks padding, joins after completing consumption, and returns head credit. Bounded GPU polls and the test script's process timeout catch failed progress.
+For **eight groups of 1024 work-items**, each GPU launches 8192 work-items. With the default FIFO size, each GPU allocates **32 MiB data + 32 KiB send control + 32 KiB receive control**, keeping all three ranges separate. A **32 MiB** user input gives each channel **4 MiB / eight steps per iteration**; **128 MiB** gives each channel **16 MiB / 32 steps per iteration**. Ten iterations end at head/tail 80 or 320 per channel, respectively:
+
+```bash
+ONEAPI_DEVICE_SELECTOR=level_zero:gpu I_MPI_FABRICS=shm \
+  mpirun -n 2 ./bulk_fifo_ring_test --channels 8 --work-items 1024 \
+  --bytes 32M --iterations 10
+# Repeat with --bytes 128M.
+```
+
+User input and output are **16-byte-aligned `uint4` arrays**, with byte counts divisible by 16. The transport takes `Pack*` pointers (`Pack = sycl::vec<std::uint32_t, 4>`) and copies complete vectors. The test rejects a `--bytes` value that is not a multiple of 16. Each slice copies exactly its valid bytes and leaves the remaining FIFO slot bytes untouched.
+
+`RingCopyKernel<StoreCache>` in `bulk_fifo_transport.hpp` is the kernel functor. It holds the connection bases, input/output pointers, transfer geometry, channel count, per-channel progress pointer, poll limit, and status pointer; its `operator()` contains the GPU implementation and the SIMD16 attribute. The launcher constructs this functor and passes it directly to `queue.parallel_for`, which returns the profiled event for all channels.
+
+Each rank sends its own input to `(rank + 1) % world` and verifies input from `(rank + world - 1) % world`. A window sends up to eight one-step transfers, then receives the same number. Each send checks credit, copies valid bytes with 16-byte stores, joins all workers after system-release ordering, and publishes the receiver's tail. Each receive checks readiness, establishes freshness for every worker, copies valid bytes to user output, joins after completing consumption, and returns head credit. Bounded GPU polls and the test script's process timeout catch failed progress.
 
 The backend uses CRI **uncached counter accesses and FIFO loads at L1, L2, and L3**, plus per-worker `lsc_fence.ugm.evict.sysrel` release and `lsc_fence.ugm.evict.sysacq` acquire ordering. The vISA scope spelling is `sysrel` (the compiler rejects `system`).
 
 Select FIFO payload stores with `--store-cache wb.wb.uc|wt.wb.uc|st.wb.uc|uc.wb.uc|st.uc.uc|wb.uc.uc`. The original fully uncached `uc.uc.uc` option remains the default. The three qualifiers name L1/L2/L3 policies, respectively. Selection dispatches on the host to separate AOT kernel specializations, so the payload loop contains the selected store instruction with no runtime policy branch. Control stores and all FIFO loads remain `uc.uc.uc`; fences and counter semantics are the same for every payload-store setting. Different ranks may select different policies, and the startup report prints each rank's setting. Use `STORE_CACHE=policy bash test/test_bulk_fifo.sh` for boundary/wrap validation of a specific policy.
 
-The default input is **5 MiB + 123 bytes**, repeated three times with changing rank/iteration/offset patterns. A 4 MiB FIFO has eight 512 KiB slots, so each iteration consumes 11 steps; counters finish at 33 rather than resetting. Validation checks all user input/output and surrounding guard storage, zero transfer padding, the complete final FIFO image including untouched bytes, both control tables including inactive peer entries, and final head/tail values.
+The default input is **5 MiB + 128 bytes**, repeated three times with changing rank/iteration/offset patterns. With one channel, a 4 MiB FIFO has eight 512 KiB slots, so each iteration consumes 11 steps; counters finish at 33 rather than resetting. With multiple channels, each advances by its own partition's step count. Validation checks all user input/output and surrounding guard storage, every channel's complete final FIFO image including untouched bytes, the complete control ranges including inactive peer entries and allocation padding, and per-channel head/tail values. Set `CHANNELS=8 bash test/test_bulk_fifo.sh` to run the boundary cases across eight channels.
 
 ### Event timing
 
-The queue enables profiling. For each Ring kernel event, use `command_end - command_start` on that GPU to obtain execution time; compare durations across ranks rather than absolute timestamps from different GPU clocks.
+The queue enables profiling. For each Ring kernel event covering all channels, use `command_end - command_start` on that GPU to obtain execution time; compare durations across ranks rather than absolute timestamps from different GPU clocks.
 
 Each iteration prints its maximum-rank kernel duration. At the end, each rank reports minimum, average, maximum, and total duration, followed by minimum/average/maximum of the iteration maxima and their sum. `sum_max_rank_ms` is `sum(iterations: max(ranks: kernel_ms))`, which can differ from taking the maximum of per-rank totals.
 
 `send_goodput_GBps = userBytes / (max_rank_kernel_ms * 10^6)` counts useful outgoing bytes once per rank, in decimal GB/s. `ring_send_goodput_GBps = rankCount * send_goodput_GBps` counts useful sends across all ranks. The summary divides total useful bytes by the sum of iteration maxima, equivalently using their average for a fixed input size. Zero bytes or a zero-duration event report zero goodput.
 
-The profiled event includes GPU input-to-peer-FIFO copies, local FIFO-to-output copies, counter polling, fences, and barriers. Host input staging, initialization, verification, and MPI operations are outside the event. Padding and control traffic are excluded from the goodput numerator; this is useful-data throughput, not PCIe wire bandwidth. All requested iterations are included, with no separate warmup.
+The profiled event includes GPU input-to-peer-FIFO copies, local FIFO-to-output copies, counter polling, fences, and barriers. Host input staging, initialization, verification, and MPI operations are outside the event. Control traffic is excluded from the goodput numerator; this is useful-data throughput, not PCIe wire bandwidth. All requested iterations are included, with no separate warmup.
 
-Measured on **2026-10-01** on the two-CRI-GPU host below: **8 MiB per rank**, one channel, **1024 work-items**, **4 MiB FIFO**, ten iterations per policy including the first. The time columns summarize each iteration's maximum-rank duration; goodput uses their average.
+Measured on **2026-10-01**, before the uint4 copy change, on the two-CRI-GPU host below: **8 MiB per rank**, one channel, **1024 work-items**, **4 MiB FIFO**, ten iterations per policy including the first. The time columns summarize each iteration's maximum-rank duration; goodput uses their average.
 
 | FIFO store policy | Min ms | Average ms | Max ms | Send GB/s per rank |
 |---|---:|---:|---:|---:|
@@ -59,7 +72,7 @@ Measured on **2026-10-01** on the two-CRI-GPU host below: **8 MiB per rank**, on
 
 All seven runs passed correctness checks and ended at head/tail **160**. With `uc.wb.uc` and a **2 MiB FIFO**, the same 8 MiB input takes 32 steps per iteration instead of 16: average time was **8.389 ms**, send goodput **1.000 GB/s per rank**, and counters ended at **320**. Aggregate Ring send goodput is twice the per-rank figure in these two-GPU runs.
 
-Reproduce a measurement with:
+Run a measurement of the current implementation with:
 
 ```bash
 ONEAPI_DEVICE_SELECTOR=level_zero:gpu I_MPI_FABRICS=shm \
@@ -69,7 +82,7 @@ ONEAPI_DEVICE_SELECTOR=level_zero:gpu I_MPI_FABRICS=shm \
 
 ### Validation
 
-Validation on **2026-10-01**, using two CRI root GPUs on `10.99.62.220`, oneAPI 2026.1, Intel MPI, and the `spir64_gen -device cri-a0` AOT target:
+Historical validation before the uint4 contract, on **2026-10-01**, using two CRI root GPUs on `10.99.62.220`, oneAPI 2026.1, Intel MPI, and the `spir64_gen -device cri-a0` AOT target:
 
 | Check | Result |
 |---|---|
@@ -85,7 +98,15 @@ Validation on **2026-10-01**, using two CRI root GPUs on `10.99.62.220`, oneAPI 
 | Event statistics, throughput formulas, counter totals, and zero-byte rates across all 17 timing-check runs | Pass |
 | Functor launch: 8 KiB with all seven store policies; 5 MiB + 123 bytes, two iterations, at 1024 and 192 work-items | Pass; wrap runs end at head/tail 22 |
 
-Only **two GPUs** have been validated. Execution on 3–16 GPUs, multiple channels, and deliberate consumer-delay/failure-injection tests remain future checks.
+Initial **uint4 validation**, before removing the padding loops, passed the host layout checks and CRI AOT compilation of all seven store-policy kernels; the CLI also rejected `--bytes 17` before GPU setup. Two-GPU execution was blocked at kernel submission by `UR_RESULT_ERROR_OUT_OF_RESOURCES` at 16, 192, and 1024 work-items, including a zero-byte run. A runtime trace reported `ZE_RESULT_ERROR_OUT_OF_DEVICE_MEMORY` from `zeCommandListAppendLaunchKernelWithArguments`, followed by device loss during cleanup. A freshly rebuilt baseline from commit `21758d0` also failed with the resource error at 8 KiB.
+
+After removing padding, the updated host layout/coverage checks pass, and CRI AOT compilation succeeds for all seven cache policies. The two-GPU smoke attempt at 5 MiB + 128 bytes, three iterations, and 1024 work-items still fails with `UR_RESULT_ERROR_OUT_OF_RESOURCES` before producing an event result. The updated GPU boundary/wrap cases remain unvalidated.
+
+The **eight-channel benchmark attempts** at **32 MiB and 128 MiB per rank**, 1024 work-items per group, and ten requested iterations also fail at the first peer Ring kernel submission with `UR_RESULT_ERROR_OUT_OF_RESOURCES`; neither produces an event measurement. Host checks cover balanced channel partitioning, including empty channels and both requested sizes, and all seven CRI kernels compile. Local diagnostic kernels, including the Ring functor with local buffers, complete at eight groups of 1024 items. Changing the Level Zero launch entry point, disabling the USM pool, and selecting the v1 adapter with `UR_L0_USE_IMMEDIATE_COMMANDLISTS=0` do not resolve peer submission.
+
+IPC imports now receive independent duplicated descriptors: Linux NEO retains an import descriptor with its allocation, while broker/client descriptor objects own separate copies. This lifetime correction does not resolve the submission error. The current multi-channel peer data path, wraps, and counters remain unvalidated. See the [benchmark report and raw logs](benchmark_results/bulk_fifo_8groups_32M_128M_20261001/README.md).
+
+Historical GPU validation covers **two GPUs**. Execution on 3–16 GPUs and deliberate consumer-delay/failure-injection tests remain future checks.
 
 ## 1. Define an independent memory layout
 
@@ -99,7 +120,7 @@ These are distinct ranges, not offsets within one combined allocation. Keep sepa
 
 A directed connection is identified by `(channel, source rank, destination rank)` and has its own counters, FIFO, and progress state. For each channel, reserve **4 KiB in each control allocation** and an eight-step FIFO per active incoming connection in the data allocation. The FIFO capacity is configurable: **4 MiB by default**, with **2 MiB** as the first smaller configuration. Both sizes preserve 2 MiB-aligned FIFO bases.
 
-Intermediate allocation sizes, FIFO capacities, and logical transfer spans are powers of two. User input sizes and workgroup sizes need not be. If active channels/connections require a non-power-of-two aggregate allocation size, round the allocation up to the next power of two and leave the additional space unused; do not add protocol slots or credits because padding is available.
+Intermediate allocation sizes, FIFO capacities, and slot capacities are powers of two. The actual copied payload length may be any multiple of 16, and workgroup sizes need not be powers of two. If active channels/connections require a non-power-of-two aggregate allocation size, round the allocation up to the next power of two and leave the additional space unused; do not add protocol slots or credits because allocation padding is available.
 
 Each 4 KiB control table has **16 rank-indexed entries with a 256-byte stride**. Each entry contains an aligned 64-bit counter followed by reserved bytes/padding. Thus `16 * 256 = 4096` bytes supports up to 15 peers plus an unused self entry. Send controls hold `head` counters; receive controls hold `tail` counters. This is 4 KiB per table per channel, not 4 KiB per peer.
 
@@ -204,7 +225,7 @@ For example, three Ring channels use 12 KiB of each control range and 12 MiB of 
 
 Only the bulk protocol is allocated here; no LL or LL128 buffers are needed. The 256-byte counter-entry stride and 4 KiB control tables are layout choices, not atomic transfer units. For a given directed connection, its `head` lives in the sender's send-control allocation and its `tail` lives in the receiver's receive-control allocation.
 
-The 2 MiB alignment applies to data addresses. Requesting it through SYCL does not itself establish the driver's physical page size or huge-page backing. Likewise, requesting 4 KiB of control storage does not determine the driver's backing allocation size. Validate the logical ranges and their non-overlap, record each Level Zero allocation base/offset for IPC, check control bases against 4 KiB alignment, and check data/FIFO bases against 2 MiB alignment. Keep the start of each SIMD16 group of packs 256-byte aligned; an individual work-item's 16-byte pack is 16-byte aligned.
+The 2 MiB alignment applies to data addresses. Requesting it through SYCL does not itself establish the driver's physical page size or huge-page backing. Likewise, requesting 4 KiB of control storage does not determine the driver's backing allocation size. Validate the logical ranges and their non-overlap, record each Level Zero allocation base/offset for IPC, check control bases against 4 KiB alignment, and check data/FIFO bases against 2 MiB alignment. The payload loop starts each SIMD16 group of FIFO packs on a 256-byte boundary. User buffers and individual packs require 16-byte alignment.
 
 Use separate control/data offsets and pointer construction:
 
@@ -269,7 +290,7 @@ Start with the standalone `bulk_fifo_ring_test.cpp`, with runtime support for 2�
 
 Expose `--work-items W` with default `1024`. Validate the requested size against the selected device and compiled kernel limits, including the required SIMD16 subgroup specialization. Workgroup size is a launch parameter, independent of the control/data allocation layout.
 
-Expose `--channels C` for the active workgroup/channel count and `--fifo-bytes B` with default 4 MiB. Initially validate the 2 MiB and 4 MiB FIFO configurations. FIFO size, channel count, and workgroup size are independent settings; both peers must agree on the connection's FIFO geometry and transfer schedule.
+`--channels C` selects the active workgroup/channel count; `--fifo-bytes B` defaults to 4 MiB per channel. Validate the 2 MiB and 4 MiB FIFO configurations. FIFO size, channel count, and workgroup size are independent settings; both peers must agree on the connection's FIFO geometry and transfer schedule.
 
 1. Validate the runtime rank count and an explicit numeric device list, including device indices 10–15. Enumerate the intended root GPUs or tiles consistently and validate distinct rank/device assignments; avoid the original benchmark's single-character device parsing.
 2. Construct the active topology and check P2P access for the links it requires.
@@ -328,25 +349,22 @@ The per-GPU launch has local range `W` and global range `W * activeChannels`, wi
 
 All `W` work-items participate in payload work. Work-item 0 handles polling and posting at defined points; all work-items execute the same group barriers, including work-items with no payload elements in a short transfer. Derive worker counts and copy strides from `nd_item.get_local_range(0)` instead of hardcoding 1024 or 64 subgroups. The initial transport must not require a fixed workgroup-size kernel attribute.
 
-For example, the logical element distribution is:
+For example, treating each logical element as one uint4, the distribution is:
 
 ```text
 workerCount = item.get_local_range(0)
 workerId    = item.get_local_id(0)
 
-for element = workerId; element < transferElements; element += workerCount:
-    if element < validElements:
-        load the user element
-    else:
-        use the padding value
+for element = workerId; element < validElements; element += workerCount:
+    load the user element
     write that element into the peer FIFO
 
 all work-items join the required barrier
 ```
 
-The receiver processes the transfer span and writes/reduces only valid elements into user output. The vectorized implementation uses the same principle in units of vector packs, with bounded input/output tail handling. FIFO capacity, slot offsets, slice step reservation, counter increments, and connection identity do not depend on `W`. Producer and consumer workgroups may use different supported sizes if they agree on the valid byte count and protocol schedule.
+The receiver reads valid uint4 packs from the FIFO and writes/reduces them into user output. User buffers and slice offsets are 16-byte aligned; every valid span is a whole number of packs. FIFO capacity, slot offsets, slice step reservation, counter increments, and connection identity do not depend on `W`. Producer and consumer workgroups may use different supported sizes if they agree on the valid byte count and protocol schedule.
 
-Use this explicit byte-offset distribution for the initial 16-byte store packing:
+Use this explicit distribution for complete 16-byte vector copies:
 
 ```text
 W         = item.get_local_range(0)
@@ -354,9 +372,9 @@ localId   = item.get_local_id(0)
 PackBytes = 16
 
 for offset = localId * PackBytes;
-    offset < transferBytes;
+    offset < validBytes;
     offset += W * PackBytes:
-  construct one pack from valid input bytes plus required padding
+  load input[offset / PackBytes] as one uint4
   store the 16-byte pack at fifoSliceBase + offset
 
 all work-items complete the required publication ordering and group joins
@@ -374,49 +392,46 @@ At `W=1024`, work-item 0 visits byte offsets `0, 16384, 32768, ...`; work-item 1
 
 The 1 MiB row describes a single slice only when two steps are reserved with the default FIFO. The initial one-step configuration sends a 1 MiB user span as two 512 KiB transfers.
 
-There is no group barrier or progress publication after each 16-byte pack or copy-loop round. All work-items join at slice completion, including those with no payload. The backend establishes visibility for every worker's stores before the posting work-item publishes `tail`. Receive workers use the same pack distribution, with bounded output stores, and complete consumption before returning credit.
+There is no group barrier or progress publication after each 16-byte pack or copy-loop round. All work-items join at slice completion, including those with no payload. The backend establishes visibility for every worker's stores before the posting work-item publishes `tail`. Receive workers copy complete valid packs to output and complete consumption before returning credit.
 
 A dedicated synchronization subgroup and split barriers can be added after the basic protocol works. If that variant reserves one subgroup, compute its payload worker count from `W - S` and validate that enough workers remain; derive role indices and barrier participation from the selected configuration.
 
 Keep eight FIFO steps. Start the copy protocol with one step per slice, as in Simple point-to-point operations; later support two steps per slice for the nominal Ring organization.
 
-### 4.1 Power-of-two transfers with arbitrary input sizes
+### 4.1 Uint4 transfers and FIFO step reservations
 
-Track three distinct quantities:
+Track two distinct quantities:
 
 - `validBytes`: bytes belonging to user input/output.
-- `transferBytes`: the power-of-two span written into the FIFO, including padding.
-- `reservedSteps`: FIFO credit consumed by that transfer, independent of padding or workgroup size.
+- `reservedSteps`: FIFO credit consumed by that transfer, independent of valid byte count or workgroup size.
 
-For the initial SIMD16 backend, use 16-byte vector packs per work-item, giving a 256-byte subgroup access span. The proposed tail policy pads a partial transfer to the smallest supported power-of-two span:
+For the initial SIMD16 backend, use 16-byte vector packs per work-item, giving a 256-byte access span for a fully active subgroup. User sizes may be non-power-of-two multiples of 16. Both peers know the valid byte count, so each copies exactly that count:
 
 ```text
 Q                = 8
 StepBytes        = FifoBytes / Q; 512 KiB with the default FIFO
 reservedSteps    = 1 initially; 2 in the later Ring configuration
 TransferCapacity = reservedSteps * StepBytes
-MinTransferBytes = 16 lanes * 16 bytes = 256 bytes
 
 For remainingBytes > 0:
   validBytes    = min(remainingBytes, TransferCapacity)
-  transferBytes = nextPowerOfTwo(max(validBytes, MinTransferBytes))
 
-  assert transferBytes <= TransferCapacity
-  stage validBytes from the user input
-  fill transferBytes - validBytes with padding
-  publish readiness after the complete transfer span is stored
-  consume the span, writing/reducing only validBytes into user output
+  assert validBytes <= TransferCapacity
+  assert validBytes % 16 == 0
+  copy validBytes from the user input as complete uint4 vectors
+  publish readiness after all valid packs are stored
+  read validBytes from the FIFO and write/reduce them into user output
 
   userOffset    += validBytes
   remainingBytes -= validBytes
   connectionStep += reservedSteps
 ```
 
-Use zero padding for the initial byte-copy test. Reduction operates only on valid elements; if an optimized path includes padded lanes in arithmetic, use the reduction operator's identity rather than assuming zero works for every operator. Arbitrary typed input means arbitrary element counts; valid byte counts must still represent complete elements.
+The remaining bytes in each reserved slot retain their previous contents. Future collective partitions must preserve complete 16-byte packs and operate only on valid elements.
 
-Each transfer occupies a fresh reserved FIFO position even when `transferBytes` is smaller than its reserved capacity. For example, a 1024-byte transfer still consumes one 512 KiB FIFO step in the initial configuration. Its untransferred remainder is not part of the payload. This keeps slot addressing and credit independent of the user size while avoiding a full-slot transfer for a small input.
+Each transfer occupies a fresh reserved FIFO position even when `validBytes` is smaller than its reserved capacity. For example, a 1008-byte transfer still consumes one 512 KiB FIFO step in the initial configuration. Its untransferred remainder is not part of the payload. This keeps slot addressing and credit independent of the user size while copying only the requested data.
 
-Both peers derive valid/transfer sizes from the agreed operation schedule initially, so a new payload header is unnecessary. If a later mode allows the producer to choose sizes independently, put the required length metadata in the receive-control entry and order it before readiness publication.
+Both peers derive valid sizes from the agreed operation schedule initially, so a new payload header is unnecessary. If a later mode allows the producer to choose sizes independently, put the required length metadata in the receive-control entry and order it before readiness publication.
 
 For a zero-byte standalone copy, both peers agree to schedule no transfers and leave counters unchanged. An explicitly scheduled empty collective slice still executes its agreed barriers and step publication/credit return, even though it transfers no data. Do not skip a scheduled slice on only one peer.
 
@@ -430,8 +445,7 @@ payload address = fifoBase + slot * stepBytes
 Sender:
   leader waits until head + Q >= s + k
   group joins
-  workers collectively write transferBytes into the peer FIFO
-    using valid input bytes plus padding
+  workers collectively copy validBytes into the peer FIFO
   all workers complete the required publication ordering
   group joins
   leader publishes peer tail = s + k
@@ -441,8 +455,7 @@ Receiver:
   leader waits until tail >= s + k
   establish payload visibility for the consuming workers
   group joins
-  workers process the local FIFO transfer span
-    writing/reducing only validBytes into user output
+  workers copy/reduce validBytes from the local FIFO into user output
   all workers complete consumption and required credit ordering
   group joins
   leader publishes peer head = s + k
@@ -457,21 +470,23 @@ The counter publication granularity is one completed group-wide slice, regardles
 
 For simultaneous transfers in both directions, maintain two directed connections. GPU 0 publishes GPU 1's receive `tail` for `0→1`, and GPU 1 returns credit through GPU 0's send `head`. The `1→0` direction uses its own tail/head pair and progress. Each channel has another independent pair of directed connections.
 
-Use strided vector copy across workers, with bounded user-input/output accesses and padded intermediate transfers. Payload contains no embedded flags. All actual transfer spans are powers of two; a final partial user span is represented by `validBytes`, not by an arbitrary-sized intermediate transfer.
+Use strided vector copy across workers for exactly `validBytes`. Payload contains no embedded flags. FIFO allocations and slot capacities remain powers of two; actual copied lengths may be any multiple of 16.
 
 Ensure a reserved slice does not straddle the FIFO end. The initial `k=1` schedule and aligned `k=2` schedule divide the eight-step ring naturally. Keep producer/consumer steps consistent for partial and scheduled empty slices.
 
 ### 4.2 Scenarios to review
 
-The following standalone-copy examples use one connection, `reservedSteps=1`, a 512 KiB maximum transfer, and a 256-byte minimum:
+The following standalone-copy examples use one connection, `reservedSteps=1`, a 512 KiB maximum transfer, and 16-byte packs:
 
-| User input | Intermediate transfers | Padding transferred | FIFO steps consumed |
-|---|---|---:|---:|
-| 0 bytes | None | 0 | 0 |
-| 1000 bytes | One 1024-byte transfer, 1000 bytes valid | 24 bytes | 1 |
-| 512 KiB | One 512 KiB transfer, all valid | 0 | 1 |
-| 700 KiB | 512 KiB transfer + 256 KiB transfer; second has 188 KiB valid | 68 KiB | 2 |
-| 5 MiB + 123 bytes | Ten 512 KiB transfers + one 256-byte transfer; last has 123 bytes valid | 133 bytes | 11 |
+| User input | Intermediate transfers | FIFO steps consumed |
+|---|---|---:|
+| 0 bytes | None | 0 |
+| 16 bytes | One 16-byte transfer | 1 |
+| 272 bytes (17 uint4s) | One 272-byte transfer | 1 |
+| 1008 bytes (63 uint4s) | One 1008-byte transfer | 1 |
+| 512 KiB | One 512 KiB transfer | 1 |
+| 700 KiB | One 512 KiB transfer + one 188 KiB transfer | 2 |
+| 5 MiB + 128 bytes | Ten 512 KiB transfers + one 128-byte transfer | 11 |
 
 For the last example, transfers 1–8 use slots 0–7. Transfer 9 reuses slot 0 only after `head >= 1`; transfer 10 reuses slot 1 after `head >= 2`; transfer 11 reuses slot 2 after `head >= 3`. Readiness ends at step 11. Once all data has been consumed, credit also reaches step 11. The next operation starts at step 11, slot 3, without resetting progress.
 
@@ -479,7 +494,7 @@ With 1024 work-items, a full 512 KiB transfer distributes an average of 512 byte
 
 For a 16-GPU Ring, each rank still has one incoming 4 MiB FIFO and two independent 4 KiB control ranges per channel. For a 16-GPU full mesh with one channel, each rank has 15 incoming FIFOs using 60 MiB inside a 64 MiB data allocation. The final 4 MiB is unused allocation padding; each connection retains exactly eight slots.
 
-For an arbitrary collective input of 1000 BF16 elements per rank on a 16-GPU, single-channel Ring, split by element count: eight chunks have 63 elements and eight have 62. Their valid lengths are 126 or 124 bytes, and each uses a 256-byte transfer span. Reduce-scatter and all-gather each take 15 hops. Ignore padded elements in arithmetic/output and maintain per-connection progress across both phases.
+For a collective input of 1000 uint4 packs per rank on a 16-GPU, single-channel Ring, split by pack count: eight chunks have 63 packs and eight have 62. Their transfers copy exactly 1008 or 992 bytes, respectively. Reduce-scatter and all-gather each take 15 hops. Maintain per-connection progress across both phases.
 
 ## 5. Validate reuse and expand to 16 GPUs
 
@@ -487,8 +502,8 @@ Add `test/test_bulk_fifo.sh` for the new executable, with bounded process timeou
 
 Cover:
 
-- Sizes below a vector, partial vectors, slot boundaries, and partial final slices.
-- Power-of-two intermediate allocation/transfer sizes with arbitrary valid byte counts; check padding, output bounds, and unused aggregate allocation space.
+- Zero bytes, one vector, slot boundaries, and short final slices containing complete vectors.
+- Power-of-two allocations/slot capacities with valid byte counts divisible by 16; check output bounds, untouched slot bytes, and unused aggregate allocation space.
 - More transfers than FIFO capacity, including many repeated wraps.
 - Sequence-dependent payloads that expose stale reads and overwritten slots.
 - Delayed consumers, a full FIFO, and confirmation that the producer waits for returned credit.
@@ -533,7 +548,7 @@ Compare against the existing protocols using the same useful bytes per rank and 
 
 | File | Responsibility |
 |---|---|
-| `bulk_fifo_layout.hpp` | Separate ranges, power-of-two allocation/transfer sizing, valid-length descriptors, per-connection offsets for up to 16 ranks |
+| `bulk_fifo_layout.hpp` | Separate ranges, power-of-two allocation/FIFO sizing, per-connection offsets for up to 16 ranks |
 | `bulk_fifo_ipc.hpp`, `bulk_fifo_ipc.cpp` | Three range kinds for handle exchange, tagged metadata, required peer-range imports, independent cleanup |
 | `bulk_fifo_memory.hpp` | Counter access and CRI publication/consumption ordering |
 | `bulk_fifo_transport.hpp` | Bulk slice copy, waits, publication, and credit return |
@@ -544,6 +559,6 @@ Compare against the existing protocols using the same useful bytes per rank and 
 
 Use `ipc_exchange.cpp` and `sycl_misc.*` as references for IPC and device setup. Reuse utility functions only where their behavior fits the selected active-peer topology and numeric device mapping. The existing `rt_bulk.hpp` is an empty scaffold; the proposed new files keep this experiment separate from the original transport interfaces.
 
-The initial Ring test combines separate send-control, receive-control, and data allocations and IPC setup with repeated FIFO wraps. Larger topology validation, multiple channels, deliberate consumer-delay tests, and runtime-`N` collective integration follow.
+The Ring test combines separate send-control, receive-control, and data allocations and IPC setup with repeated FIFO wraps across configurable channels. Larger topology validation, deliberate consumer-delay tests, and runtime-`N` collective integration follow.
 
-For review, begin with `bulk_fifo_layout.hpp`, then `bulk_fifo_memory.hpp`, `bulk_fifo_transport.hpp`, the IPC files, and `bulk_fifo_ring_test.cpp`. The layout already supports channel offsets; the first executable intentionally launches only one channel.
+For review, begin with `bulk_fifo_layout.hpp`, then `bulk_fifo_memory.hpp`, `bulk_fifo_transport.hpp`, the IPC files, and `bulk_fifo_ring_test.cpp`. Check `channelPartition()` for input ranges, `RingConnection::forChannel()` for independent FIFO/control offsets, and the per-channel verification in the executable.

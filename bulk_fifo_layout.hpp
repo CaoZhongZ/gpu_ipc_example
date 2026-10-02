@@ -14,7 +14,6 @@ constexpr unsigned MaxRanks = 16;
 constexpr unsigned Slots = 8;
 constexpr unsigned SubgroupSize = 16;
 constexpr unsigned PackBytes = 16;
-constexpr unsigned MinTransferBytes = SubgroupSize * PackBytes;
 constexpr std::size_t ControlAlignment = 4 * KiB;
 constexpr std::size_t DataAlignment = 2 * MiB;
 constexpr std::size_t ControlTableBytes = 4 * KiB;
@@ -41,14 +40,6 @@ static_assert(MaxRanks * sizeof(CounterEntry) == ControlTableBytes);
 
 constexpr bool isPowerOfTwo(std::size_t n) { return n && !(n & (n - 1)); }
 
-// Also callable in a kernel for a validBytes value bounded by StepBytes.
-constexpr std::size_t transferBytes(std::size_t validBytes) {
-  if (!validBytes) return 0;
-  std::size_t result = MinTransferBytes;
-  while (result < validBytes) result *= 2;
-  return result;
-}
-
 inline std::size_t nextPowerOfTwo(std::size_t n) {
   if (!n) return 0;
   std::size_t result = 1;
@@ -68,6 +59,23 @@ constexpr std::size_t ringFifoOffset(unsigned channel, std::size_t fifoBytes) {
 }
 constexpr std::size_t stepsFor(std::size_t bytes, std::size_t stepBytes) {
   return bytes / stepBytes + (bytes % stepBytes != 0);
+}
+
+struct ChannelPartition {
+  std::size_t offset;
+  std::size_t bytes;
+};
+
+// Split complete uint4 packs into contiguous, balanced channel ranges.
+constexpr ChannelPartition channelPartition(std::size_t bytes,
+                                             unsigned channel,
+                                             unsigned channels) {
+  const auto packs = bytes / PackBytes;
+  const auto base = packs / channels;
+  const auto extra = packs % channels;
+  const auto precedingExtra = channel < extra ? channel : extra;
+  return {(channel * base + precedingExtra) * PackBytes,
+          (base + (channel < extra)) * PackBytes};
 }
 
 struct RingGeometry {

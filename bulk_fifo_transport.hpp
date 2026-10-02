@@ -13,13 +13,21 @@ struct RingConnection {
   std::uint64_t* remoteTail; // Next rank's receive-control entry for us.
   unsigned char* localFifo;
   unsigned char* remoteFifo;
+
+  RingConnection forChannel(unsigned channel, std::size_t fifoBytes) const {
+    const auto counterOffset =
+        channel * (ControlTableBytes / sizeof(std::uint64_t));
+    const auto fifoOffset = ringFifoOffset(channel, fifoBytes);
+    return {localHead + counterOffset, localTail + counterOffset,
+            remoteHead + counterOffset, remoteTail + counterOffset,
+            localFifo + fifoOffset, remoteFifo + fifoOffset};
+  }
 };
 
 enum class WaitPhase : unsigned { None, Credit, Ready, FinalCredit };
 
-struct KernelStatus {
+struct alignas(64) KernelStatus {
   unsigned phase = 0;
-  unsigned paddingError = 0;
   std::uint64_t expected = 0;
   std::uint64_t observed = 0;
   std::uint64_t polls = 0;
@@ -50,23 +58,12 @@ inline bool waitFor(sycl::nd_item<1> item, const std::uint64_t* counter,
 
 template <StoreCache Cache>
 inline void sendSlice(sycl::nd_item<1> item, RingConnection connection,
-                      const unsigned char* input, std::size_t valid,
+                      const Pack* input, std::size_t valid,
                       std::size_t stepBytes, std::uint64_t step) {
-  const std::size_t span = transferBytes(valid);
   auto* destination = connection.remoteFifo + (step % Slots) * stepBytes;
   for (std::size_t offset = item.get_local_linear_id() * PackBytes;
-       offset < span; offset += item.get_local_range(0) * PackBytes) {
-    Pack pack{0, 0, 0, 0};
-    for (unsigned word = 0; word < 4; ++word) {
-      std::uint32_t value = 0;
-      for (unsigned byte = 0; byte < 4; ++byte) {
-        const std::size_t i = offset + word * 4 + byte;
-        if (i < valid) value |= std::uint32_t(input[i]) << (byte * 8);
-      }
-      pack[word] = value;
-    }
-    storePack<Cache>(destination + offset, pack);
-  }
+       offset < valid; offset += item.get_local_range(0) * PackBytes)
+    storePack<Cache>(destination + offset, input[offset / PackBytes]);
   // A leader fence alone does not cover other workers' stores.
   systemRelease();
   sycl::group_barrier(item.get_group());
@@ -78,35 +75,19 @@ inline void sendSlice(sycl::nd_item<1> item, RingConnection connection,
 }
 
 inline void receiveSlice(sycl::nd_item<1> item, RingConnection connection,
-                         unsigned char* output, std::size_t valid,
-                         std::size_t stepBytes, std::uint64_t step,
-                         KernelStatus* status) {
+                         Pack* output, std::size_t valid,
+                         std::size_t stepBytes, std::uint64_t step) {
   // Each worker establishes freshness after the leader's successful poll.
   systemAcquire();
   sycl::group_barrier(item.get_group());
-  const std::size_t span = transferBytes(valid);
   const auto* source = connection.localFifo + (step % Slots) * stepBytes;
-  unsigned badPadding = 0;
   for (std::size_t offset = item.get_local_linear_id() * PackBytes;
-       offset < span; offset += item.get_local_range(0) * PackBytes) {
-    const Pack pack = loadPack(source + offset);
-    for (unsigned word = 0; word < 4; ++word) {
-      const std::uint32_t value = pack[word];
-      for (unsigned byte = 0; byte < 4; ++byte) {
-        const std::size_t i = offset + word * 4 + byte;
-        const auto data = static_cast<unsigned char>(value >> (byte * 8));
-        if (i < valid) output[i] = data;
-        else badPadding |= data != 0;
-      }
-    }
-  }
-  const unsigned anyPadding = sycl::any_of_group(item.get_group(),
-                                               badPadding != 0);
+       offset < valid; offset += item.get_local_range(0) * PackBytes)
+    output[offset / PackBytes] = loadPack(source + offset);
   // Finish every worker's reads before granting permission to reuse the slot.
   systemRelease();
   sycl::group_barrier(item.get_group());
   if (item.get_local_linear_id() == 0) {
-    status->paddingError |= anyPadding;
     storeCounter(connection.remoteHead, step + 1);
     systemRelease();
   }
@@ -116,17 +97,27 @@ inline void receiveSlice(sycl::nd_item<1> item, RingConnection connection,
 template <StoreCache Cache>
 struct RingCopyKernel {
   RingConnection connection;
-  const unsigned char* input;
-  unsigned char* output;
+  // User buffers are 16-byte-aligned uint4 arrays; bytes is a multiple of 16.
+  const Pack* input;
+  Pack* output;
   std::size_t bytes;
   std::size_t stepBytes;
-  std::uint64_t firstStep;
+  unsigned channels;
+  const std::uint64_t* firstSteps;
   std::uint64_t spinLimit;
   KernelStatus* status;
 
   [[sycl::reqd_sub_group_size(16)]]
   void operator()(sycl::nd_item<1> item) const {
-    const std::size_t steps = stepsFor(bytes, stepBytes);
+    const auto channel = static_cast<unsigned>(item.get_group_linear_id());
+    const auto partition = channelPartition(bytes, channel, channels);
+    const auto channelConnection =
+        connection.forChannel(channel, stepBytes * Slots);
+    const auto* channelInput = input + partition.offset / PackBytes;
+    auto* channelOutput = output + partition.offset / PackBytes;
+    auto* channelStatus = status + channel;
+    const auto firstStep = firstSteps[channel];
+    const std::size_t steps = stepsFor(partition.bytes, stepBytes);
     // Send a window, then receive it. All ranks start with send credits;
     // no rank waits for its predecessor before posting its first window.
     // At a later window, credit polling can overlap a slower consumer.
@@ -136,29 +127,30 @@ struct RingCopyKernel {
         const std::uint64_t step = firstStep + base + j;
         const std::uint64_t minimumHead =
             step + 1 > Slots ? step + 1 - Slots : 0;
-        if (!waitFor(item, connection.localHead, minimumHead, spinLimit,
-                     WaitPhase::Credit, status)) return;
+        if (!waitFor(item, channelConnection.localHead, minimumHead, spinLimit,
+                     WaitPhase::Credit, channelStatus)) return;
         systemAcquire(); // The previous receiver has released this slot.
         const std::size_t offset = (base + j) * stepBytes;
-        const std::size_t valid =
-            bytes - offset < stepBytes ? bytes - offset : stepBytes;
-        sendSlice<Cache>(item, connection, input + offset, valid, stepBytes, step);
+        const std::size_t valid = partition.bytes - offset < stepBytes
+                                     ? partition.bytes - offset : stepBytes;
+        sendSlice<Cache>(item, channelConnection, channelInput + offset / PackBytes,
+                         valid, stepBytes, step);
       }
       for (std::size_t j = 0; j < window; ++j) {
         const std::uint64_t step = firstStep + base + j;
-        if (!waitFor(item, connection.localTail, step + 1, spinLimit,
-                     WaitPhase::Ready, status)) return;
+        if (!waitFor(item, channelConnection.localTail, step + 1, spinLimit,
+                     WaitPhase::Ready, channelStatus)) return;
         const std::size_t offset = (base + j) * stepBytes;
-        const std::size_t valid =
-            bytes - offset < stepBytes ? bytes - offset : stepBytes;
-        receiveSlice(item, connection, output + offset, valid, stepBytes, step,
-                     status);
+        const std::size_t valid = partition.bytes - offset < stepBytes
+                                     ? partition.bytes - offset : stepBytes;
+        receiveSlice(item, channelConnection, channelOutput + offset / PackBytes,
+                     valid, stepBytes, step);
       }
     }
     // Make both counters' final values observable before host validation.
     if (steps)
-      waitFor(item, connection.localHead, firstStep + steps, spinLimit,
-              WaitPhase::FinalCredit, status);
+      waitFor(item, channelConnection.localHead, firstStep + steps, spinLimit,
+              WaitPhase::FinalCredit, channelStatus);
   }
 };
 
@@ -187,27 +179,28 @@ auto withStoreCache(StoreCache cache, Function function) {
 
 template <StoreCache Cache>
 inline sycl::event launchRingCopyWithCache(
-    sycl::queue& queue, RingConnection connection, const unsigned char* input,
-    unsigned char* output, std::size_t bytes, std::size_t stepBytes,
-    unsigned workItems, std::uint64_t firstStep, std::uint64_t spinLimit,
-    KernelStatus* status) {
+    sycl::queue& queue, RingConnection connection, const Pack* input,
+    Pack* output, std::size_t bytes, std::size_t stepBytes,
+    unsigned workItems, unsigned channels, const std::uint64_t* firstSteps,
+    std::uint64_t spinLimit, KernelStatus* status) {
   const RingCopyKernel<Cache> kernel{
-      connection, input, output, bytes, stepBytes, firstStep, spinLimit, status};
+      connection, input, output, bytes, stepBytes, channels, firstSteps,
+      spinLimit, status};
   return queue.parallel_for<RingCopyKernel<Cache>>(
-      sycl::nd_range<1>(workItems, workItems), kernel);
+      sycl::nd_range<1>(std::size_t(workItems) * channels, workItems), kernel);
 }
 
 inline sycl::event launchRingCopy(sycl::queue& queue, RingConnection connection,
-                                 const unsigned char* input,
-                                 unsigned char* output, std::size_t bytes,
-                                 std::size_t stepBytes, unsigned workItems,
-                                 std::uint64_t firstStep,
+                                 const Pack* input, Pack* output,
+                                 std::size_t bytes, std::size_t stepBytes,
+                                 unsigned workItems, unsigned channels,
+                                 const std::uint64_t* firstSteps,
                                  std::uint64_t spinLimit, KernelStatus* status,
                                  StoreCache cache) {
   return withStoreCache(cache, [&](auto selection) {
     return launchRingCopyWithCache<decltype(selection)::value>(
-        queue, connection, input, output, bytes, stepBytes, workItems,
-        firstStep, spinLimit, status);
+        queue, connection, input, output, bytes, stepBytes, workItems, channels,
+        firstSteps, spinLimit, status);
   });
 }
 
